@@ -1,0 +1,51 @@
+import { useUIStore } from "../stores/uiStore.ts";
+
+export const GROUP_PREFIX = "group:";
+
+export function toGroupSortId(groupId: string): string {
+  return GROUP_PREFIX + groupId;
+}
+
+export function isGroupSortId(id: string): boolean {
+  return id.startsWith(GROUP_PREFIX);
+}
+
+export function fromGroupSortId(id: string): string {
+  return id.slice(GROUP_PREFIX.length);
+}
+
+export function cn(...classes: (string | false | undefined | null)[]): string {
+  return classes.filter(Boolean).join(" ");
+}
+
+export function getErrorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error ? err.message : fallback;
+}
+
+export function imageUrl(filename: string): string {
+  const v = useUIStore.getState().cacheNonce;
+  return `/api/thumbnails/${encodeURIComponent(filename)}?v=${v}`;
+}
+
+export function fullImageUrl(filename: string): string {
+  const v = useUIStore.getState().cacheNonce;
+  return `/api/images/${encodeURIComponent(filename)}?v=${v}`;
+}
+
+// Drag-end timing — shared across card components to suppress click after drag
+let dragEndTimeMs = 0;
+export function setDragEndTime() {
+  dragEndTimeMs = Date.now();
+}
+export function wasJustDragged(): boolean {
+  return Date.now() - dragEndTimeMs < 100;
+}
+
+/** Shorthand for JSON POST fetch calls. */
+export function postJson(url: string, body: unknown): Promise<Response> {
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}

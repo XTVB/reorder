@@ -221,7 +221,7 @@ export interface OrganizeGroup {
 
 export interface OrganizeMapping {
   folder: string;
-  files: string[];
+  files: RenameMapping[];
 }
 
 export function computeOrganize(
@@ -236,12 +236,21 @@ export function computeOrganize(
     return aMin - bMin;
   });
 
-  const padLen = Math.max(3, String(sorted.length).length);
+  const folderPadLen = Math.max(3, String(sorted.length).length);
   return sorted.map((g, i) => {
-    const num = String(i + 1).padStart(padLen, "0");
+    const folderNum = String(i + 1).padStart(folderPadLen, "0");
+    const filePadLen = Math.max(3, String(g.images.length).length);
+    const files = g.images.map((filename, j) => {
+      const title = extractTitle(filename);
+      const num = String(j + 1).padStart(filePadLen, "0");
+      return {
+        from: filename,
+        to: `${num}${title}${extname(filename).toLowerCase()}`,
+      };
+    });
     return {
-      folder: `${num} - ${g.name}`,
-      files: g.images,
+      folder: `${folderNum} - ${g.name}`,
+      files,
     };
   });
 }
@@ -262,8 +271,8 @@ export async function executeOrganize(
   await Promise.all(mappings.map(async ({ folder, files }) => {
     const subdir = join(dir, folder);
     await mkdir(subdir, { recursive: true });
-    await Promise.all(files.map((filename) =>
-      rename(join(dir, filename), join(subdir, filename))
+    await Promise.all(files.map(({ from, to }) =>
+      rename(join(dir, from), join(subdir, to))
     ));
   }));
 

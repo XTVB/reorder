@@ -10,7 +10,7 @@ import {
   executeOrganize,
   type OrganizeGroup,
 } from "./rename.ts";
-import { getThumbnail } from "./thumbnails.ts";
+import { getThumbnail, remapCache } from "./thumbnails.ts";
 
 const GROUPS_FILE = ".reorder-groups.json";
 
@@ -158,11 +158,13 @@ async function handleAPI(
     if (path === "/api/save" && req.method === "POST") {
       const body = (await req.json()) as { order: string[] };
       const renames = await executeRenames(targetDir, body.order);
+      remapCache(targetDir, renames).catch(() => {});
       return json({ success: true, renames });
     }
 
     if (path === "/api/undo" && req.method === "POST") {
       const renames = await undoRenames(targetDir);
+      remapCache(targetDir, renames).catch(() => {});
       return json({ success: true, renames });
     }
 

@@ -14,6 +14,7 @@ export const SortableGroupCard = memo(function SortableGroupCard({
   isSelected,
   isGhost,
   isSearchMatch,
+  isCurrentSearchMatch,
   onClick,
   popover,
 }: {
@@ -25,6 +26,7 @@ export const SortableGroupCard = memo(function SortableGroupCard({
   isSelected: boolean;
   isGhost: boolean;
   isSearchMatch?: boolean;
+  isCurrentSearchMatch?: boolean;
   onClick: (e: React.MouseEvent) => void;
   popover?: React.ReactNode;
 }) {
@@ -80,6 +82,7 @@ export const SortableGroupCard = memo(function SortableGroupCard({
         isSelected && "card-selected",
         isGhost && "card-ghost",
         isSearchMatch && "card-search-match",
+        isCurrentSearchMatch && "card-search-current",
       )}
       data-group-id={group.id}
       onClick={handleClick}

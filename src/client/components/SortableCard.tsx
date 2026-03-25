@@ -10,6 +10,7 @@ export const SortableCard = React.memo(function SortableCard({
   isSelected,
   isGhost,
   isSearchMatch,
+  isCurrentSearchMatch,
   onCardClick,
 }: {
   image: ImageInfo;
@@ -17,6 +18,7 @@ export const SortableCard = React.memo(function SortableCard({
   isSelected: boolean;
   isGhost: boolean;
   isSearchMatch?: boolean;
+  isCurrentSearchMatch?: boolean;
   onCardClick: (filename: string, e: React.MouseEvent) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -39,6 +41,7 @@ export const SortableCard = React.memo(function SortableCard({
         isSelected && "card-selected",
         isGhost && "card-ghost",
         isSearchMatch && "card-search-match",
+        isCurrentSearchMatch && "card-search-current",
       )}
       onClick={handleClick}
       {...attributes}

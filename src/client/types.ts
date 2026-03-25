@@ -14,7 +14,7 @@ export interface Toast {
 
 export interface OrganizeMapping {
   folder: string;
-  files: string[];
+  files: RenameMapping[];
 }
 
 export interface ImageGroup {

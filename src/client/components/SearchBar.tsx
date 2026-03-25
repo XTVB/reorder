@@ -18,54 +18,67 @@ export function useSearchState() {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [matchIds, setMatchIds] = useState<Set<string>>(new Set());
+  const [currentMatchId, setCurrentMatchId] = useState<string | null>(null);
 
   const close = useCallback(() => {
     setIsOpen(false);
     setQuery("");
     setMatchIds(new Set());
+    setCurrentMatchId(null);
   }, []);
 
   const open = useCallback(() => setIsOpen(true), []);
 
-  return { isOpen, query, setQuery, matchIds, setMatchIds, open, close };
+  return { isOpen, query, setQuery, matchIds, setMatchIds, currentMatchId, setCurrentMatchId, open, close };
 }
 
 export function SearchBar({ gridItems, onScrollToRow, columnCount }: SearchBarProps) {
-  const { isOpen, query, setQuery, matchIds, setMatchIds, open, close } = useSearchContext()!;
+  const { isOpen, query, setQuery, matchIds, setMatchIds, setCurrentMatchId, open, close } = useSearchContext()!;
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const groupMap = useGroupStore((s) => s.groupMap);
 
-  // Compute matches and match IDs in a single pass
-  const matches = useMemo(() => {
+  // Compute matches (pure — no state updates)
+  const { gridIndices: matches, orderedIds, ids } = useMemo(() => {
     if (!query.trim()) {
-      setMatchIds(new Set());
-      setCurrentMatchIndex(0);
-      return [];
+      return { gridIndices: [] as number[], orderedIds: [] as string[], ids: new Set<string>() };
     }
     const q = query.toLowerCase();
-    const result: number[] = [];
+    const gridIndices: number[] = [];
+    const orderedIds: string[] = [];
     const ids = new Set<string>();
     for (let i = 0; i < gridItems.length; i++) {
       const item = gridItems[i]!;
       if (item.type === "group-image") continue;
       if (item.type === "image") {
         if (item.filename.toLowerCase().includes(q)) {
-          result.push(i);
+          gridIndices.push(i);
+          orderedIds.push(item.filename);
           ids.add(item.filename);
         }
       } else if (item.type === "group") {
         const group = groupMap.get(item.groupId);
         if (group && group.name.toLowerCase().includes(q)) {
-          result.push(i);
-          ids.add(gridItemId(item));
+          const id = gridItemId(item);
+          gridIndices.push(i);
+          orderedIds.push(id);
+          ids.add(id);
         }
       }
     }
+    return { gridIndices, orderedIds, ids };
+  }, [query, gridItems, groupMap]);
+
+  // Sync shared state after matches change
+  useEffect(() => {
     setMatchIds(ids);
     setCurrentMatchIndex(0);
-    return result;
-  }, [query, gridItems, groupMap, setMatchIds]);
+  }, [ids, setMatchIds]);
+
+  // Update currentMatchId when index or matches change
+  useEffect(() => {
+    setCurrentMatchId(orderedIds[currentMatchIndex] ?? null);
+  }, [currentMatchIndex, orderedIds, setCurrentMatchId]);
 
   // Scroll to current match
   useEffect(() => {

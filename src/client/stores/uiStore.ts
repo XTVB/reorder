@@ -29,6 +29,7 @@ interface UIState {
   setTargetDir: (dir: string) => void;
   setPreviewRenames: (renames: RenameMapping[]) => void;
   setOrganizeMappings: (mappings: OrganizeMapping[]) => void;
+  bumpCacheNonce: () => void;
   checkUndo: () => Promise<void>;
   fetchTargetDir: () => Promise<void>;
 }
@@ -65,6 +66,8 @@ export const useUIStore = create<UIState>((set) => ({
   setTargetDir: (dir) => set({ targetDir: dir }),
   setPreviewRenames: (renames) => set({ previewRenames: renames }),
   setOrganizeMappings: (mappings) => set({ organizeMappings: mappings }),
+
+  bumpCacheNonce: () => set({ cacheNonce: String(Date.now()) }),
 
   checkUndo: async () => {
     try {

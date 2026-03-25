@@ -1,5 +1,5 @@
 import { join, extname } from "node:path";
-import { stat, mkdir } from "node:fs/promises";
+import { stat, mkdir, rename } from "node:fs/promises";
 import sharp from "sharp";
 
 const CACHE_DIR = ".reorder-cache";
@@ -41,6 +41,33 @@ export async function generateThumbnail(sourcePath: string, cachePath: string): 
     .resize({ width: THUMB_WIDTH, withoutEnlargement: true })
     .webp({ quality: THUMB_QUALITY })
     .toFile(cachePath);
+}
+
+export async function remapCache(
+  targetDir: string,
+  mappings: import("./rename.ts").RenameMapping[]
+): Promise<void> {
+  const dir = join(targetDir, CACHE_DIR);
+  const effective = mappings.filter((m) => m.from !== m.to);
+  if (effective.length === 0) return;
+
+  const id = crypto.randomUUID().slice(0, 8);
+  const tempPrefix = "__thumb_tmp_";
+
+  // Two-phase rename to avoid collisions (temp names are unique, so phase 1 is safe to parallelize)
+  const phase1 = await Promise.allSettled(
+    effective.map(async ({ from, to }) => {
+      const src = join(dir, thumbFilename(from));
+      const temp = join(dir, `${tempPrefix}${id}_${thumbFilename(to)}`);
+      await rename(src, temp);
+      return { temp, final: join(dir, thumbFilename(to)) };
+    })
+  );
+  const temps = phase1
+    .filter((r): r is PromiseFulfilledResult<{ temp: string; final: string }> => r.status === "fulfilled")
+    .map((r) => r.value);
+
+  await Promise.all(temps.map(({ temp, final: dest }) => rename(temp, dest).catch(() => {})));
 }
 
 export async function getThumbnail(

@@ -161,6 +161,7 @@ export function App() {
   const setShowOrganize = useUIStore((s) => s.setShowOrganize);
   const setShowPaths = useUIStore((s) => s.setShowPaths);
   const checkUndo = useUIStore((s) => s.checkUndo);
+  const bumpCacheNonce = useUIStore((s) => s.bumpCacheNonce);
   const fetchTargetDir = useUIStore((s) => s.fetchTargetDir);
 
   // ---- DnD sensors ----
@@ -274,7 +275,7 @@ export function App() {
         if (expId) collapseGroup();
         else if (useSelectionStore.getState().selectedIds.size > 0) clearSelection();
       }
-      if (e.key === "g" && !e.metaKey && !e.ctrlKey) {
+      if (e.key === "g" && !e.metaKey && !e.ctrlKey && !(e.target instanceof HTMLInputElement)) {
         const { groupsEnabled } = useGroupStore.getState();
         const { selectedIds } = useSelectionStore.getState();
         if (groupsEnabled && selectedIds.size > 0) createGroupRef.current();
@@ -576,6 +577,7 @@ export function App() {
       const newFilenames = (data.renames as RenameMapping[]).map((r) => r.to);
       const remapped = remapGroupsAfterSave(groups, oldFilenames, newFilenames);
       updateGroups(() => remapped);
+      bumpCacheNonce();
       showToast("Files renamed successfully", "success");
       await Promise.all([fetchImages(), checkUndo()]);
     } catch (err) {
@@ -708,6 +710,7 @@ export function App() {
                                 isSelected={selectedIds.has(sortId)}
                                 isGhost={isMultiDragging && selectedIds.has(sortId) && sortId !== activeId}
                                 isSearchMatch={searchState.matchIds.has(sortId)}
+                                isCurrentSearchMatch={searchState.currentMatchId === sortId}
                                 onClick={(e: React.MouseEvent) => handleGridItemClick(sortId, e)}
                                 popover={isExp ? (
                                   <div className="group-popover" data-group-popover={gid} onClick={(e) => e.stopPropagation()}>
@@ -757,6 +760,7 @@ export function App() {
                                 item.filename !== activeId
                               }
                               isSearchMatch={searchState.matchIds.has(item.filename)}
+                              isCurrentSearchMatch={searchState.currentMatchId === item.filename}
                               onCardClick={handleGridItemClick}
                             />
                           );
@@ -892,7 +896,9 @@ export function App() {
               <div className="organize-folder">{m.folder}/</div>
               <div className="organize-files">
                 {m.files.map((f) => (
-                  <div key={f} className="organize-file">{f}</div>
+                  <div key={f.from} className="organize-file">
+                    {f.from === f.to ? f.to : <>{f.from} <span className="rename-arrow">→</span> {f.to}</>}
+                  </div>
                 ))}
               </div>
             </div>

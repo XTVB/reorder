@@ -17,6 +17,7 @@
   --accent-hover: #3a75e6;
   --danger: #ff5757;
   --success: #4caf50;
+  --highlight: #ffcc00;
   --radius: 8px;
 }
 
@@ -792,8 +793,15 @@ body {
 
 /* Search match highlight */
 .card-search-match {
-  border-color: var(--success) !important;
-  box-shadow: 0 0 0 2px var(--success), 0 0 12px rgba(76, 175, 80, 0.3);
+  border-color: var(--highlight) !important;
+  box-shadow: 0 0 0 2px var(--highlight);
+}
+
+.card-search-current {
+  border-color: var(--highlight) !important;
+  box-shadow: 0 0 0 3px var(--highlight), 0 0 20px rgba(255, 204, 0, 0.6);
+  scale: 1.04;
+  z-index: 2;
 }
 
 /* Responsive */

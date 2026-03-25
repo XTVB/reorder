@@ -86,9 +86,10 @@ async function serveFileWithCache(
 }
 
 export function createServer(targetDir: string, distDir: string, port: number) {
-  // Deterministic per directory — cache-busts when switching directories but
-  // preserves cache across server restarts on the same directory
-  const cacheNonce = new Bun.CryptoHasher("md5").update(targetDir).digest("hex").slice(0, 8);
+  const freshNonce = () => String(Date.now());
+
+  // Bumped on save/undo; fresh on each server start to bust stale browser cache
+  const ctx = { cacheNonce: freshNonce() };
 
   return Bun.serve({
     port,
@@ -98,7 +99,7 @@ export function createServer(targetDir: string, distDir: string, port: number) {
 
       // API routes
       if (path.startsWith("/api/")) {
-        return handleAPI(req, path, targetDir, cacheNonce);
+        return handleAPI(req, path, targetDir, ctx);
       }
 
       // Static files
@@ -126,16 +127,16 @@ async function handleAPI(
   req: Request,
   path: string,
   targetDir: string,
-  cacheNonce: string
+  ctx: { cacheNonce: string }
 ): Promise<Response> {
   try {
     if (path === "/api/dir" && req.method === "GET") {
-      return json({ dir: targetDir, cacheNonce });
+      return json({ dir: targetDir });
     }
 
     if (path === "/api/images" && req.method === "GET") {
       const images = await listImages(targetDir);
-      return json(images.map((filename) => ({ filename })));
+      return json({ images: images.map((filename) => ({ filename })), cacheNonce: ctx.cacheNonce });
     }
 
     if (path.startsWith("/api/images/") && req.method === "GET") {
@@ -159,12 +160,14 @@ async function handleAPI(
       const body = (await req.json()) as { order: string[] };
       const renames = await executeRenames(targetDir, body.order);
       remapCache(targetDir, renames).catch(() => {});
+      ctx.cacheNonce = freshNonce();
       return json({ success: true, renames });
     }
 
     if (path === "/api/undo" && req.method === "POST") {
       const renames = await undoRenames(targetDir);
       remapCache(targetDir, renames).catch(() => {});
+      ctx.cacheNonce = freshNonce();
       return json({ success: true, renames });
     }
 

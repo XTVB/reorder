@@ -29,7 +29,6 @@ export function Toolbar({ onCreateGroup }: { onCreateGroup: () => void }) {
   const setPreviewRenames = useUIStore((s) => s.setPreviewRenames);
   const setOrganizeMappings = useUIStore((s) => s.setOrganizeMappings);
   const checkUndo = useUIStore((s) => s.checkUndo);
-  const bumpCacheNonce = useUIStore((s) => s.bumpCacheNonce);
 
   async function refreshState() {
     await Promise.all([fetchImages(), checkUndo()]);
@@ -60,10 +59,9 @@ export function Toolbar({ onCreateGroup }: { onCreateGroup: () => void }) {
   async function handleUndo() {
     setSaving(true);
     try {
-      const res = await fetch("/api/undo", { method: "POST" });
+      const res = await postJson("/api/undo", {});
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      bumpCacheNonce();
       showToast("Undo successful", "success");
       await refreshState();
     } catch (err) {

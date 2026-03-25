@@ -19,7 +19,7 @@ import {
 } from "@dnd-kit/sortable";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
-import type { ImageInfo, RenameMapping } from "./types.ts";
+import type { ImageInfo, SaveResponse } from "./types.ts";
 import { useImageStore } from "./stores/imageStore.ts";
 import { useSelectionStore } from "./stores/selectionStore.ts";
 import { useDndStore } from "./stores/dndStore.ts";
@@ -161,7 +161,6 @@ export function App() {
   const setShowOrganize = useUIStore((s) => s.setShowOrganize);
   const setShowPaths = useUIStore((s) => s.setShowPaths);
   const checkUndo = useUIStore((s) => s.checkUndo);
-  const bumpCacheNonce = useUIStore((s) => s.bumpCacheNonce);
   const fetchTargetDir = useUIStore((s) => s.fetchTargetDir);
 
   // ---- DnD sensors ----
@@ -233,12 +232,10 @@ export function App() {
   }, []);
 
   // ---- Initial data fetch ----
-  // fetchTargetDir must resolve first so cacheNonce is set before imageUrl() is called
   useEffect(() => {
-    fetchTargetDir().then(() => {
-      fetchImages().catch((err: unknown) => {
-        setError(getErrorMessage(err, "Failed to load images"));
-      });
+    fetchTargetDir();
+    fetchImages().catch((err: unknown) => {
+      setError(getErrorMessage(err, "Failed to load images"));
     });
     checkUndo();
     fetchGroups();
@@ -574,10 +571,10 @@ export function App() {
       const res = await postJson("/api/save", { order: oldFilenames });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      const newFilenames = (data.renames as RenameMapping[]).map((r) => r.to);
+      const { renames } = data as SaveResponse;
+      const newFilenames = renames.map((r) => r.to);
       const remapped = remapGroupsAfterSave(groups, oldFilenames, newFilenames);
       updateGroups(() => remapped);
-      bumpCacheNonce();
       showToast("Files renamed successfully", "success");
       await Promise.all([fetchImages(), checkUndo()]);
     } catch (err) {

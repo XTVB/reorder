@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ImageInfo } from "../types.ts";
+import type { ImageInfo, ImagesResponse } from "../types.ts";
 
 interface ImageState {
   images: ImageInfo[];
@@ -7,6 +7,7 @@ interface ImageState {
   imageMap: Map<string, ImageInfo>;
   hasChanges: boolean;
   loading: boolean;
+  cacheNonce: string;
 
   setImages: (images: ImageInfo[]) => void;
   fetchImages: () => Promise<void>;
@@ -26,6 +27,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
   imageMap: new Map(),
   hasChanges: false,
   loading: true,
+  cacheNonce: "",
 
   setImages: (images) => {
     const { originalOrder } = get();
@@ -36,12 +38,13 @@ export const useImageStore = create<ImageState>((set, get) => ({
     try {
       const res = await fetch("/api/images");
       if (!res.ok) throw new Error("Failed to load images");
-      const data: ImageInfo[] = await res.json();
+      const { images: data, cacheNonce }: ImagesResponse = await res.json();
       const order = data.map((d) => d.filename);
       set({
         images: data,
         originalOrder: order,
         loading: false,
+        cacheNonce,
         ...deriveState(data, order),
       });
     } catch {

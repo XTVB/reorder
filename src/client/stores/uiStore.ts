@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Toast, RenameMapping, OrganizeMapping } from "../types.ts";
+import type { Toast, RenameMapping, OrganizeMapping, DirResponse, CanUndoResponse } from "../types.ts";
 
 let _toastTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -13,7 +13,6 @@ interface UIState {
   toast: Toast | null;
   canUndo: boolean;
   targetDir: string;
-  cacheNonce: string;
   previewRenames: RenameMapping[];
   organizeMappings: OrganizeMapping[];
 
@@ -29,7 +28,6 @@ interface UIState {
   setTargetDir: (dir: string) => void;
   setPreviewRenames: (renames: RenameMapping[]) => void;
   setOrganizeMappings: (mappings: OrganizeMapping[]) => void;
-  bumpCacheNonce: () => void;
   checkUndo: () => Promise<void>;
   fetchTargetDir: () => Promise<void>;
 }
@@ -44,7 +42,6 @@ export const useUIStore = create<UIState>((set) => ({
   toast: null,
   canUndo: false,
   targetDir: "",
-  cacheNonce: "",
   previewRenames: [],
   organizeMappings: [],
 
@@ -67,13 +64,11 @@ export const useUIStore = create<UIState>((set) => ({
   setPreviewRenames: (renames) => set({ previewRenames: renames }),
   setOrganizeMappings: (mappings) => set({ organizeMappings: mappings }),
 
-  bumpCacheNonce: () => set({ cacheNonce: String(Date.now()) }),
-
   checkUndo: async () => {
     try {
       const res = await fetch("/api/can-undo");
-      const data = await res.json();
-      set({ canUndo: data.canUndo });
+      const { canUndo }: CanUndoResponse = await res.json();
+      set({ canUndo });
     } catch {
       set({ canUndo: false });
     }
@@ -82,8 +77,8 @@ export const useUIStore = create<UIState>((set) => ({
   fetchTargetDir: async () => {
     try {
       const res = await fetch("/api/dir");
-      const data = await res.json();
-      set({ targetDir: data.dir, cacheNonce: data.cacheNonce ?? "" });
+      const { dir }: DirResponse = await res.json();
+      set({ targetDir: dir });
     } catch {}
   },
 }));

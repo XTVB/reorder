@@ -23,6 +23,24 @@ export interface ImageGroup {
   images: string[];
 }
 
+export interface DirResponse {
+  dir: string;
+}
+
+export interface ImagesResponse {
+  images: ImageInfo[];
+  cacheNonce: string;
+}
+
+export interface CanUndoResponse {
+  canUndo: boolean;
+}
+
+export interface SaveResponse {
+  success: boolean;
+  renames: RenameMapping[];
+}
+
 export type GridItem =
   | { type: "image"; filename: string }
   | { type: "group"; groupId: string }

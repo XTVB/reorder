@@ -1,5 +1,3 @@
-import { useImageStore } from "../stores/imageStore.ts";
-
 export const GROUP_PREFIX = "group:";
 
 export function toGroupSortId(groupId: string): string {
@@ -22,13 +20,15 @@ export function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
+import { useImageStore } from "../stores/imageStore.ts";
+
 export function imageUrl(filename: string): string {
-  const v = useImageStore.getState().cacheNonce;
+  const v = useImageStore.getState().imageVersion;
   return `/api/thumbnails/${encodeURIComponent(filename)}?v=${v}`;
 }
 
 export function fullImageUrl(filename: string): string {
-  const v = useImageStore.getState().cacheNonce;
+  const v = useImageStore.getState().imageVersion;
   return `/api/images/${encodeURIComponent(filename)}?v=${v}`;
 }
 

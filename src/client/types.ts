@@ -29,7 +29,6 @@ export interface DirResponse {
 
 export interface ImagesResponse {
   images: ImageInfo[];
-  cacheNonce: string;
 }
 
 export interface CanUndoResponse {

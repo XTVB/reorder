@@ -19,6 +19,23 @@ interface ReorderHistory {
 const HISTORY_FILE = ".reorder-history.json";
 const TAGS_FILE = "tags.json";
 const TEMP_PREFIX = "__reorder_tmp_";
+const PENDING_FILE = ".reorder-pending.json";
+
+interface PendingManifest {
+  batchId: string;
+  mappings: RenameMapping[];
+  timestamp: string;
+}
+
+// Serialize all filesystem-mutating operations
+let _renameLock: Promise<unknown> = Promise.resolve();
+
+export function withRenameLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = _renameLock;
+  let resolve: () => void;
+  _renameLock = new Promise<void>((r) => { resolve = r; });
+  return prev.then(fn).finally(() => resolve!());
+}
 
 export function isImageFile(filename: string): boolean {
   if (filename.startsWith(".")) return false;
@@ -59,40 +76,31 @@ async function twoPhaseRename(
   dir: string,
   mappings: RenameMapping[]
 ): Promise<void> {
-  const tempNames: { temp: string; final: string }[] = [];
   const id = crypto.randomUUID().slice(0, 8);
 
+  // Write manifest before touching any files
+  const manifest: PendingManifest = {
+    batchId: id,
+    mappings,
+    timestamp: new Date().toISOString(),
+  };
+  await Bun.write(join(dir, PENDING_FILE), JSON.stringify(manifest, null, 2));
+
   // Step 1: rename to temp names
+  const tempNames: { temp: string; final: string }[] = [];
   for (const { from, to } of mappings) {
     const temp = `${TEMP_PREFIX}${id}_${to}`;
     await rename(join(dir, from), join(dir, temp));
     tempNames.push({ temp, final: to });
   }
 
-  // Pre-index for O(1) rollback lookups
-  const finalToOriginal = new Map(mappings.map((m) => [m.to, m.from]));
-
   // Step 2: rename temp names to final names
   for (const { temp, final } of tempNames) {
-    try {
-      await rename(join(dir, temp), join(dir, final));
-    } catch (err) {
-      // Attempt rollback of remaining temps
-      console.error(`Failed renaming ${temp} → ${final}, attempting rollback...`);
-      for (const t of tempNames) {
-        try {
-          await access(join(dir, t.temp), constants.F_OK);
-          const orig = finalToOriginal.get(t.final);
-          if (orig) {
-            await rename(join(dir, t.temp), join(dir, orig));
-          }
-        } catch {
-          // temp file already renamed or doesn't exist
-        }
-      }
-      throw err;
-    }
+    await rename(join(dir, temp), join(dir, final));
   }
+
+  // Clean up manifest on success
+  await unlink(join(dir, PENDING_FILE)).catch(() => {});
 }
 
 async function readTagsJson(
@@ -277,4 +285,102 @@ export async function executeOrganize(
   }));
 
   return mappings;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Recovery: complete stalled two-phase renames using manifest         */
+/* ------------------------------------------------------------------ */
+
+export interface RecoveryResult {
+  status: "completed" | "orphaned" | "none";
+  completed: number;
+  message: string;
+}
+
+/**
+ * Check for and resolve interrupted two-phase renames on startup.
+ *
+ * - Manifest + matching temps → complete step 2 (deterministic)
+ * - Manifest + no temps + all targets exist → stale manifest, delete it
+ * - Manifest + no temps + targets missing → can't auto-recover, warn
+ * - No manifest + temps on disk → can't auto-recover, warn
+ */
+export async function recoverPendingRename(dir: string): Promise<RecoveryResult> {
+  // Check for manifest
+  let manifest: PendingManifest | null = null;
+  try {
+    const raw = await Bun.file(join(dir, PENDING_FILE)).text();
+    manifest = JSON.parse(raw);
+  } catch {
+    // No manifest
+  }
+
+  // Check for any temp files on disk
+  const entries = await readdir(dir, { withFileTypes: true });
+  const tempFiles = entries
+    .filter((e) => e.isFile() && e.name.startsWith(TEMP_PREFIX))
+    .map((e) => e.name);
+
+  if (!manifest && tempFiles.length === 0) {
+    return { status: "none", completed: 0, message: "" };
+  }
+
+  if (!manifest && tempFiles.length > 0) {
+    return {
+      status: "orphaned",
+      completed: 0,
+      message: `Found ${tempFiles.length} orphaned temp files with no manifest — manual recovery needed`,
+    };
+  }
+
+  // We have a manifest
+  const { batchId, mappings } = manifest!;
+  const batchTemps = tempFiles.filter((f) => f.startsWith(`${TEMP_PREFIX}${batchId}_`));
+
+  if (batchTemps.length === 0) {
+    // No matching temps — check if step 2 already completed (all target files exist)
+    const existResults = await Promise.all(
+      mappings.map(({ to }) => Bun.file(join(dir, to)).exists())
+    );
+    const missing = mappings.filter((_, i) => !existResults[i]).map((m) => m.to);
+
+    if (missing.length === 0) {
+      console.log(`[recovery] Stale manifest for batch ${batchId} — all targets exist, step 2 already completed. Removing manifest.`);
+      console.log(`[recovery] Manifest contents: ${JSON.stringify(manifest)}`);
+      await unlink(join(dir, PENDING_FILE)).catch(() => {});
+      return { status: "completed", completed: 0, message: `Batch ${batchId} already completed — removed stale manifest` };
+    }
+
+    return {
+      status: "orphaned",
+      completed: 0,
+      message: `Manifest for batch ${batchId} exists but no temps and ${missing.length} target files missing (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? "..." : ""}) — manual recovery needed`,
+    };
+  }
+
+  // Complete step 2: rename matching temps to their final names
+  let completed = 0;
+  for (const { to } of mappings) {
+    const temp = `${TEMP_PREFIX}${batchId}_${to}`;
+    try {
+      await rename(join(dir, temp), join(dir, to));
+      completed++;
+    } catch {
+      // Already renamed to final (step 2 partially completed)
+    }
+  }
+
+  await unlink(join(dir, PENDING_FILE)).catch(() => {});
+
+  // Check for orphaned temps from OTHER batches (reuse the initial scan)
+  const otherTemps = tempFiles.filter((f) => !f.startsWith(`${TEMP_PREFIX}${batchId}_`));
+  const otherWarning = otherTemps.length > 0
+    ? ` (${otherTemps.length} orphaned temp files from other batches remain)`
+    : "";
+
+  return {
+    status: "completed",
+    completed,
+    message: `Completed ${completed} pending renames from batch ${batchId}${otherWarning}`,
+  };
 }

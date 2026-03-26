@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import { imageUrl } from "../utils/helpers.ts";
 
-export function GroupThumbGrid({ images }: { images: string[] }) {
+export const GroupThumbGrid = React.memo(function GroupThumbGrid({ images }: { images: string[] }) {
   const thumbs = useMemo(() => {
     const n = images.length;
     if (n === 0) return [];
@@ -32,4 +32,4 @@ export function GroupThumbGrid({ images }: { images: string[] }) {
       ))}
     </div>
   );
-}
+});

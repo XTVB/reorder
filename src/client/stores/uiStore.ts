@@ -24,8 +24,6 @@ interface UIState {
   setShowOrganize: (show: boolean) => void;
   setShowPaths: (show: boolean) => void;
   showToast: (message: string, type: Toast["type"]) => void;
-  setCanUndo: (canUndo: boolean) => void;
-  setTargetDir: (dir: string) => void;
   setPreviewRenames: (renames: RenameMapping[]) => void;
   setOrganizeMappings: (mappings: OrganizeMapping[]) => void;
   checkUndo: () => Promise<void>;
@@ -59,8 +57,6 @@ export const useUIStore = create<UIState>((set) => ({
     _toastTimer = setTimeout(() => set({ toast: null }), 3000);
   },
 
-  setCanUndo: (canUndo) => set({ canUndo }),
-  setTargetDir: (dir) => set({ targetDir: dir }),
   setPreviewRenames: (renames) => set({ previewRenames: renames }),
   setOrganizeMappings: (mappings) => set({ organizeMappings: mappings }),
 

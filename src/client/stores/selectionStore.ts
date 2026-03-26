@@ -4,20 +4,16 @@ interface SelectionState {
   selectedIds: Set<string>;
   lastClickedIndex: number | null;
 
-  select: (id: string) => void;
   toggleSelect: (id: string, index: number) => void;
   rangeSelect: (index: number, allIds: { id: string; index: number }[]) => void;
   clearSelection: () => void;
   selectAll: (ids: string[]) => void;
   removeFromSelection: (ids: string[]) => void;
-  setLastClickedIndex: (index: number) => void;
 }
 
 export const useSelectionStore = create<SelectionState>((set, get) => ({
   selectedIds: new Set(),
   lastClickedIndex: null,
-
-  select: (id) => set({ selectedIds: new Set([id]) }),
 
   toggleSelect: (id, index) => {
     const { selectedIds } = get();
@@ -45,16 +41,18 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     }
   },
 
-  clearSelection: () => set({ selectedIds: new Set() }),
+  clearSelection: () => {
+    if (get().selectedIds.size === 0) return;
+    set({ selectedIds: new Set() });
+  },
 
   selectAll: (ids) => set({ selectedIds: new Set(ids) }),
 
   removeFromSelection: (ids) => {
     const { selectedIds } = get();
+    if (!ids.some((id) => selectedIds.has(id))) return;
     const next = new Set(selectedIds);
     for (const id of ids) next.delete(id);
     set({ selectedIds: next });
   },
-
-  setLastClickedIndex: (index) => set({ lastClickedIndex: index }),
 }));

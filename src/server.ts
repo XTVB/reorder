@@ -8,9 +8,11 @@ import {
   undoRenames,
   computeOrganize,
   executeOrganize,
+  recoverPendingRename,
+  withRenameLock,
   type OrganizeGroup,
 } from "./rename.ts";
-import { getThumbnail, remapCache } from "./thumbnails.ts";
+import { getThumbnail } from "./thumbnails.ts";
 
 const GROUPS_FILE = ".reorder-groups.json";
 
@@ -57,8 +59,8 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-function makeETag(mtimeMs: number, size: number): string {
-  return `W/"${Math.floor(mtimeMs)}-${size}"`;
+function makeETag(ino: number, size: number): string {
+  return `W/"${ino}-${size}"`;
 }
 
 async function serveFileWithCache(
@@ -72,7 +74,7 @@ async function serveFileWithCache(
   } catch {
     return json({ error: "File not found" }, 404);
   }
-  const etag = makeETag(s.mtimeMs, s.size);
+  const etag = makeETag(s.ino, s.size);
   if (req.headers.get("If-None-Match") === etag) {
     return new Response(null, { status: 304 });
   }
@@ -86,10 +88,15 @@ async function serveFileWithCache(
 }
 
 export function createServer(targetDir: string, distDir: string, port: number) {
-  const freshNonce = () => String(Date.now());
 
-  // Bumped on save/undo; fresh on each server start to bust stale browser cache
-  const ctx = { cacheNonce: freshNonce() };
+  // Complete any interrupted rename — runs inside the lock so it can't race with live operations
+  withRenameLock(() => recoverPendingRename(targetDir)).then((result) => {
+    if (result.status !== "none") {
+      console.log(`[recovery] ${result.message}`);
+    }
+  }).catch((err) => {
+    console.error("[recovery] Failed:", err);
+  });
 
   return Bun.serve({
     port,
@@ -99,7 +106,7 @@ export function createServer(targetDir: string, distDir: string, port: number) {
 
       // API routes
       if (path.startsWith("/api/")) {
-        return handleAPI(req, path, targetDir, ctx);
+        return handleAPI(req, path, targetDir);
       }
 
       // Static files
@@ -126,8 +133,7 @@ export function createServer(targetDir: string, distDir: string, port: number) {
 async function handleAPI(
   req: Request,
   path: string,
-  targetDir: string,
-  ctx: { cacheNonce: string }
+  targetDir: string
 ): Promise<Response> {
   try {
     if (path === "/api/dir" && req.method === "GET") {
@@ -136,18 +142,18 @@ async function handleAPI(
 
     if (path === "/api/images" && req.method === "GET") {
       const images = await listImages(targetDir);
-      return json({ images: images.map((filename) => ({ filename })), cacheNonce: ctx.cacheNonce });
+      return json({ images: images.map((filename) => ({ filename })) });
     }
 
     if (path.startsWith("/api/images/") && req.method === "GET") {
       const filename = decodeURIComponent(path.slice("/api/images/".length));
-      return serveFileWithCache(req, join(targetDir, filename), "public, max-age=3600");
+      return serveFileWithCache(req, join(targetDir, filename), "no-cache");
     }
 
     if (path.startsWith("/api/thumbnails/") && req.method === "GET") {
       const filename = decodeURIComponent(path.slice("/api/thumbnails/".length));
       const { path: thumbPath } = await getThumbnail(targetDir, filename);
-      return serveFileWithCache(req, thumbPath, "public, max-age=86400");
+      return serveFileWithCache(req, thumbPath, "no-cache");
     }
 
     if (path === "/api/preview" && req.method === "POST") {
@@ -158,17 +164,17 @@ async function handleAPI(
 
     if (path === "/api/save" && req.method === "POST") {
       const body = (await req.json()) as { order: string[] };
-      const renames = await executeRenames(targetDir, body.order);
-      remapCache(targetDir, renames).catch(() => {});
-      ctx.cacheNonce = freshNonce();
-      return json({ success: true, renames });
+      return withRenameLock(async () => {
+        const renames = await executeRenames(targetDir, body.order);
+        return json({ success: true, renames });
+      });
     }
 
     if (path === "/api/undo" && req.method === "POST") {
-      const renames = await undoRenames(targetDir);
-      remapCache(targetDir, renames).catch(() => {});
-      ctx.cacheNonce = freshNonce();
-      return json({ success: true, renames });
+      return withRenameLock(async () => {
+        const renames = await undoRenames(targetDir);
+        return json({ success: true, renames });
+      });
     }
 
     if (path === "/api/can-undo" && req.method === "GET") {
@@ -195,8 +201,10 @@ async function handleAPI(
 
     if (path === "/api/organize" && req.method === "POST") {
       const body = (await req.json()) as { groups: OrganizeGroup[]; order: string[] };
-      const mappings = await executeOrganize(targetDir, body.groups, body.order);
-      return json({ success: true, mappings });
+      return withRenameLock(async () => {
+        const mappings = await executeOrganize(targetDir, body.groups, body.order);
+        return json({ success: true, mappings });
+      });
     }
 
     return json({ error: "Not found" }, 404);

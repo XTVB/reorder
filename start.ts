@@ -2,7 +2,7 @@ import { join, resolve, basename } from "node:path";
 import { access, constants, mkdir, copyFile, stat } from "node:fs/promises";
 import { createServer } from "./src/server.ts";
 import { listImages } from "./src/rename.ts";
-import { preGenerateThumbnails } from "./src/thumbnails.ts";
+import { preGenerateThumbnails, clearCache } from "./src/thumbnails.ts";
 
 const DEFAULT_PORT = 4928;
 
@@ -88,7 +88,9 @@ async function main() {
   Bun.spawn(["open", url], { stdout: "ignore", stderr: "ignore" });
 
   // Background thumbnail pre-generation (fire-and-forget)
+  let imageCount = 0;
   listImages(absDir).then((filenames) => {
+    imageCount = filenames.length;
     if (filenames.length > 0) {
       preGenerateThumbnails(absDir, filenames).catch(() => {});
     }
@@ -100,11 +102,15 @@ async function main() {
   console.log(`  alias reorder="bun run ${scriptPath}"`);
   console.log(`  # Usage: reorder /path/to/image/directory\n`);
 
-  // Graceful shutdown
+  // Graceful shutdown — clear cache for small directories (fast to regenerate)
   const shutdown = () => {
     console.log("\nShutting down...");
     server.stop(true);
-    process.exit(0);
+    if (imageCount > 0 && imageCount <= 250) {
+      clearCache(absDir).finally(() => process.exit(0));
+    } else {
+      process.exit(0);
+    }
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);

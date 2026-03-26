@@ -20,7 +20,6 @@ interface GroupState {
   groupMap: Map<string, ImageGroup>;
   groupsLoaded: boolean;
 
-  setGroups: (groups: ImageGroup[]) => void;
   updateGroups: (fn: (prev: ImageGroup[]) => ImageGroup[]) => void;
   fetchGroups: () => Promise<void>;
   toggleGroupsEnabled: () => void;
@@ -39,10 +38,6 @@ export const useGroupStore = create<GroupState>((set, get) => ({
   groupMap: new Map(),
   groupsLoaded: false,
 
-  setGroups: (groups) => {
-    set({ groups, groupMap: deriveGroupMap(groups) });
-  },
-
   // Applies fn, prunes empty groups, skips persist if unchanged
   updateGroups: (fn) => {
     const { groups } = get();
@@ -56,25 +51,7 @@ export const useGroupStore = create<GroupState>((set, get) => ({
   fetchGroups: async () => {
     try {
       const res = await fetch("/api/groups");
-      const serverGroups: unknown = await res.json();
-      let groups: ImageGroup[] = Array.isArray(serverGroups)
-        ? serverGroups
-        : Array.isArray((serverGroups as any)?.groups)
-          ? (serverGroups as any).groups
-          : [];
-
-      // One-time migration from localStorage
-      if (groups.length === 0) {
-        try {
-          const lsGroups = JSON.parse(localStorage.getItem("reorder-groups") || "[]");
-          if (Array.isArray(lsGroups) && lsGroups.length > 0) {
-            groups = lsGroups;
-            persistGroupsToServer(groups);
-            localStorage.removeItem("reorder-groups");
-          }
-        } catch {}
-      }
-
+      const groups: ImageGroup[] = await res.json();
       set({ groups, groupMap: deriveGroupMap(groups), groupsLoaded: true });
     } catch {
       set({ groupsLoaded: true });

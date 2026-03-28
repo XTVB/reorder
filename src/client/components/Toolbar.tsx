@@ -18,6 +18,7 @@ export function Toolbar({ onCreateGroup }: { onCreateGroup: () => void }) {
   const toggleGroupsEnabled = useGroupStore((s) => s.toggleGroupsEnabled);
   const updateGroups = useGroupStore((s) => s.updateGroups);
   const collapseGroup = useGroupStore((s) => s.collapseGroup);
+  const fetchGroups = useGroupStore((s) => s.fetchGroups);
 
   const saving = useUIStore((s) => s.saving);
   const canUndo = useUIStore((s) => s.canUndo);
@@ -31,7 +32,7 @@ export function Toolbar({ onCreateGroup }: { onCreateGroup: () => void }) {
   const checkUndo = useUIStore((s) => s.checkUndo);
 
   async function refreshState() {
-    await Promise.all([fetchImages(), checkUndo()]);
+    await Promise.all([fetchImages(), checkUndo(), fetchGroups()]);
   }
 
   function handleToggleGroups() {

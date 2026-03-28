@@ -16,7 +16,6 @@ import {
 } from "@dnd-kit/sortable";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
-import type { SaveResponse } from "./types.ts";
 import { useImageStore } from "./stores/imageStore.ts";
 import { useSelectionStore } from "./stores/selectionStore.ts";
 import { useDndStore } from "./stores/dndStore.ts";
@@ -31,7 +30,6 @@ import {
   postJson,
 } from "./utils/helpers.ts";
 import { computeGridItems, gridItemId } from "./utils/gridItems.ts";
-import { remapGroupsAfterSave } from "./utils/reorder.ts";
 
 import { useGridLayout } from "./hooks/useGridLayout.ts";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts.ts";
@@ -242,12 +240,9 @@ export function App() {
       const res = await postJson("/api/save", { order: oldFilenames });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      const { renames } = data as SaveResponse;
-      const newFilenames = renames.map((r) => r.to);
-      const remapped = remapGroupsAfterSave(groups, oldFilenames, newFilenames);
-      updateGroups(() => remapped);
       showToast("Files renamed successfully", "success");
-      await Promise.all([fetchImages(), checkUndo()]);
+      // Server remaps groups atomically — just reload both
+      await Promise.all([fetchImages(), checkUndo(), fetchGroups()]);
     } catch (err) {
       showToast(getErrorMessage(err, "Rename failed"), "error");
     } finally {

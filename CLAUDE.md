@@ -37,7 +37,8 @@ A local macOS tool for reordering images in a directory via drag-and-drop. Opens
 ## Key Patterns
 
 - **Thumbnail cache**: content-addressable using `inode-size.webp` keys — renames don't invalidate cache, no remapping needed. Orphans cleaned after pre-generation. Cache cleared on shutdown for directories ≤250 images.
-- **Rename safety**: two-phase rename with write-ahead manifest (`.reorder-pending.json`). `withRenameLock` serializes all filesystem-mutating operations. Crash recovery on startup completes interrupted renames.
+- **Rename safety**: two-phase rename with write-ahead manifest (`.reorder-pending.json`). `withRenameLock` serializes all filesystem-mutating operations. Crash recovery on startup completes interrupted renames (including partial step-1). `computeRenames` rejects duplicate filenames in the order array.
+- **Group atomicity**: Server remaps groups in the same `withRenameLock` call as file renames (save, undo, and crash recovery). Client reloads groups from server after save/undo rather than remapping locally. `flattenOrder` deduplicates to prevent expanded-group items appearing twice in the order array.
 - **Memoization**: event handlers in App.tsx use ref+useCallback pattern for stable references (see `handleGridItemClick`, `handleDragStart`, `handleDragEnd`). Group operations use `getState()` for store access since they're always called at event time.
 - **Browser cache busting**: `imageVersion` counter in imageStore bumps on `fetchImages()` (after save/undo). URL helpers append `?v=N` to bust the browser's in-memory `<img>` cache. HTTP cache correctness is handled by ETag + `no-cache`.
 - `postJson(url, body)` in `utils/helpers.ts` for all JSON POST fetches

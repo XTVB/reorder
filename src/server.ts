@@ -11,6 +11,7 @@ import {
   recoverPendingRename,
   withRenameLock,
   type OrganizeGroup,
+  type RenameMapping,
 } from "./rename.ts";
 import { getThumbnail } from "./thumbnails.ts";
 
@@ -29,6 +30,19 @@ async function readGroupsFile(targetDir: string): Promise<unknown[]> {
 
 async function writeGroupsFile(targetDir: string, groups: unknown[]) {
   await Bun.write(join(targetDir, GROUPS_FILE), JSON.stringify(groups, null, 2));
+}
+
+async function remapGroups(targetDir: string, renames: RenameMapping[]) {
+  const groups = await readGroupsFile(targetDir);
+  if (groups.length === 0) return;
+  const renameMap = new Map(renames.map((r) => [r.from, r.to]));
+  const remapped = groups.map((g: any) => ({
+    ...g,
+    images: Array.isArray(g.images)
+      ? g.images.map((fn: string) => renameMap.get(fn) ?? fn)
+      : g.images,
+  }));
+  await writeGroupsFile(targetDir, remapped);
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -90,9 +104,14 @@ async function serveFileWithCache(
 export function createServer(targetDir: string, distDir: string, port: number) {
 
   // Complete any interrupted rename — runs inside the lock so it can't race with live operations
-  withRenameLock(() => recoverPendingRename(targetDir)).then((result) => {
-    if (result.status !== "none") {
-      console.log(`[recovery] ${result.message}`);
+  withRenameLock(async () => {
+    const result = await recoverPendingRename(targetDir);
+    if (result.status === "none") return;
+    console.log(`[recovery] ${result.message}`);
+    // If renames were completed, remap groups too (save may have crashed before groups were updated)
+    if (result.status === "completed" && result.mappings && result.completed > 0) {
+      await remapGroups(targetDir, result.mappings);
+      console.log(`[recovery] Remapped groups`);
     }
   }).catch((err) => {
     console.error("[recovery] Failed:", err);
@@ -166,6 +185,7 @@ async function handleAPI(
       const body = (await req.json()) as { order: string[] };
       return withRenameLock(async () => {
         const renames = await executeRenames(targetDir, body.order);
+        await remapGroups(targetDir, renames);
         return json({ success: true, renames });
       });
     }
@@ -173,6 +193,7 @@ async function handleAPI(
     if (path === "/api/undo" && req.method === "POST") {
       return withRenameLock(async () => {
         const renames = await undoRenames(targetDir);
+        await remapGroups(targetDir, renames);
         return json({ success: true, renames });
       });
     }

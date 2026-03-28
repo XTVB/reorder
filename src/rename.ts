@@ -61,6 +61,11 @@ function extractTitle(filename: string): string {
 }
 
 export function computeRenames(order: string[]): RenameMapping[] {
+  const seen = new Set<string>();
+  for (const fn of order) {
+    if (seen.has(fn)) throw new Error(`Duplicate filename in order: ${fn}`);
+    seen.add(fn);
+  }
   const padLen = Math.max(3, String(order.length).length);
   return order.map((filename, i) => {
     const title = extractTitle(filename);
@@ -295,15 +300,18 @@ export interface RecoveryResult {
   status: "completed" | "orphaned" | "none";
   completed: number;
   message: string;
+  /** Mappings applied during recovery — allows caller to remap dependent data (e.g. groups) */
+  mappings?: RenameMapping[];
 }
 
 /**
  * Check for and resolve interrupted two-phase renames on startup.
  *
- * - Manifest + matching temps → complete step 2 (deterministic)
- * - Manifest + no temps + all targets exist → stale manifest, delete it
- * - Manifest + no temps + targets missing → can't auto-recover, warn
- * - No manifest + temps on disk → can't auto-recover, warn
+ * Handles all crash points:
+ * - Step 1 incomplete (some temps, some originals) → complete step 1, then step 2
+ * - Step 1 complete, step 2 incomplete (all temps) → complete step 2
+ * - Step 2 complete (stale manifest) → remove manifest
+ * - No manifest + temps → orphaned, warn
  */
 export async function recoverPendingRename(dir: string): Promise<RecoveryResult> {
   // Check for manifest
@@ -335,9 +343,10 @@ export async function recoverPendingRename(dir: string): Promise<RecoveryResult>
 
   // We have a manifest
   const { batchId, mappings } = manifest!;
-  const batchTemps = tempFiles.filter((f) => f.startsWith(`${TEMP_PREFIX}${batchId}_`));
+  const batchPrefix = `${TEMP_PREFIX}${batchId}_`;
+  const batchTemps = new Set(tempFiles.filter((f) => f.startsWith(batchPrefix)));
 
-  if (batchTemps.length === 0) {
+  if (batchTemps.size === 0) {
     // No matching temps — check if step 2 already completed (all target files exist)
     const existResults = await Promise.all(
       mappings.map(({ to }) => Bun.file(join(dir, to)).exists())
@@ -345,8 +354,7 @@ export async function recoverPendingRename(dir: string): Promise<RecoveryResult>
     const missing = mappings.filter((_, i) => !existResults[i]).map((m) => m.to);
 
     if (missing.length === 0) {
-      console.log(`[recovery] Stale manifest for batch ${batchId} — all targets exist, step 2 already completed. Removing manifest.`);
-      console.log(`[recovery] Manifest contents: ${JSON.stringify(manifest)}`);
+      console.log(`[recovery] Stale manifest for batch ${batchId} — all targets exist. Removing manifest.`);
       await unlink(join(dir, PENDING_FILE)).catch(() => {});
       return { status: "completed", completed: 0, message: `Batch ${batchId} already completed — removed stale manifest` };
     }
@@ -358,29 +366,48 @@ export async function recoverPendingRename(dir: string): Promise<RecoveryResult>
     };
   }
 
-  // Complete step 2: rename matching temps to their final names
-  let completed = 0;
+  // Some temps exist — complete both steps for any incomplete mappings
+  let step1Completed = 0;
+  let step2Completed = 0;
+
+  // Step 1: rename any remaining originals to their temp names
+  for (const { from, to } of mappings) {
+    const temp = `${batchPrefix}${to}`;
+    if (!batchTemps.has(temp)) {
+      // This mapping's temp doesn't exist — try to complete step 1
+      try {
+        await rename(join(dir, from), join(dir, temp));
+        step1Completed++;
+      } catch {
+        // Original already gone (step 2 may have already placed its final name)
+      }
+    }
+  }
+
+  // Step 2: rename all temps to final names
   for (const { to } of mappings) {
-    const temp = `${TEMP_PREFIX}${batchId}_${to}`;
+    const temp = `${batchPrefix}${to}`;
     try {
       await rename(join(dir, temp), join(dir, to));
-      completed++;
+      step2Completed++;
     } catch {
-      // Already renamed to final (step 2 partially completed)
+      // Already at final name
     }
   }
 
   await unlink(join(dir, PENDING_FILE)).catch(() => {});
 
-  // Check for orphaned temps from OTHER batches (reuse the initial scan)
-  const otherTemps = tempFiles.filter((f) => !f.startsWith(`${TEMP_PREFIX}${batchId}_`));
+  // Check for orphaned temps from OTHER batches
+  const otherTemps = tempFiles.filter((f) => !f.startsWith(batchPrefix));
   const otherWarning = otherTemps.length > 0
     ? ` (${otherTemps.length} orphaned temp files from other batches remain)`
     : "";
 
+  const total = step1Completed + step2Completed;
   return {
     status: "completed",
-    completed,
-    message: `Completed ${completed} pending renames from batch ${batchId}${otherWarning}`,
+    completed: total,
+    message: `Recovered batch ${batchId}: ${step1Completed} step-1 + ${step2Completed} step-2 renames${otherWarning}`,
+    mappings,
   };
 }

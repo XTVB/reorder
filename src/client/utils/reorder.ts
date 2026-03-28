@@ -45,15 +45,20 @@ export function flattenOrder(
 ): ImageInfo[] {
   const imap = new Map(images.map((i) => [i.filename, i]));
   const gmap = new Map(groups.map((g) => [toGroupSortId(g.id), g]));
+  const seen = new Set<string>();
   const out: ImageInfo[] = [];
   for (const id of ids) {
     const g = gmap.get(id);
     if (g) {
       for (const fn of g.images) {
+        if (seen.has(fn)) continue;
+        seen.add(fn);
         const img = imap.get(fn);
         if (img) out.push(img);
       }
     } else {
+      if (seen.has(id)) continue;
+      seen.add(id);
       const img = imap.get(id);
       if (img) out.push(img);
     }

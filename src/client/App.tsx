@@ -46,6 +46,7 @@ import { PreviewModal } from "./components/PreviewModal.tsx";
 import { OrganizeModal } from "./components/OrganizeModal.tsx";
 import { PathsModal } from "./components/PathsModal.tsx";
 import { SearchBar, SearchContext, useSearchState } from "./components/SearchBar.tsx";
+import { Toast } from "./components/Toast.tsx";
 
 export function App() {
   // ---- Store subscriptions ----
@@ -79,7 +80,6 @@ export function App() {
   const showPreview = useUIStore((s) => s.showPreview);
   const showOrganize = useUIStore((s) => s.showOrganize);
   const showPaths = useUIStore((s) => s.showPaths);
-  const toast = useUIStore((s) => s.toast);
   const targetDir = useUIStore((s) => s.targetDir);
   const previewRenames = useUIStore((s) => s.previewRenames);
   const organizeMappings = useUIStore((s) => s.organizeMappings);
@@ -475,9 +475,7 @@ export function App() {
         />
       )}
 
-      {toast && (
-        <div className={`toast toast-${toast.type}`}>{toast.message}</div>
-      )}
+      <Toast />
     </SearchContext.Provider>
   );
 }

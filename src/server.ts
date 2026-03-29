@@ -14,6 +14,7 @@ import {
   type RenameMapping,
 } from "./rename.ts";
 import { getThumbnail } from "./thumbnails.ts";
+import { ingestTags, getAllTags, getClothingStructured, getDbStatus, remapTagsDb } from "./tags-db.ts";
 
 const GROUPS_FILE = ".reorder-groups.json";
 
@@ -111,7 +112,8 @@ export function createServer(targetDir: string, distDir: string, port: number) {
     // If renames were completed, remap groups too (save may have crashed before groups were updated)
     if (result.status === "completed" && result.mappings && result.completed > 0) {
       await remapGroups(targetDir, result.mappings);
-      console.log(`[recovery] Remapped groups`);
+      remapTagsDb(targetDir, result.mappings);
+      console.log(`[recovery] Remapped groups and tags DB`);
     }
   }).catch((err) => {
     console.error("[recovery] Failed:", err);
@@ -186,6 +188,7 @@ async function handleAPI(
       return withRenameLock(async () => {
         const renames = await executeRenames(targetDir, body.order);
         await remapGroups(targetDir, renames);
+        remapTagsDb(targetDir, renames);
         return json({ success: true, renames });
       });
     }
@@ -194,6 +197,7 @@ async function handleAPI(
       return withRenameLock(async () => {
         const renames = await undoRenames(targetDir);
         await remapGroups(targetDir, renames);
+        remapTagsDb(targetDir, renames);
         return json({ success: true, renames });
       });
     }
@@ -226,6 +230,29 @@ async function handleAPI(
         const mappings = await executeOrganize(targetDir, body.groups, body.order);
         return json({ success: true, mappings });
       });
+    }
+
+    // Tag database routes
+    if (path === "/api/tags/status" && req.method === "GET") {
+      return json(getDbStatus(targetDir));
+    }
+
+    if (path === "/api/tags/ingest" && req.method === "POST") {
+      const body = (await req.json()) as { data: unknown };
+      const result = ingestTags(targetDir, body.data);
+      return json(result);
+    }
+
+    if (path === "/api/tags/all" && req.method === "GET") {
+      const result = getAllTags(targetDir);
+      if (!result) return json({ error: "No tags database found. Ingest a tags file first." }, 404);
+      return json(result);
+    }
+
+    if (path === "/api/tags/clothing-structured" && req.method === "GET") {
+      const result = getClothingStructured(targetDir);
+      if (!result) return json({ error: "No tags database found" }, 404);
+      return json(result);
     }
 
     return json({ error: "Not found" }, 404);

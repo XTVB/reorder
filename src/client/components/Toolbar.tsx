@@ -4,8 +4,15 @@ import { useSelectionStore } from "../stores/selectionStore.ts";
 import { useGroupStore } from "../stores/groupStore.ts";
 import { useUIStore } from "../stores/uiStore.ts";
 import { getErrorMessage, postJson } from "../utils/helpers.ts";
+import type { AppMode } from "../types.ts";
 
-export function Toolbar({ onCreateGroup }: { onCreateGroup: () => void }) {
+const MODES: { key: AppMode; label: string }[] = [
+  { key: "reorder", label: "Reorder" },
+  { key: "tags", label: "Tags" },
+  { key: "merge", label: "Merge" },
+];
+
+export function Toolbar({ onCreateGroup }: { onCreateGroup?: () => void }) {
   const images = useImageStore((s) => s.images);
   const hasChanges = useImageStore((s) => s.hasChanges);
   const fetchImages = useImageStore((s) => s.fetchImages);
@@ -20,6 +27,8 @@ export function Toolbar({ onCreateGroup }: { onCreateGroup: () => void }) {
   const collapseGroup = useGroupStore((s) => s.collapseGroup);
   const fetchGroups = useGroupStore((s) => s.fetchGroups);
 
+  const appMode = useUIStore((s) => s.appMode);
+  const setAppMode = useUIStore((s) => s.setAppMode);
   const saving = useUIStore((s) => s.saving);
   const canUndo = useUIStore((s) => s.canUndo);
   const showToast = useUIStore((s) => s.showToast);
@@ -89,57 +98,92 @@ export function Toolbar({ onCreateGroup }: { onCreateGroup: () => void }) {
 
   return (
     <header className="header">
+      <div className="mode-toggle">
+        {MODES.map((m) => (
+          <button
+            key={m.key}
+            className={`mode-toggle-btn ${appMode === m.key ? "mode-toggle-active" : ""}`}
+            onClick={() => {
+              if (appMode !== m.key) {
+                clearSelection();
+                setAppMode(m.key);
+              }
+            }}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
       <div className="header-info">
-        <div className="header-title">Reorder Images</div>
+        <div className="header-title">
+          {appMode === "reorder" ? "Reorder Images" : appMode === "tags" ? "Tag Explorer" : "Merge Groups"}
+        </div>
         <div className="header-subtitle">
-          {selectedIds.size > 0
-            ? `${selectedIds.size} selected — drag to move`
-            : `${images.length} image${images.length !== 1 ? "s" : ""} — drag to reorder`}
+          {appMode === "reorder" ? (
+            selectedIds.size > 0
+              ? `${selectedIds.size} selected — drag to move`
+              : `${images.length} image${images.length !== 1 ? "s" : ""} — drag to reorder`
+          ) : appMode === "tags" ? (
+            selectedIds.size > 0
+              ? `${selectedIds.size} selected`
+              : `${images.length} images`
+          ) : (
+            `${groups.length} groups`
+          )}
         </div>
       </div>
-      <div className="header-actions">
-        {selectedIds.size > 0 && (
-          <button className="btn btn-secondary" onClick={() => setShowPaths(true)}>
-            Paths ({selectedIds.size})
-          </button>
-        )}
-        {groupsEnabled && selectedIds.size > 0 && (
+      {appMode === "tags" && selectedIds.size > 0 && (
+        <div className="header-actions">
           <button className="btn btn-secondary" onClick={onCreateGroup}>
             Group ({selectedIds.size})
           </button>
-        )}
-        <button
-          className={`btn ${groupsEnabled ? "btn-primary" : "btn-secondary"}`}
-          onClick={handleToggleGroups}
-        >
-          Groups {groupsEnabled ? "On" : "Off"}
-        </button>
-        {groups.length > 0 && (
-          <>
-            <button className="btn btn-secondary" onClick={handleOrganizeClick} disabled={saving}>
-              Organize Folders
+        </div>
+      )}
+      {appMode === "reorder" && (
+        <div className="header-actions">
+          {selectedIds.size > 0 && (
+            <button className="btn btn-secondary" onClick={() => setShowPaths(true)}>
+              Paths ({selectedIds.size})
             </button>
-            <button className="btn btn-danger" onClick={handleClearGroups}>
-              Clear Groups
+          )}
+          {groupsEnabled && selectedIds.size > 0 && (
+            <button className="btn btn-secondary" onClick={onCreateGroup}>
+              Group ({selectedIds.size})
             </button>
-          </>
-        )}
-        {canUndo && (
-          <button className="btn btn-danger" onClick={handleUndo} disabled={saving}>
-            Undo
+          )}
+          <button
+            className={`btn ${groupsEnabled ? "btn-primary" : "btn-secondary"}`}
+            onClick={handleToggleGroups}
+          >
+            Groups {groupsEnabled ? "On" : "Off"}
           </button>
-        )}
-        <button className="btn btn-secondary" onClick={refreshState} disabled={saving}>
-          Refresh
-        </button>
-        <button
-          className="btn btn-primary"
-          onClick={handleSaveClick}
-          disabled={!hasChanges || saving}
-        >
-          {saving ? "Saving..." : "Save Order"}
-        </button>
-      </div>
+          {groups.length > 0 && (
+            <>
+              <button className="btn btn-secondary" onClick={handleOrganizeClick} disabled={saving}>
+                Organize Folders
+              </button>
+              <button className="btn btn-danger" onClick={handleClearGroups}>
+                Clear Groups
+              </button>
+            </>
+          )}
+          {canUndo && (
+            <button className="btn btn-danger" onClick={handleUndo} disabled={saving}>
+              Undo
+            </button>
+          )}
+          <button className="btn btn-secondary" onClick={refreshState} disabled={saving}>
+            Refresh
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={handleSaveClick}
+            disabled={!hasChanges || saving}
+          >
+            {saving ? "Saving..." : "Save Order"}
+          </button>
+        </div>
+      )}
     </header>
   );
 }

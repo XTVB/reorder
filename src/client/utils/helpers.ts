@@ -1,3 +1,6 @@
+import { useImageStore } from "../stores/imageStore.ts";
+import type { FilterMode } from "../types.ts";
+
 export const GROUP_PREFIX = "group:";
 
 export function toGroupSortId(groupId: string): string {
@@ -20,8 +23,6 @@ export function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
-import { useImageStore } from "../stores/imageStore.ts";
-
 export function imageUrl(filename: string): string {
   const v = useImageStore.getState().imageVersion;
   return `/api/thumbnails/${encodeURIComponent(filename)}?v=${v}`;
@@ -39,6 +40,23 @@ export function setDragEndTime() {
 }
 export function wasJustDragged(): boolean {
   return Date.now() - dragEndTimeMs < 100;
+}
+
+export function formatCategoryName(cat: string): string {
+  return cat.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+export function formatClothingValue(val: string): string {
+  const [piece, color] = val.split("|");
+  const p = piece.replace(/_/g, " ");
+  if (!color) return p;
+  return `${color.replace(/_/g, " ")} ${p}`;
+}
+
+export function resolveFilterMode(e: { shiftKey: boolean; type: string }): FilterMode {
+  if (e.shiftKey) return "OR";
+  if (e.type === "contextmenu") return "NOT";
+  return "AND";
 }
 
 /** Shorthand for JSON POST fetch calls. */

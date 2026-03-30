@@ -9,7 +9,7 @@ export interface RenameMapping {
 
 export interface Toast {
   message: string;
-  type: "success" | "error";
+  type: "success" | "error" | "warning";
 }
 
 export interface OrganizeMapping {
@@ -38,12 +38,25 @@ export interface CanUndoResponse {
 export interface SaveResponse {
   success: boolean;
   renames: RenameMapping[];
+  warnings?: string[];
+}
+
+export interface FolderGroup {
+  name: string;
+  images: string[];
+}
+
+export interface FolderData {
+  folders: FolderGroup[];
+  rootImages: string[];
 }
 
 export type GridItem =
   | { type: "image"; filename: string }
   | { type: "group"; groupId: string }
-  | { type: "group-image"; groupId: string; filename: string };
+  | { type: "group-image"; groupId: string; filename: string }
+  | { type: "folder"; folderName: string }
+  | { type: "folder-image"; folderName: string; filename: string };
 
 // Tag system types
 export type FilterMode = "AND" | "OR" | "NOT";

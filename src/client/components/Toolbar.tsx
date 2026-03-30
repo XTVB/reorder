@@ -1,10 +1,13 @@
-import React from "react";
+import React, { useRef, useState } from "react";
 import { useImageStore } from "../stores/imageStore.ts";
 import { useSelectionStore } from "../stores/selectionStore.ts";
-import { useGroupStore } from "../stores/groupStore.ts";
+import { useGroupStore, flushGroupPersist } from "../stores/groupStore.ts";
+import { useFolderStore } from "../stores/folderStore.ts";
 import { useUIStore } from "../stores/uiStore.ts";
+import { useTagStore } from "../stores/tagStore.ts";
 import { getErrorMessage, postJson } from "../utils/helpers.ts";
 import type { AppMode } from "../types.ts";
+import { GroupPicker } from "./GroupPicker.tsx";
 
 const MODES: { key: AppMode; label: string }[] = [
   { key: "reorder", label: "Reorder" },
@@ -12,10 +15,20 @@ const MODES: { key: AppMode; label: string }[] = [
   { key: "merge", label: "Merge" },
 ];
 
-export function Toolbar({ onCreateGroup }: { onCreateGroup?: () => void }) {
+export function Toolbar({ onCreateGroup, onAddToGroup, onFolderSave }: { onCreateGroup?: () => void; onAddToGroup?: (groupId: string) => void; onFolderSave?: () => void }) {
+  const reimportRef = useRef<HTMLInputElement>(null);
+  const [reimporting, setReimporting] = useState(false);
+  const hasDb = useTagStore((s) => s.hasDb);
+  const ingestFile = useTagStore((s) => s.ingestFile);
   const images = useImageStore((s) => s.images);
   const hasChanges = useImageStore((s) => s.hasChanges);
   const fetchImages = useImageStore((s) => s.fetchImages);
+
+  const folderModeEnabled = useFolderStore((s) => s.folderModeEnabled);
+  const folders = useFolderStore((s) => s.folders);
+  const setFolderModeEnabled = useFolderStore((s) => s.setFolderModeEnabled);
+  const fetchFolders = useFolderStore((s) => s.fetchFolders);
+  const folderHasChanges = useFolderStore((s) => s.hasChanges);
 
   const selectedIds = useSelectionStore((s) => s.selectedIds);
   const clearSelection = useSelectionStore((s) => s.clearSelection);
@@ -41,12 +54,45 @@ export function Toolbar({ onCreateGroup }: { onCreateGroup?: () => void }) {
   const checkUndo = useUIStore((s) => s.checkUndo);
 
   async function refreshState() {
-    await Promise.all([fetchImages(), checkUndo(), fetchGroups()]);
+    if (folderModeEnabled) {
+      await Promise.all([fetchFolders(), checkUndo()]);
+    } else {
+      await Promise.all([fetchImages(), checkUndo(), fetchGroups()]);
+    }
+  }
+
+  async function handleReimport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setReimporting(true);
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const result = await ingestFile(data);
+      showToast(`Reimported ${result.ingested} images (${result.skipped} skipped)`, "success");
+    } catch (err) {
+      showToast(getErrorMessage(err, "Reimport failed"), "error");
+    } finally {
+      setReimporting(false);
+      if (reimportRef.current) reimportRef.current.value = "";
+    }
   }
 
   function handleToggleGroups() {
     toggleGroupsEnabled();
     clearSelection();
+  }
+
+  async function handleToggleFolderMode() {
+    const next = !folderModeEnabled;
+    setFolderModeEnabled(next);
+    clearSelection();
+    if (next) {
+      await fetchFolders();
+    } else {
+      await fetchImages();
+      await fetchGroups();
+    }
   }
 
   function handleClearGroups() {
@@ -69,6 +115,7 @@ export function Toolbar({ onCreateGroup }: { onCreateGroup?: () => void }) {
   async function handleUndo() {
     setSaving(true);
     try {
+      await flushGroupPersist();
       const res = await postJson("/api/undo", {});
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -120,7 +167,11 @@ export function Toolbar({ onCreateGroup }: { onCreateGroup?: () => void }) {
         </div>
         <div className="header-subtitle">
           {appMode === "reorder" ? (
-            selectedIds.size > 0
+            folderModeEnabled
+              ? (selectedIds.size > 0
+                ? `${selectedIds.size} selected`
+                : `${folders.length} folder${folders.length !== 1 ? "s" : ""} — drag to reorder`)
+              : selectedIds.size > 0
               ? `${selectedIds.size} selected — drag to move`
               : `${images.length} image${images.length !== 1 ? "s" : ""} — drag to reorder`
           ) : appMode === "tags" ? (
@@ -132,11 +183,21 @@ export function Toolbar({ onCreateGroup }: { onCreateGroup?: () => void }) {
           )}
         </div>
       </div>
-      {appMode === "tags" && selectedIds.size > 0 && (
+      {appMode === "tags" && (
         <div className="header-actions">
-          <button className="btn btn-secondary" onClick={onCreateGroup}>
-            Group ({selectedIds.size})
-          </button>
+          {selectedIds.size > 0 && (
+            <button className="btn btn-secondary" onClick={onCreateGroup}>
+              Group ({selectedIds.size})
+            </button>
+          )}
+          {hasDb && (
+            <>
+              <input ref={reimportRef} type="file" accept=".json" style={{ display: "none" }} onChange={handleReimport} />
+              <button className="btn btn-secondary" onClick={() => reimportRef.current?.click()} disabled={reimporting}>
+                {reimporting ? "Reimporting..." : "Reimport Tags"}
+              </button>
+            </>
+          )}
         </div>
       )}
       {appMode === "reorder" && (
@@ -146,18 +207,33 @@ export function Toolbar({ onCreateGroup }: { onCreateGroup?: () => void }) {
               Paths ({selectedIds.size})
             </button>
           )}
-          {groupsEnabled && selectedIds.size > 0 && (
-            <button className="btn btn-secondary" onClick={onCreateGroup}>
-              Group ({selectedIds.size})
-            </button>
+          {!folderModeEnabled && groupsEnabled && selectedIds.size > 0 && (
+            <>
+              <button className="btn btn-secondary" onClick={onCreateGroup}>
+                Group ({selectedIds.size})
+              </button>
+              {groups.length > 0 && onAddToGroup && (
+                <GroupPicker groups={groups} onSelect={onAddToGroup} selectedCount={selectedIds.size} />
+              )}
+            </>
           )}
           <button
-            className={`btn ${groupsEnabled ? "btn-primary" : "btn-secondary"}`}
-            onClick={handleToggleGroups}
+            className={`btn ${folderModeEnabled ? "btn-primary" : "btn-secondary"}`}
+            onClick={handleToggleFolderMode}
+            disabled={!folderModeEnabled && groups.length > 0}
+            title={!folderModeEnabled && groups.length > 0 ? "Clear groups first to enable folder mode" : undefined}
           >
-            Groups {groupsEnabled ? "On" : "Off"}
+            Folders {folderModeEnabled ? "On" : "Off"}
           </button>
-          {groups.length > 0 && (
+          {!folderModeEnabled && (
+            <button
+              className={`btn ${groupsEnabled ? "btn-primary" : "btn-secondary"}`}
+              onClick={handleToggleGroups}
+            >
+              Groups {groupsEnabled ? "On" : "Off"}
+            </button>
+          )}
+          {!folderModeEnabled && groups.length > 0 && (
             <>
               <button className="btn btn-secondary" onClick={handleOrganizeClick} disabled={saving}>
                 Organize Folders
@@ -167,7 +243,7 @@ export function Toolbar({ onCreateGroup }: { onCreateGroup?: () => void }) {
               </button>
             </>
           )}
-          {canUndo && (
+          {!folderModeEnabled && canUndo && (
             <button className="btn btn-danger" onClick={handleUndo} disabled={saving}>
               Undo
             </button>
@@ -175,13 +251,23 @@ export function Toolbar({ onCreateGroup }: { onCreateGroup?: () => void }) {
           <button className="btn btn-secondary" onClick={refreshState} disabled={saving}>
             Refresh
           </button>
-          <button
-            className="btn btn-primary"
-            onClick={handleSaveClick}
-            disabled={!hasChanges || saving}
-          >
-            {saving ? "Saving..." : "Save Order"}
-          </button>
+          {folderModeEnabled ? (
+            <button
+              className="btn btn-primary"
+              onClick={onFolderSave}
+              disabled={!folderHasChanges || saving}
+            >
+              {saving ? "Saving..." : "Save Folders"}
+            </button>
+          ) : (
+            <button
+              className="btn btn-primary"
+              onClick={handleSaveClick}
+              disabled={!hasChanges || saving}
+            >
+              {saving ? "Saving..." : "Save Order"}
+            </button>
+          )}
         </div>
       )}
     </header>

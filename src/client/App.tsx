@@ -19,14 +19,19 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useImageStore } from "./stores/imageStore.ts";
 import { useSelectionStore } from "./stores/selectionStore.ts";
 import { useDndStore } from "./stores/dndStore.ts";
-import { useGroupStore } from "./stores/groupStore.ts";
+import { useGroupStore, flushGroupPersist } from "./stores/groupStore.ts";
+import { useFolderStore } from "./stores/folderStore.ts";
 import { useUIStore } from "./stores/uiStore.ts";
 import {
   isGroupSortId,
+  isFolderSortId,
   fromGroupSortId,
+  fromFolderSortId,
   toGroupSortId,
+  toFolderSortId,
   getErrorMessage,
   imageUrl,
+  stripFolderNumber,
   postJson,
 } from "./utils/helpers.ts";
 import { computeGridItems, gridItemId } from "./utils/gridItems.ts";
@@ -39,8 +44,10 @@ import { useDragHandlers } from "./hooks/useDragHandlers.ts";
 import { Toolbar } from "./components/Toolbar.tsx";
 import { SortableCard } from "./components/SortableCard.tsx";
 import { SortableGroupCard } from "./components/SortableGroupCard.tsx";
+import { SortableFolderCard } from "./components/SortableFolderCard.tsx";
 import { GroupThumbGrid } from "./components/GroupThumbGrid.tsx";
 import { GroupPopover } from "./components/GroupPopover.tsx";
+import { FolderPopover } from "./components/FolderPopover.tsx";
 import { Lightbox } from "./components/Lightbox.tsx";
 import { PreviewModal } from "./components/PreviewModal.tsx";
 import { OrganizeModal } from "./components/OrganizeModal.tsx";
@@ -74,6 +81,14 @@ export function App() {
   const collapseGroup = useGroupStore((s) => s.collapseGroup);
   const fetchGroups = useGroupStore((s) => s.fetchGroups);
 
+  const folderModeEnabled = useFolderStore((s) => s.folderModeEnabled);
+  const folders = useFolderStore((s) => s.folders);
+  const folderMap = useFolderStore((s) => s.folderMap);
+  const expandedFolderName = useFolderStore((s) => s.expandedFolderName);
+  const expandFolder = useFolderStore((s) => s.expandFolder);
+  const collapseFolder = useFolderStore((s) => s.collapseFolder);
+  const fetchFolders = useFolderStore((s) => s.fetchFolders);
+
   const lightboxIndex = useUIStore((s) => s.lightboxIndex);
   const saving = useUIStore((s) => s.saving);
   const error = useUIStore((s) => s.error);
@@ -102,13 +117,15 @@ export function App() {
 
   // ---- Computed grid ----
   const gridItems = useMemo(
-    () => computeGridItems(images, groups, groupsEnabled, expandedGroupId),
-    [images, groups, groupsEnabled, expandedGroupId]
+    () => computeGridItems(images, folderModeEnabled
+      ? { mode: "folders", folders, expandedFolderName }
+      : { mode: "groups", groups, enabled: groupsEnabled, expandedGroupId }),
+    [images, groups, groupsEnabled, expandedGroupId, folders, folderModeEnabled, expandedFolderName]
   );
   const gridIds = useMemo(() => gridItems.map(gridItemId), [gridItems]);
 
   const visibleItems = useMemo(
-    () => gridItems.filter((item) => item.type !== "group-image"),
+    () => gridItems.filter((item) => item.type !== "group-image" && item.type !== "folder-image"),
     [gridItems]
   );
 
@@ -150,8 +167,10 @@ export function App() {
     const results = closestCenter(args);
     const aid = activeIdRef.current;
     const frozen = frozenGroupRef.current;
-    if (aid && !isGroupSortId(aid) && frozen) {
-      const excludeId = toGroupSortId(frozen);
+    if (aid && !isGroupSortId(aid) && !isFolderSortId(aid) && frozen) {
+      const excludeId = isFolderSortId(frozen)
+        ? frozen
+        : toGroupSortId(frozen);
       return results.filter((c) => String(c.id) !== excludeId);
     }
     return results;
@@ -170,16 +189,23 @@ export function App() {
   // ---- Initial data fetch ----
   useEffect(() => {
     fetchTargetDir();
-    fetchImages().catch((err: unknown) => {
-      setError(getErrorMessage(err, "Failed to load images"));
-    });
+    if (folderModeEnabled) {
+      fetchFolders().catch((err: unknown) => {
+        setError(getErrorMessage(err, "Failed to load folders"));
+      });
+    } else {
+      fetchImages().catch((err: unknown) => {
+        setError(getErrorMessage(err, "Failed to load images"));
+      });
+      fetchGroups();
+    }
     checkUndo();
-    fetchGroups();
-  }, [fetchImages, checkUndo, fetchTargetDir, fetchGroups, setError]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Clean stale group entries when images change
   useEffect(() => {
-    if (images.length === 0 || !groupsLoaded) return;
+    if (folderModeEnabled || images.length === 0 || !groupsLoaded || saving) return;
     const existing = new Set(images.map((i) => i.filename));
     updateGroups((prev) => {
       let changed = false;
@@ -192,7 +218,7 @@ export function App() {
       }, []);
       return changed ? cleaned : prev;
     });
-  }, [images, groupsLoaded, updateGroups]);
+  }, [images, groupsLoaded, saving, updateGroups]);
 
   // ---- Card click ----
   const handleGridItemClickImpl = (id: string, e: React.MouseEvent) => {
@@ -203,6 +229,18 @@ export function App() {
     } else if (e.shiftKey) {
       const allIds = gridItems.map((item, i) => ({ id: gridItemId(item), index: i }));
       rangeSelect(gridIdx, allIds);
+    } else if (isFolderSortId(id)) {
+      const fname = fromFolderSortId(id);
+      if (selectedIds.size > 0) {
+        const { moveImages } = useFolderStore.getState();
+        const toMove = [...selectedIds].filter((s) => !isFolderSortId(s));
+        if (toMove.length > 0) {
+          moveImages(toMove, fname);
+          clearSelection();
+        }
+      } else {
+        expandFolder(expandedFolderName === fname ? null : fname);
+      }
     } else if (isGroupSortId(id)) {
       const gid = fromGroupSortId(id);
       if (selectedIds.size > 0) {
@@ -236,13 +274,21 @@ export function App() {
     setSaving(true);
     setShowPreview(false);
     try {
+      // Cancel any pending debounced group persist to prevent it from
+      // racing with the save and overwriting remapped groups on disk
+      await flushGroupPersist();
       const oldFilenames = images.map((i) => i.filename);
-      const res = await postJson("/api/save", { order: oldFilenames });
+      const currentGroups = useGroupStore.getState().groups;
+      const res = await postJson("/api/save", { order: oldFilenames, groups: currentGroups });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      showToast("Files renamed successfully", "success");
-      // Server remaps groups atomically — just reload both
-      await Promise.all([fetchImages(), checkUndo(), fetchGroups()]);
+      if (!data.success) throw new Error(data.error ?? "Rename failed");
+      if (data.warnings?.length > 0) {
+        showToast(`Files renamed (${data.warnings.length} warning(s))`, "warning");
+      } else {
+        showToast("Files renamed successfully", "success");
+      }
+      await fetchImages();
+      await Promise.all([fetchGroups(), checkUndo()]);
     } catch (err) {
       showToast(getErrorMessage(err, "Rename failed"), "error");
     } finally {
@@ -252,6 +298,32 @@ export function App() {
   const confirmSaveRef = useRef(handleConfirmSaveImpl);
   confirmSaveRef.current = handleConfirmSaveImpl;
   const handleConfirmSave = useCallback(async () => confirmSaveRef.current(), []);
+
+  const handleFolderSaveImpl = async () => {
+    setSaving(true);
+    try {
+      const { folders: currentFolders, rootImages: currentRoot, fetchFolders: refreshFolders } = useFolderStore.getState();
+      const body = {
+        folders: currentFolders.map((f) => ({
+          title: stripFolderNumber(f.name) || f.name,
+          images: f.images, // already compound paths
+        })),
+        rootImages: currentRoot,
+      };
+      const res = await postJson("/api/folders/save", body);
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error ?? "Folder save failed");
+      showToast("Folders saved successfully", "success");
+      await refreshFolders();
+    } catch (err) {
+      showToast(getErrorMessage(err, "Folder save failed"), "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const folderSaveRef = useRef(handleFolderSaveImpl);
+  folderSaveRef.current = handleFolderSaveImpl;
+  const handleFolderSave = useCallback(async () => folderSaveRef.current(), []);
 
   const handleConfirmOrganizeImpl = async () => {
     setSaving(true);
@@ -277,15 +349,40 @@ export function App() {
   confirmOrganizeRef.current = handleConfirmOrganizeImpl;
   const handleConfirmOrganize = useCallback(async () => confirmOrganizeRef.current(), []);
 
+  // ---- Add-to-group (stable, reads selection from store at call time) ----
+  const handleAddToGroup = useCallback((groupId: string) =>
+    groupOps.addImagesToGroup(groupId, [...useSelectionStore.getState().selectedIds]),
+  [groupOps]);
+
+  // ---- Folder operations (all local state, nothing hits disk until Save) ----
+  const handleRenameFolder = useCallback((folderName: string) => {
+    const title = stripFolderNumber(folderName) || folderName;
+    const newTitle = prompt("Rename folder:", title);
+    if (!newTitle?.trim() || newTitle.trim() === title) return;
+    useFolderStore.getState().renameFolder(folderName, newTitle.trim());
+  }, []);
+
+  const handleDissolveFolder = useCallback((folderName: string) => {
+    if (!confirm(`Dissolve "${stripFolderNumber(folderName) || folderName}"? Images will be moved to root on save.`)) return;
+    useFolderStore.getState().dissolveFolder(folderName);
+  }, []);
+
+  const handleRemoveFromFolder = useCallback((_folderName: string, compoundFn: string) => {
+    useFolderStore.getState().moveImages([compoundFn], "");
+  }, []);
+
   // ---- Drag overlay helpers ----
-  const activeImage = activeId && !isGroupSortId(activeId) ? imageMap.get(activeId) ?? null : null;
+  const activeImage = activeId && !isGroupSortId(activeId) && !isFolderSortId(activeId) ? imageMap.get(activeId) ?? null : null;
   const activeGroup = activeId && isGroupSortId(activeId) ? groupMap.get(fromGroupSortId(activeId)) ?? null : null;
+  const activeFolder = activeId && isFolderSortId(activeId) ? folderMap.get(fromFolderSortId(activeId)) ?? null : null;
 
   const activeGridIndex = activeImage
-    ? gridItems.findIndex((i) => (i.type === "image" || i.type === "group-image") && i.filename === activeImage.filename)
+    ? gridItems.findIndex((i) => (i.type === "image" || i.type === "group-image" || i.type === "folder-image") && i.filename === activeImage.filename)
     : activeGroup
       ? gridItems.findIndex((i) => i.type === "group" && i.groupId === activeGroup.id)
-      : -1;
+      : activeFolder
+        ? gridItems.findIndex((i) => i.type === "folder" && i.folderName === activeFolder.name)
+        : -1;
 
   // ---- Render ----
 
@@ -303,7 +400,11 @@ export function App() {
 
   return (
     <SearchContext.Provider value={searchState}>
-      <Toolbar onCreateGroup={groupOps.handleCreateGroup} />
+      <Toolbar
+        onCreateGroup={groupOps.handleCreateGroup}
+        onAddToGroup={handleAddToGroup}
+        onFolderSave={handleFolderSave}
+      />
 
       {error && <div className="error-banner">{error}</div>}
 
@@ -331,9 +432,11 @@ export function App() {
                 <div style={{ height: totalHeight, width: "100%", position: "relative" }}>
                   {virtualRows.map((virtualRow) => {
                     const row = rows[virtualRow.index]!;
-                    const hasExpandedGroup = expandedGroupId != null && row.some(
+                    const hasExpandedGroup = (expandedGroupId != null && row.some(
                       (item) => item.type === "group" && item.groupId === expandedGroupId
-                    );
+                    )) || (expandedFolderName != null && row.some(
+                      (item) => item.type === "folder" && item.folderName === expandedFolderName
+                    ));
                     return (
                       <div
                         key={virtualRow.key}
@@ -349,6 +452,42 @@ export function App() {
                       >
                         {row.map((item, colIdx) => {
                           const visibleIdx = virtualRow.index * columnCount + colIdx;
+
+                          if (item.type === "folder") {
+                            const folder = folderMap.get(item.folderName);
+                            if (!folder) return null;
+                            const isExp = expandedFolderName === folder.name;
+                            const sortId = toFolderSortId(folder.name);
+                            return (
+                              <SortableFolderCard
+                                key={sortId}
+                                folder={folder}
+                                gridIndex={visibleIdx}
+                                isDropTarget={dragOverGroupId === sortId}
+                                isExpanded={isExp}
+                                isFrozen={frozenGroupId === sortId}
+                                isSelected={selectedIds.has(sortId)}
+                                isGhost={isMultiDragging && selectedIds.has(sortId) && sortId !== activeId}
+                                isSearchMatch={searchState.matchIds.has(sortId)}
+                                isCurrentSearchMatch={searchState.currentMatchId === sortId}
+                                onClick={(e: React.MouseEvent) => handleGridItemClick(sortId, e)}
+                                popover={isExp ? (
+                                  <FolderPopover
+                                    folder={folder}
+                                    imageMap={imageMap}
+                                    selectedIds={selectedIds}
+                                    isMultiDragging={isMultiDragging}
+                                    activeId={activeId}
+                                    onRename={handleRenameFolder}
+                                    onDissolve={handleDissolveFolder}
+                                    onCollapse={collapseFolder}
+                                    onRemoveFromFolder={handleRemoveFromFolder}
+                                    onCardClick={handleGridItemClick}
+                                  />
+                                ) : undefined}
+                              />
+                            );
+                          }
 
                           if (item.type === "group") {
                             const group = groupMap.get(item.groupId);
@@ -431,6 +570,14 @@ export function App() {
                   </div>
                 </div>
                 {isMultiDragging && <div className="drag-count">{selectedIds.size}</div>}
+              </div>
+            ) : activeFolder ? (
+              <div className="card group-card card-dragging">
+                <GroupThumbGrid images={activeFolder.images.map((fn) => `${activeFolder.name}/${fn}`)} />
+                <div className="card-info">
+                  <span className="card-badge">{activeGridIndex + 1}</span>
+                  <span className="card-name">{stripFolderNumber(activeFolder.name) || activeFolder.name}</span>
+                </div>
               </div>
             ) : null}
           </DragOverlay>

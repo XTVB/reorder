@@ -17,6 +17,7 @@ interface RightPanelProps {
   clothingOptions: ClothingOption[];
   onClothingAdd: (piece: string, color: string) => void;
   onClothingRemove: (value: string) => void;
+  onOpenLightbox: (filename: string) => void;
 }
 
 export function RightPanel({
@@ -31,6 +32,7 @@ export function RightPanel({
   clothingOptions,
   onClothingAdd,
   onClothingRemove,
+  onOpenLightbox,
 }: RightPanelProps) {
   return (
     <>
@@ -48,7 +50,9 @@ export function RightPanel({
             <ImageDetailPanel
               tagData={detailData}
               onTagClick={onTagClick}
+              onClothingClick={onClothingAdd}
               onClose={onCloseDetail}
+              onOpenLightbox={onOpenLightbox}
             />
           )}
           <ClothingFilterSection

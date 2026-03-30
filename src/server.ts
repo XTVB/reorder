@@ -10,11 +10,15 @@ import {
   executeOrganize,
   recoverPendingRename,
   withRenameLock,
+  listFolderData,
+  executeFolderSave,
   type OrganizeGroup,
   type RenameMapping,
+  type FolderSaveRequest,
 } from "./rename.ts";
 import { getThumbnail } from "./thumbnails.ts";
 import { ingestTags, getAllTags, getClothingStructured, getDbStatus, remapTagsDb } from "./tags-db.ts";
+import { initLog, log, logError, logData } from "./log.ts";
 
 const GROUPS_FILE = ".reorder-groups.json";
 
@@ -33,9 +37,9 @@ async function writeGroupsFile(targetDir: string, groups: unknown[]) {
   await Bun.write(join(targetDir, GROUPS_FILE), JSON.stringify(groups, null, 2));
 }
 
-async function remapGroups(targetDir: string, renames: RenameMapping[]) {
+async function remapGroups(targetDir: string, renames: RenameMapping[]): Promise<{ before: unknown[]; after: unknown[] }> {
   const groups = await readGroupsFile(targetDir);
-  if (groups.length === 0) return;
+  if (groups.length === 0) return { before: [], after: [] };
   const renameMap = new Map(renames.map((r) => [r.from, r.to]));
   const remapped = groups.map((g: any) => ({
     ...g,
@@ -44,6 +48,39 @@ async function remapGroups(targetDir: string, renames: RenameMapping[]) {
       : g.images,
   }));
   await writeGroupsFile(targetDir, remapped);
+  return { before: groups, after: remapped };
+}
+
+/**
+ * Remap groups and tags DB after a rename operation, collecting non-fatal warnings.
+ * Called identically from /api/save and /api/undo.
+ */
+async function remapAfterRename(
+  targetDir: string,
+  renames: RenameMapping[],
+  label: string,
+  warnings: string[],
+) {
+  try {
+    const { after } = await remapGroups(targetDir, renames);
+    log(label, `Remapped groups: ${after.length} groups`);
+    logData(label, `Groups (post-${label})`,
+      after.map((g: any) => `  ${g.name}: [${g.images?.join(", ")}]`).join("\n")
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(label, "remapGroups failed", err);
+    warnings.push(`Group remapping failed: ${msg}`);
+  }
+
+  try {
+    remapTagsDb(targetDir, renames);
+    log(label, "Remapped tags DB");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(label, "remapTagsDb failed", err);
+    warnings.push(`Tags DB remapping failed: ${msg}`);
+  }
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -103,20 +140,22 @@ async function serveFileWithCache(
 }
 
 export function createServer(targetDir: string, distDir: string, port: number) {
+  initLog(targetDir).catch(() => {});
 
-  // Complete any interrupted rename — runs inside the lock so it can't race with live operations
+  // Complete any interrupted rename — runs inside the lock so it can't race with live operations.
+  // GET /api/images and GET /api/groups also acquire the lock, so the client
+  // blocks until recovery finishes — preventing stale-cleanup from wiping groups.
   withRenameLock(async () => {
     const result = await recoverPendingRename(targetDir);
     if (result.status === "none") return;
-    console.log(`[recovery] ${result.message}`);
-    // If renames were completed, remap groups too (save may have crashed before groups were updated)
+    log("recovery", result.message);
     if (result.status === "completed" && result.mappings && result.completed > 0) {
       await remapGroups(targetDir, result.mappings);
       remapTagsDb(targetDir, result.mappings);
-      console.log(`[recovery] Remapped groups and tags DB`);
+      log("recovery", "Remapped groups and tags DB");
     }
   }).catch((err) => {
-    console.error("[recovery] Failed:", err);
+    logError("recovery", "Failed", err);
   });
 
   return Bun.serve({
@@ -162,8 +201,11 @@ async function handleAPI(
     }
 
     if (path === "/api/images" && req.method === "GET") {
-      const images = await listImages(targetDir);
-      return json({ images: images.map((filename) => ({ filename })) });
+      // Wait for any in-progress recovery/rename to finish before listing
+      return withRenameLock(async () => {
+        const images = await listImages(targetDir);
+        return json({ images: images.map((filename) => ({ filename })) });
+      });
     }
 
     if (path.startsWith("/api/images/") && req.method === "GET") {
@@ -184,38 +226,79 @@ async function handleAPI(
     }
 
     if (path === "/api/save" && req.method === "POST") {
-      const body = (await req.json()) as { order: string[] };
+      const body = (await req.json()) as { order: string[]; groups?: unknown[] };
       return withRenameLock(async () => {
+        const t0 = Date.now();
+        log("save", `Received save request: ${body.order.length} files in order`);
+        logData("save", "Input order", body.order.join("\n"));
+        const warnings: string[] = [];
+
+        if (body.groups) {
+          const groupSummary = (body.groups as any[]).map((g: any) =>
+            `  ${g.name}: [${g.images?.join(", ")}]`
+          ).join("\n");
+          log("save", `Writing ${(body.groups as unknown[]).length} groups to disk before rename`);
+          logData("save", "Groups (pre-rename)", groupSummary);
+          await writeGroupsFile(targetDir, body.groups);
+        }
+
+        log("save", "Executing filesystem renames...");
         const renames = await executeRenames(targetDir, body.order);
-        await remapGroups(targetDir, renames);
-        remapTagsDb(targetDir, renames);
-        return json({ success: true, renames });
+        const effective = renames.filter(r => r.from !== r.to);
+        log("save", `Filesystem renames complete: ${effective.length} changed, ${renames.length - effective.length} unchanged`);
+        logData("save", "All rename mappings",
+          renames.map(r => r.from === r.to ? `  ${r.from} (unchanged)` : `  ${r.from} → ${r.to}`).join("\n")
+        );
+
+        await remapAfterRename(targetDir, renames, "save", warnings);
+
+        const elapsed = Date.now() - t0;
+        log("save", `Complete in ${elapsed}ms — ${effective.length} files renamed${warnings.length > 0 ? `, ${warnings.length} warning(s)` : ""}`);
+        return json({ success: true, renames, warnings });
       });
     }
 
     if (path === "/api/undo" && req.method === "POST") {
       return withRenameLock(async () => {
+        const t0 = Date.now();
+        log("undo", "Received undo request");
+        const warnings: string[] = [];
+
         const renames = await undoRenames(targetDir);
-        await remapGroups(targetDir, renames);
-        remapTagsDb(targetDir, renames);
-        return json({ success: true, renames });
+        const effective = renames.filter(r => r.from !== r.to);
+        log("undo", `Filesystem undo complete: ${effective.length} files reversed`);
+        logData("undo", "All undo mappings",
+          renames.map(r => r.from === r.to ? `  ${r.from} (unchanged)` : `  ${r.from} → ${r.to}`).join("\n")
+        );
+
+        await remapAfterRename(targetDir, renames, "undo", warnings);
+
+        const elapsed = Date.now() - t0;
+        log("undo", `Complete in ${elapsed}ms — ${effective.length} files reversed${warnings.length > 0 ? `, ${warnings.length} warning(s)` : ""}`);
+        return json({ success: true, renames, warnings });
       });
     }
 
     if (path === "/api/can-undo" && req.method === "GET") {
-      const available = await canUndo(targetDir);
-      return json({ canUndo: available });
+      return withRenameLock(async () => {
+        const available = await canUndo(targetDir);
+        return json({ canUndo: available });
+      });
     }
 
     if (path === "/api/groups" && req.method === "GET") {
-      const groups = await readGroupsFile(targetDir);
-      return json(groups);
+      return withRenameLock(async () => {
+        const groups = await readGroupsFile(targetDir);
+        return json(groups);
+      });
     }
 
     if (path === "/api/groups" && req.method === "POST") {
       const groups = (await req.json()) as unknown[];
-      await writeGroupsFile(targetDir, groups);
-      return json({ success: true });
+      return withRenameLock(async () => {
+        await writeGroupsFile(targetDir, groups);
+        return json({ success: true });
+      });
     }
 
     if (path === "/api/organize/preview" && req.method === "POST") {
@@ -239,7 +322,7 @@ async function handleAPI(
 
     if (path === "/api/tags/ingest" && req.method === "POST") {
       const body = (await req.json()) as { data: unknown };
-      const result = ingestTags(targetDir, body.data);
+      const result = await ingestTags(targetDir, body.data);
       return json(result);
     }
 
@@ -253,6 +336,28 @@ async function handleAPI(
       const result = getClothingStructured(targetDir);
       if (!result) return json({ error: "No tags database found" }, 404);
       return json(result);
+    }
+
+    // ---- Folder mode routes ----
+
+    if (path === "/api/folders" && req.method === "GET") {
+      return withRenameLock(async () => {
+        const data = await listFolderData(targetDir);
+        return json(data);
+      });
+    }
+
+    if (path === "/api/folders/save" && req.method === "POST") {
+      const body = (await req.json()) as FolderSaveRequest;
+      return withRenameLock(async () => {
+        const t0 = Date.now();
+        const totalImages = body.folders.reduce((n, f) => n + f.images.length, 0) + body.rootImages.length;
+        log("folders-save", `Received save: ${body.folders.length} folders, ${totalImages} images`);
+        const result = await executeFolderSave(targetDir, body, log);
+        const elapsed = Date.now() - t0;
+        log("folders-save", `Complete in ${elapsed}ms — ${result.moves.length} moves, ${result.foldersCreated.length} created, ${result.foldersRemoved.length} removed`);
+        return json({ success: true, ...result });
+      });
     }
 
     return json({ error: "Not found" }, 404);

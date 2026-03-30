@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import type { RenameMapping } from "./rename.ts";
 import type { ClothingItemData, ImageTagData, ClothingOption } from "./client/types.ts";
 
@@ -16,24 +17,25 @@ PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS images (
-  filename TEXT PRIMARY KEY
+  inode    INTEGER PRIMARY KEY,
+  filename TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_images_filename ON images(filename);
 
 CREATE TABLE IF NOT EXISTS tags (
-  filename TEXT NOT NULL REFERENCES images(filename) ON UPDATE CASCADE ON DELETE CASCADE,
+  inode    INTEGER NOT NULL REFERENCES images(inode) ON DELETE CASCADE,
   category TEXT NOT NULL,
   value    TEXT NOT NULL,
-  PRIMARY KEY (filename, category, value)
+  PRIMARY KEY (inode, category, value)
 );
 CREATE INDEX IF NOT EXISTS idx_tags_cat_val ON tags(category, value);
-CREATE INDEX IF NOT EXISTS idx_tags_filename ON tags(filename);
 
 CREATE TABLE IF NOT EXISTS clothing_items (
-  id       INTEGER PRIMARY KEY AUTOINCREMENT,
-  filename TEXT NOT NULL REFERENCES images(filename) ON UPDATE CASCADE ON DELETE CASCADE,
-  piece    TEXT NOT NULL
+  id    INTEGER PRIMARY KEY AUTOINCREMENT,
+  inode INTEGER NOT NULL REFERENCES images(inode) ON DELETE CASCADE,
+  piece TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_clothing_filename ON clothing_items(filename);
+CREATE INDEX IF NOT EXISTS idx_clothing_inode ON clothing_items(inode);
 
 CREATE TABLE IF NOT EXISTS clothing_colors (
   item_id INTEGER NOT NULL REFERENCES clothing_items(id) ON DELETE CASCADE,
@@ -87,7 +89,7 @@ export interface IngestResult {
   skipped: number;
 }
 
-export function ingestTags(targetDir: string, data: unknown): IngestResult {
+export async function ingestTags(targetDir: string, data: unknown): Promise<IngestResult> {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new Error("Invalid tags data: expected an object keyed by filename");
   }
@@ -98,12 +100,25 @@ export function ingestTags(targetDir: string, data: unknown): IngestResult {
   let ingested = 0;
   let skipped = 0;
 
+  // Resolve inodes for all filenames in the data
+  const inodeMap = new Map<string, number>();
+  await Promise.all(
+    Object.keys(data as Record<string, unknown>).map(async (filename) => {
+      try {
+        const s = await stat(join(targetDir, filename));
+        inodeMap.set(filename, s.ino);
+      } catch {
+        // File doesn't exist on disk — will be skipped
+      }
+    })
+  );
+
   try {
     db.exec("PRAGMA synchronous = OFF");
 
-    const insertImage = db.prepare("INSERT INTO images (filename) VALUES (?)");
-    const insertTag = db.prepare("INSERT OR IGNORE INTO tags (filename, category, value) VALUES (?, ?, ?)");
-    const insertClothing = db.prepare("INSERT INTO clothing_items (filename, piece) VALUES (?, ?)");
+    const insertImage = db.prepare("INSERT INTO images (inode, filename) VALUES (?, ?)");
+    const insertTag = db.prepare("INSERT OR IGNORE INTO tags (inode, category, value) VALUES (?, ?, ?)");
+    const insertClothing = db.prepare("INSERT INTO clothing_items (inode, piece) VALUES (?, ?)");
     const insertColor = db.prepare("INSERT OR IGNORE INTO clothing_colors (item_id, color) VALUES (?, ?)");
     const insertStyle = db.prepare("INSERT OR IGNORE INTO clothing_styles (item_id, style) VALUES (?, ?)");
 
@@ -112,13 +127,19 @@ export function ingestTags(targetDir: string, data: unknown): IngestResult {
       db.exec("DELETE FROM images");
 
       for (const [filename, entry] of Object.entries(data as Record<string, unknown>)) {
+        const ino = inodeMap.get(filename);
+        if (!ino) {
+          skipped++;
+          continue;
+        }
+
         if (!entry || typeof entry !== "object") {
           skipped++;
           continue;
         }
 
         const tags = entry as Record<string, unknown>;
-        insertImage.run(filename);
+        insertImage.run(ino, filename);
 
         // Insert flat tag fields
         for (const field of FLAT_FIELDS) {
@@ -126,7 +147,7 @@ export function ingestTags(targetDir: string, data: unknown): IngestResult {
           if (Array.isArray(values)) {
             for (const v of values) {
               if (typeof v === "string") {
-                insertTag.run(filename, field, v);
+                insertTag.run(ino, field, v);
               }
             }
           }
@@ -141,7 +162,7 @@ export function ingestTags(targetDir: string, data: unknown): IngestResult {
             const piece = ci.piece;
             if (typeof piece !== "string") continue;
 
-            const result = insertClothing.run(filename, piece);
+            const result = insertClothing.run(ino, piece);
             const itemId = Number(result.lastInsertRowid);
 
             if (Array.isArray(ci.color)) {
@@ -173,30 +194,30 @@ export function getAllTags(targetDir: string): { images: ImageTagData[] } | null
   const db = openTagsDb(targetDir);
   if (!db) return null;
 
-  const allImages = db.prepare("SELECT filename FROM images ORDER BY filename").all() as { filename: string }[];
-  const allTags = db.prepare("SELECT filename, category, value FROM tags").all() as { filename: string; category: string; value: string }[];
+  const allImages = db.prepare("SELECT inode, filename FROM images ORDER BY filename").all() as { inode: number; filename: string }[];
+  const allTags = db.prepare("SELECT inode, category, value FROM tags").all() as { inode: number; category: string; value: string }[];
   const allClothing = db.prepare(`
-    SELECT ci.id, ci.filename, ci.piece,
+    SELECT ci.inode, ci.piece,
       GROUP_CONCAT(DISTINCT cc.color) AS colors,
       GROUP_CONCAT(DISTINCT cs.style) AS styles
     FROM clothing_items ci
     LEFT JOIN clothing_colors cc ON cc.item_id = ci.id
     LEFT JOIN clothing_styles cs ON cs.item_id = ci.id
     GROUP BY ci.id
-  `).all() as { id: number; filename: string; piece: string; colors: string | null; styles: string | null }[];
+  `).all() as { inode: number; piece: string; colors: string | null; styles: string | null }[];
 
-  // Build lookup maps
-  const tagsByFile = new Map<string, Record<string, string[]>>();
-  for (const { filename, category, value } of allTags) {
-    let record = tagsByFile.get(filename);
-    if (!record) { record = {}; tagsByFile.set(filename, record); }
+  // Build lookup maps by inode
+  const tagsByInode = new Map<number, Record<string, string[]>>();
+  for (const { inode, category, value } of allTags) {
+    let record = tagsByInode.get(inode);
+    if (!record) { record = {}; tagsByInode.set(inode, record); }
     (record[category] ??= []).push(value);
   }
 
-  const clothingByFile = new Map<string, ClothingItemData[]>();
+  const clothingByInode = new Map<number, ClothingItemData[]>();
   for (const row of allClothing) {
-    let items = clothingByFile.get(row.filename);
-    if (!items) { items = []; clothingByFile.set(row.filename, items); }
+    let items = clothingByInode.get(row.inode);
+    if (!items) { items = []; clothingByInode.set(row.inode, items); }
     items.push({
       piece: row.piece,
       colors: row.colors ? row.colors.split(",") : [],
@@ -204,10 +225,10 @@ export function getAllTags(targetDir: string): { images: ImageTagData[] } | null
     });
   }
 
-  const images: ImageTagData[] = allImages.map(({ filename }) => ({
+  const images: ImageTagData[] = allImages.map(({ inode, filename }) => ({
     filename,
-    tags: tagsByFile.get(filename) ?? {},
-    clothing: clothingByFile.get(filename) ?? [],
+    tags: tagsByInode.get(inode) ?? {},
+    clothing: clothingByInode.get(inode) ?? [],
   }));
 
   return { images };
@@ -218,21 +239,21 @@ export function getClothingStructured(targetDir: string): ClothingOption[] | nul
   if (!db) return null;
 
   const rows = db.prepare(`
-      SELECT ci.piece,
-        GROUP_CONCAT(DISTINCT cc.color) AS colors,
-        GROUP_CONCAT(DISTINCT cs.style) AS styles
-      FROM clothing_items ci
-      LEFT JOIN clothing_colors cc ON cc.item_id = ci.id
-      LEFT JOIN clothing_styles cs ON cs.item_id = ci.id
-      GROUP BY ci.piece
-      ORDER BY ci.piece
-    `).all() as { piece: string; colors: string | null; styles: string | null }[];
+    SELECT ci.piece,
+      GROUP_CONCAT(DISTINCT cc.color) AS colors,
+      GROUP_CONCAT(DISTINCT cs.style) AS styles
+    FROM clothing_items ci
+    LEFT JOIN clothing_colors cc ON cc.item_id = ci.id
+    LEFT JOIN clothing_styles cs ON cs.item_id = ci.id
+    GROUP BY ci.piece
+    ORDER BY ci.piece
+  `).all() as { piece: string; colors: string | null; styles: string | null }[];
 
-    return rows.map((r) => ({
-      piece: r.piece,
-      colors: r.colors ? [...new Set(r.colors.split(","))].sort() : [],
-      styles: r.styles ? [...new Set(r.styles.split(","))].sort() : [],
-    }));
+  return rows.map((r) => ({
+    piece: r.piece,
+    colors: r.colors ? [...new Set(r.colors.split(","))].sort() : [],
+    styles: r.styles ? [...new Set(r.styles.split(","))].sort() : [],
+  }));
 }
 
 export function getDbStatus(targetDir: string): { hasDb: boolean; imageCount: number } {
@@ -243,15 +264,64 @@ export function getDbStatus(targetDir: string): { hasDb: boolean; imageCount: nu
   return { hasDb: true, imageCount: row.cnt };
 }
 
+/**
+ * Update filenames in the tags DB after a rename operation.
+ * Since inode is the primary key and renames preserve inodes,
+ * we look up the row by the old filename and update it to the new one.
+ */
 export function remapTagsDb(targetDir: string, renames: RenameMapping[]): void {
   const db = openTagsDb(targetDir);
   if (!db) return;
 
+  const actual = renames.filter(({ from, to }) => from !== to);
+  if (actual.length === 0) return;
+
   const update = db.prepare("UPDATE images SET filename = ? WHERE filename = ?");
   const tx = db.transaction((mappings: RenameMapping[]) => {
     for (const { from, to } of mappings) {
-      if (from !== to) update.run(to, from);
+      update.run(to, from);
     }
   });
-  tx(renames);
+  tx(actual);
+}
+
+/**
+ * Idempotent sync: stat every image on disk, update the DB filename for each
+ * known inode. Fixes any desync regardless of how it happened.
+ * Returns the number of filenames corrected.
+ */
+export async function syncTagsDbFilenames(targetDir: string): Promise<number> {
+  const db = openTagsDb(targetDir);
+  if (!db) return 0;
+
+  const dbRows = db.prepare("SELECT inode, filename FROM images").all() as { inode: number; filename: string }[];
+  const dbByInode = new Map(dbRows.map(r => [r.inode, r.filename]));
+
+  const { readdir } = await import("node:fs/promises");
+  const { isImageFile } = await import("./rename.ts");
+  const entries = await readdir(targetDir, { withFileTypes: true });
+  const imageFiles = entries.filter(e => e.isFile() && isImageFile(e.name));
+
+  const fixes: { ino: number; filename: string }[] = [];
+  await Promise.all(
+    imageFiles.map(async (e) => {
+      const s = await stat(join(targetDir, e.name));
+      const dbFilename = dbByInode.get(s.ino);
+      if (dbFilename !== undefined && dbFilename !== e.name) {
+        fixes.push({ ino: s.ino, filename: e.name });
+      }
+    })
+  );
+
+  if (fixes.length > 0) {
+    const update = db.prepare("UPDATE images SET filename = ? WHERE inode = ?");
+    const tx = db.transaction(() => {
+      for (const { filename, ino } of fixes) {
+        update.run(filename, ino);
+      }
+    });
+    tx();
+  }
+
+  return fixes.length;
 }

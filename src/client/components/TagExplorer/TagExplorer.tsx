@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useCallback } from "react";
+import React, { useEffect, useMemo, useCallback, useState } from "react";
 import { Toolbar } from "../Toolbar.tsx";
 import { Toast } from "../Toast.tsx";
+import { Lightbox } from "../Lightbox.tsx";
 import { useTagStore } from "../../stores/tagStore.ts";
 import { useImageStore } from "../../stores/imageStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
@@ -79,6 +80,23 @@ export function TagExplorer() {
     setDetailFilename(detailFilename === filename ? null : filename);
   }, [detailFilename, setDetailFilename]);
 
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+
+  const lightboxImages = useMemo(
+    () => filteredFilenames.map((fn) => ({ filename: fn })),
+    [filteredFilenames],
+  );
+
+  const filteredIndexMap = useMemo(
+    () => new Map(filteredFilenames.map((fn, i) => [fn, i])),
+    [filteredFilenames],
+  );
+
+  const handleOpenLightbox = useCallback((filename: string) => {
+    const idx = filteredIndexMap.get(filename);
+    if (idx !== undefined) setLightboxIndex(idx);
+  }, [filteredIndexMap]);
+
   const setImages = useImageStore((s) => s.setImages);
 
   const handleCreateGroup = useCallback(() => {
@@ -118,8 +136,8 @@ export function TagExplorer() {
   const groupOps = useGroupOperations();
 
   const handleAddToGroup = useCallback((groupId: string) => {
-    groupOps.addImagesToGroup(groupId, [...selectedIds]);
-  }, [selectedIds, groupOps]);
+    groupOps.addImagesToGroup(groupId, [...useSelectionStore.getState().selectedIds]);
+  }, [groupOps]);
 
   return (
     <>
@@ -155,7 +173,7 @@ export function TagExplorer() {
               onImageClick={(fn) => setDetailFilename(detailFilename === fn ? null : fn)}
               selectedCount={selectedIds.size}
             />
-            <CenterPanel onImageClick={handleImageClick} onAddToGroup={handleAddToGroup} onCreateGroup={handleCreateGroup} />
+            <CenterPanel onImageClick={handleImageClick} onImageDoubleClick={handleOpenLightbox} onAddToGroup={handleAddToGroup} onCreateGroup={handleCreateGroup} />
             <RightPanel
               isOpen={sidebarOpen}
               onToggle={toggleSidebar}
@@ -168,11 +186,19 @@ export function TagExplorer() {
               clothingOptions={clothingOptions}
               onClothingAdd={handleClothingAdd}
               onClothingRemove={handleClothingRemove}
+              onOpenLightbox={handleOpenLightbox}
             />
           </div>
         </div>
       ) : null}
 
+      {lightboxIndex !== null && (
+        <Lightbox
+          images={lightboxImages}
+          initialIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
       <Toast />
     </>
   );

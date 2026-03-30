@@ -9,11 +9,12 @@ import { useGridLayout } from "../../hooks/useGridLayout.ts";
 
 interface CenterPanelProps {
   onImageClick: (filename: string, e: React.MouseEvent) => void;
+  onImageDoubleClick: (filename: string) => void;
   onAddToGroup: (groupId: string) => void;
   onCreateGroup: () => void;
 }
 
-export function CenterPanel({ onImageClick, onAddToGroup, onCreateGroup }: CenterPanelProps) {
+export function CenterPanel({ onImageClick, onImageDoubleClick, onAddToGroup, onCreateGroup }: CenterPanelProps) {
   const filteredFilenames = useTagStore((s) => s.filteredFilenames);
   const scope = useTagStore((s) => s.scope);
   const setScope = useTagStore((s) => s.setScope);
@@ -137,6 +138,7 @@ export function CenterPanel({ onImageClick, onAddToGroup, onCreateGroup }: Cente
                         isDetail && "tag-results-card-detail",
                       )}
                       onClick={(e) => handleCardClick(filename, e, globalIdx)}
+                      onDoubleClick={() => onImageDoubleClick(filename)}
                     >
                       <img src={imageUrl(filename)} alt={filename} loading="lazy" draggable={false} />
                       <div className="tag-results-card-info">{filename}</div>

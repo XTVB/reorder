@@ -9,8 +9,19 @@ let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 function persistGroupsToServer(groups: ImageGroup[]) {
   if (_persistTimer) clearTimeout(_persistTimer);
   _persistTimer = setTimeout(() => {
+    _persistTimer = null;
     postJson("/api/groups", groups).catch(() => {});
   }, 300);
+}
+
+/** Cancel any pending debounced group persist and flush synchronously. */
+export function flushGroupPersist(): Promise<void> {
+  if (_persistTimer) {
+    clearTimeout(_persistTimer);
+    _persistTimer = null;
+    return postJson("/api/groups", useGroupStore.getState().groups).then(() => {});
+  }
+  return Promise.resolve();
 }
 
 interface GroupState {
@@ -67,3 +78,4 @@ export const useGroupStore = create<GroupState>((set, get) => ({
   expandGroup: (id) => set({ expandedGroupId: id }),
   collapseGroup: () => set({ expandedGroupId: null }),
 }));
+

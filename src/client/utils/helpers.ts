@@ -2,6 +2,7 @@ import { useImageStore } from "../stores/imageStore.ts";
 import type { FilterMode } from "../types.ts";
 
 export const GROUP_PREFIX = "group:";
+export const FOLDER_PREFIX = "folder:";
 
 export function toGroupSortId(groupId: string): string {
   return GROUP_PREFIX + groupId;
@@ -13,6 +14,22 @@ export function isGroupSortId(id: string): boolean {
 
 export function fromGroupSortId(id: string): string {
   return id.slice(GROUP_PREFIX.length);
+}
+
+export function toFolderSortId(folderName: string): string {
+  return FOLDER_PREFIX + folderName;
+}
+
+export function isFolderSortId(id: string): boolean {
+  return id.startsWith(FOLDER_PREFIX);
+}
+
+export function fromFolderSortId(id: string): string {
+  return id.slice(FOLDER_PREFIX.length);
+}
+
+export function stripFolderNumber(name: string): string {
+  return name.replace(/^\d+\s*-\s*/, "").trim();
 }
 
 export function cn(...classes: (string | false | undefined | null)[]): string {

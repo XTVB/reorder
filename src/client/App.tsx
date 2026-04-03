@@ -41,7 +41,6 @@ import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts.ts";
 import { useGroupOperations } from "./hooks/useGroupOperations.ts";
 import { useDragHandlers } from "./hooks/useDragHandlers.ts";
 
-import { Toolbar } from "./components/Toolbar.tsx";
 import { SortableCard } from "./components/SortableCard.tsx";
 import { SortableGroupCard } from "./components/SortableGroupCard.tsx";
 import { SortableFolderCard } from "./components/SortableFolderCard.tsx";
@@ -188,14 +187,21 @@ export function App() {
   // ---- Initial data fetch ----
   useEffect(() => {
     fetchTargetDir();
+    // Skip re-fetching if images are already loaded (e.g. switching back from cluster mode).
+    // Re-fetching would bump imageVersion, busting the browser's in-memory thumbnail cache
+    // and causing a black flash while thumbnails reload.
+    const alreadyLoaded = useImageStore.getState().images.length > 0;
     if (folderModeEnabled) {
       fetchFolders().catch((err: unknown) => {
         setError(getErrorMessage(err, "Failed to load folders"));
       });
-    } else {
+    } else if (!alreadyLoaded) {
       fetchImages().catch((err: unknown) => {
         setError(getErrorMessage(err, "Failed to load images"));
       });
+    }
+    if (!folderModeEnabled) {
+      // Always refresh groups — they may have changed in cluster mode (accept/merge)
       fetchGroups();
     }
     checkUndo();
@@ -298,32 +304,6 @@ export function App() {
   confirmSaveRef.current = handleConfirmSaveImpl;
   const handleConfirmSave = useCallback(async () => confirmSaveRef.current(), []);
 
-  const handleFolderSaveImpl = async () => {
-    setSaving(true);
-    try {
-      const { folders: currentFolders, rootImages: currentRoot, fetchFolders: refreshFolders } = useFolderStore.getState();
-      const body = {
-        folders: currentFolders.map((f) => ({
-          title: stripFolderNumber(f.name) || f.name,
-          images: f.images, // already compound paths
-        })),
-        rootImages: currentRoot,
-      };
-      const res = await postJson("/api/folders/save", body);
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error ?? "Folder save failed");
-      showToast("Folders saved successfully", "success");
-      await refreshFolders();
-    } catch (err) {
-      showToast(getErrorMessage(err, "Folder save failed"), "error");
-    } finally {
-      setSaving(false);
-    }
-  };
-  const folderSaveRef = useRef(handleFolderSaveImpl);
-  folderSaveRef.current = handleFolderSaveImpl;
-  const handleFolderSave = useCallback(async () => folderSaveRef.current(), []);
-
   const handleConfirmOrganizeImpl = async () => {
     setSaving(true);
     setShowOrganize(false);
@@ -347,11 +327,6 @@ export function App() {
   const confirmOrganizeRef = useRef(handleConfirmOrganizeImpl);
   confirmOrganizeRef.current = handleConfirmOrganizeImpl;
   const handleConfirmOrganize = useCallback(async () => confirmOrganizeRef.current(), []);
-
-  // ---- Add-to-group (stable, reads selection from store at call time) ----
-  const handleAddToGroup = useCallback((groupId: string) =>
-    groupOps.addImagesToGroup(groupId, [...useSelectionStore.getState().selectedIds]),
-  [groupOps]);
 
   // ---- Folder operations (all local state, nothing hits disk until Save) ----
   const handleRenameFolder = useCallback((folderName: string) => {
@@ -399,11 +374,6 @@ export function App() {
 
   return (
     <SearchContext.Provider value={searchState}>
-      <Toolbar
-        onCreateGroup={groupOps.handleCreateGroup}
-        onAddToGroup={handleAddToGroup}
-        onFolderSave={handleFolderSave}
-      />
 
       {error && <div className="error-banner">{error}</div>}
 

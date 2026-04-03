@@ -8,7 +8,7 @@ interface Props {
   collapsed: boolean;
   mergeSelected: boolean;
   focused: boolean;
-  selectedImages: Map<string, { clusterId: string; filename: string }>;
+  selectedImages: Set<string>;
   onToggleCollapse: () => void;
   onMergeSelect: (e: React.MouseEvent) => void;
   onImageSelect: (filename: string) => void;
@@ -45,12 +45,13 @@ export function ClusterCard({
 
   const isFullyGrouped = hasGroup && suggestedImages.length === 0;
 
+  const statusClass = hasGroup ? "confirmed" : "suggested";
+
   const cardClass = cn(
     "cluster-card",
     mergeSelected && "merge-selected",
     focused && "focused",
     isFullyGrouped && "fully-grouped",
-    hasGroup && !isFullyGrouped && "has-group",
   );
 
   function renderThumbs(files: string[], confirmed: boolean) {
@@ -69,9 +70,10 @@ export function ClusterCard({
   }
 
   return (
-    <div id={`cluster-${cluster.id}`} className={cardClass} onClick={onMergeSelect}>
+    <div className={cardClass} onClick={onMergeSelect}>
       <div className="cluster-header" onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }}>
-        <span className="cluster-collapse-icon">{collapsed ? "▸" : "▾"}</span>
+        <span className={`cluster-chevron ${collapsed ? "" : "cluster-chevron-open"}`} aria-hidden />
+        <span className={`cluster-status-dot ${statusClass}`} />
 
         {isFullyGrouped && <span className="cluster-check">✓</span>}
 
@@ -167,7 +169,7 @@ function ThumbCard({
         }
       }}
     >
-      <img src={imageUrl(filename)} loading="lazy" alt={filename} draggable={false} />
+      <img src={imageUrl(filename)} loading="lazy" decoding="async" alt={filename} draggable={false} />
       <span className="cluster-thumb-name">{filename}</span>
     </div>
   );

@@ -1,0 +1,211 @@
+.group-picker {
+  position: relative;
+}
+
+.group-picker-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  width: 240px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 300;
+  overflow: hidden;
+}
+
+.group-picker-search {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+
+.group-picker-search::placeholder {
+  color: var(--text-muted);
+}
+
+.group-picker-list {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.group-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.group-picker-item:hover,
+.group-picker-item-active {
+  background: var(--surface-hover);
+}
+
+.group-picker-item-count {
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.group-picker-empty {
+  padding: 12px 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Group card */
+.group-card {
+  cursor: pointer;
+}
+
+.group-thumb-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  aspect-ratio: 1;
+  gap: 2px;
+  background: var(--bg);
+}
+
+.group-thumb-slot {
+  overflow: hidden;
+}
+
+.group-thumb-slot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.group-thumb-empty {
+  width: 100%;
+  height: 100%;
+  background: var(--border);
+}
+
+.group-drop-target {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.5), 0 0 24px rgba(79, 140, 255, 0.3) !important;
+  z-index: 10;
+}
+
+.group-drop-target::after {
+  content: "Drop to add";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(79, 140, 255, 0.35);
+  color: white;
+  font-weight: 600;
+  font-size: 13px;
+  border-radius: var(--radius);
+  pointer-events: none;
+}
+
+.group-expanded-card {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+  z-index: 150;
+  overflow: visible;
+}
+
+.group-count {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 10px;
+  color: white;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 2px 6px;
+  border-radius: 8px;
+  z-index: 2;
+}
+
+/* Expanded group popover — positioned via JS for viewport clamping */
+.group-popover-anchor {
+  position: absolute;
+  top: calc(100% + 8px);
+}
+
+.group-popover {
+  z-index: 150;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 12px;
+  min-width: 500px;
+  width: calc(100vw - 80px);
+  max-width: 900px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.group-popover-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.group-popover-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.group-popover-count {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.group-popover-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.group-popover-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+/* Expanded group image cards — subtle accent border to show membership */
+.group-image-card {
+  border-color: rgba(79, 140, 255, 0.3);
+}
+
+.group-remove-btn {
+  background: var(--border);
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  margin-left: auto;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.group-remove-btn:hover {
+  color: white;
+  background: var(--danger);
+}

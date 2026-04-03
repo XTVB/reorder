@@ -18,17 +18,32 @@ Designed for iterative workflow: cluster → accept groups → reorder/rename �
 
 ### Server (`start.ts` → `src/server.ts`)
 - `Bun.serve()` with manual routing in `handleAPI()`. No framework.
-- `src/rename.ts` — filesystem operations (list, rename, undo, organize, crash recovery)
+- `src/rename.ts` — filesystem operations (list, rename, undo, organize, folder save, crash recovery)
 - `src/thumbnails.ts` — Sharp WebP thumbnails with content-addressable cache (`inode-size.webp`)
 - `src/cluster.ts` — clustering orchestration: spawns Python/Rust, parses linkage tree, TF-IDF auto-naming, contact sheets
-- `src/tags-db.ts` — SQLite tag database (legacy, replaced by cluster mode)
+- `src/log.ts` — file+console logging with `log()`, `logError()`, `logData()`, `logBlock()`. Writes to `.reorder-log` in target dir.
+- `start.ts` — entry point: validates dir, runs `Bun.build()`, copies CSS from `src/client/styles/`, starts server, opens browser, pre-generates thumbnails
 
 ### Client (`src/client/`)
-- React 19 SPA, built with `Bun.build()` (no Vite)
-- State: Zustand stores in `stores/` (imageStore, selectionStore, dndStore, groupStore, uiStore, clusterStore)
-- Two modes via `AppMode = "reorder" | "cluster"` — AppShell in `index.tsx` switches between `<App />` and `<ClusterView />`
+- React 19 SPA, built with `Bun.build()` (no Vite/bundler config)
+- Routing: `useRouter` hook (`src/client/hooks/useRouter.ts`) — pushState-based, `/reorder` and `/cluster` paths
+- Shell: `AppShell` in `index.tsx` renders `AppShellHeader` + mode-specific content (`<App />` or `<ClusterView />`)
+- CSS: split into per-concern files in `src/client/styles/` (base, buttons, card, cluster, grid, group, header, lightbox, loading, modal, mode-toggle, search, toast). Copied to `dist/` at build time.
 - Drag-and-drop: `@dnd-kit/core` + `@dnd-kit/sortable`
 - Virtualization: `@tanstack/react-virtual` for 13k+ images in reorder mode
+- Debug: all stores exposed on `window.__stores` for console access
+
+### Zustand Stores (`src/client/stores/`)
+
+| Store | Purpose |
+|-------|---------|
+| `imageStore` | Image list, original order, `hasChanges`, `imageVersion` for cache busting |
+| `selectionStore` | Multi-select with click/shift-range/select-all in reorder mode |
+| `dndStore` | Active drag state, drag-over-group tracking |
+| `groupStore` | Named image groups, debounced server persist, groups-enabled toggle |
+| `folderStore` | Folder mode: local folder/root state, disk snapshot, change detection, reorder/rename/dissolve/move ops |
+| `uiStore` | Lightbox, modals, saving state, toast, undo, target dir, header subtitle |
+| `clusterStore` | Cluster data, SSE loading, merge/split/accept, image selection, lightbox, stale tree detection |
 
 ### Clustering Pipeline (three stages)
 
@@ -39,7 +54,7 @@ Stage 1: Python (scripts/extract_features.py)
   → Output: .reorder-cache/clip_embeddings.npz + .filenames.json
   → Requires: /tmp/imgcluster-env/bin/python3 (venv with torch, open-clip-torch, pillow, numpy)
 
-Stage 2: Rust (rust/cluster-tool/)
+Stage 2: Rust (rust/cluster-tool/src/main.rs)
   → Ward's linkage (NNC algorithm) matching scipy exactly
   → Pre-seeds confirmed reorder groups as real clusters (true centroid/size/variance)
   → Uses cosine distances + scipy's _ward update formula (square-sqrt)
@@ -52,23 +67,15 @@ Stage 3: Bun (src/cluster.ts)
   → Contact sheet generation via Sharp (4×3 grid, 400×400 thumbs)
 ```
 
-### Key Files
-
-| File | Purpose |
-|------|---------|
-| `src/cluster.ts` | Server-side clustering orchestration, tree parsing, auto-naming, contact sheets |
-| `src/client/stores/clusterStore.ts` | Client state for cluster mode (data, selection, lightbox, stale detection) |
-| `src/client/components/ClusterView/` | ClusterView, ClusterCard, ClusterToolbar, MergeBar |
-| `scripts/extract_features.py` | Python CLIP+color extraction with content-hash cache |
-| `scripts/precompute_text_embeddings.py` | One-time CLIP text embedding generation for auto-naming vocabulary |
-| `rust/cluster-tool/src/main.rs` | Rust Ward's linkage with pre-seeded groups |
-
 ### Clustering API Endpoints
+
+All routes are in `handleAPI()` in `src/server.ts`. Reorder/folder routes are standard CRUD — read the file. Cluster-specific routes:
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/api/cluster` | Full pipeline (SSE progress stream). Body: `{nClusters?}` |
 | GET | `/api/cluster/status` | `{running: boolean}` — prevents double-triggering |
+| GET | `/api/cluster/cache-status` | `{cached: boolean}` — check if linkage tree exists |
 | POST | `/api/cluster/recut` | Re-cut cached tree. Body: `{nClusters}`. Instant. |
 | POST | `/api/cluster/contact-sheet` | Generate thumbnail grid. Body: `{filenames, clusterName}` |
 
@@ -77,6 +84,7 @@ Stage 3: Bun (src/cluster.ts)
 | File | Purpose |
 |------|---------|
 | `.reorder-groups.json` | Persisted groups (shared between reorder and cluster modes) |
+| `.reorder-log` | Server operation log (truncated to 50k lines on startup) |
 | `.reorder-cache/clip_embeddings.npz` | CLIP+color feature arrays (filename-ordered, for Rust) |
 | `.reorder-cache/clip_hash_cache.npz` | Feature cache keyed by content hash (survives renames) |
 | `.reorder-cache/clip_embeddings.filenames.json` | Filename→row mapping for the npz |
@@ -95,6 +103,9 @@ Stage 3: Bun (src/cluster.ts)
 - **Rename safety**: two-phase rename with write-ahead manifest. `withRenameLock` serializes filesystem operations
 - **Group atomicity**: Server remaps groups in same lock as renames. Client reloads after save/undo
 - **Browser cache busting**: `imageVersion` counter + `?v=N` URL parameter
+- **Debounced group persist**: `groupStore` debounces server writes (300ms), with `flushGroupPersist()` for critical paths
+- **Folder mode change detection**: `folderStore` keeps a disk snapshot and computes `hasChanges` against local state
+- **Client-side routing**: pushState-based via `useRouter` hook — server returns `index.html` for all non-API/non-asset paths
 
 ## Python Environment
 

@@ -1,5 +1,5 @@
 import { join, resolve, basename } from "node:path";
-import { access, constants, mkdir, copyFile, stat } from "node:fs/promises";
+import { access, constants, mkdir, copyFile, stat, readdir } from "node:fs/promises";
 import { createServer } from "./src/server.ts";
 import { listImages } from "./src/rename.ts";
 import { preGenerateThumbnails, clearCache } from "./src/thumbnails.ts";
@@ -58,9 +58,11 @@ async function main() {
 
   // Copy static files in parallel
   const clientDir = join(import.meta.dir, "src/client");
+  const stylesDir = join(clientDir, "styles");
+  const cssFiles = (await readdir(stylesDir)).filter(f => f.endsWith(".css"));
   await Promise.all([
     copyFile(join(clientDir, "index.html"), join(distDir, "index.html")),
-    copyFile(join(clientDir, "styles.css"), join(distDir, "styles.css")),
+    ...cssFiles.map(f => copyFile(join(stylesDir, f), join(distDir, f))),
   ]);
 
   // Find available port and start server

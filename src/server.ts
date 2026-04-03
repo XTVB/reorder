@@ -177,6 +177,13 @@ export function createServer(targetDir: string, distDir: string, port: number) {
         });
       }
 
+      // Client-side routing fallback — any non-API, non-asset path gets index.html
+      if (!path.includes(".")) {
+        return new Response(Bun.file(join(distDir, "index.html")), {
+          headers: { "Content-Type": "text/html" },
+        });
+      }
+
       return new Response("Not Found", { status: 404 });
     },
   });
@@ -376,6 +383,11 @@ async function handleAPI(
 
     if (path === "/api/cluster/status" && req.method === "GET") {
       return json({ running: isClusterJobRunning() });
+    }
+
+    if (path === "/api/cluster/cache-status" && req.method === "GET") {
+      const cached = await Bun.file(join(targetDir, ".reorder-cache", "linkage_tree.bin")).exists();
+      return json({ cached });
     }
 
     if (path === "/api/cluster/recut" && req.method === "POST") {

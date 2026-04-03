@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Toast, RenameMapping, OrganizeMapping, DirResponse, CanUndoResponse, AppMode } from "../types.ts";
+import type { Toast, RenameMapping, OrganizeMapping, DirResponse, CanUndoResponse } from "../types.ts";
 
 let _toastTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -15,7 +15,7 @@ interface UIState {
   targetDir: string;
   previewRenames: RenameMapping[];
   organizeMappings: OrganizeMapping[];
-  appMode: AppMode;
+  headerSubtitle: string;
 
   openLightbox: (index: number) => void;
   closeLightbox: () => void;
@@ -29,10 +29,10 @@ interface UIState {
   setOrganizeMappings: (mappings: OrganizeMapping[]) => void;
   checkUndo: () => Promise<void>;
   fetchTargetDir: () => Promise<void>;
-  setAppMode: (mode: AppMode) => void;
+  setHeaderSubtitle: (s: string) => void;
 }
 
-export const useUIStore = create<UIState>((set) => ({
+export const useUIStore = create<UIState>((set, get) => ({
   lightboxIndex: null,
   saving: false,
   error: null,
@@ -44,7 +44,7 @@ export const useUIStore = create<UIState>((set) => ({
   targetDir: "",
   previewRenames: [],
   organizeMappings: [],
-  appMode: "reorder",
+  headerSubtitle: "",
 
   openLightbox: (index) => set({ lightboxIndex: index }),
   closeLightbox: () => set({ lightboxIndex: null }),
@@ -73,7 +73,7 @@ export const useUIStore = create<UIState>((set) => ({
     }
   },
 
-  setAppMode: (mode) => set({ appMode: mode }),
+  setHeaderSubtitle: (s) => { if (s !== get().headerSubtitle) set({ headerSubtitle: s }); },
 
   fetchTargetDir: async () => {
     try {

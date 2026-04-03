@@ -1,20 +1,16 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useClusterStore } from "../../stores/clusterStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
-import { useImageStore } from "../../stores/imageStore.ts";
 import { useUIStore } from "../../stores/uiStore.ts";
 import { ClusterCard } from "./ClusterCard.tsx";
-import { ClusterToolbar } from "./ClusterToolbar.tsx";
 import { MergeBar } from "./MergeBar.tsx";
 import { Lightbox } from "../Lightbox.tsx";
 import { postJson } from "../../utils/helpers.ts";
-import { consolidateBlock } from "../../utils/reorder.ts";
-import type { ClusterResultData } from "../../types.ts";
 
 export function ClusterView() {
   const clusterData = useClusterStore((s) => s.clusterData);
   const loading = useClusterStore((s) => s.loading);
-  const progress = useClusterStore((s) => s.progress);
   const mergeSelection = useClusterStore((s) => s.mergeSelection);
   const selectedImages = useClusterStore((s) => s.selectedImages);
   const collapsedClusters = useClusterStore((s) => s.collapsedClusters);
@@ -22,7 +18,6 @@ export function ClusterView() {
   const treeStale = useClusterStore((s) => s.treeStale);
   const focusedClusterId = useClusterStore((s) => s.focusedClusterId);
   const fetchClusters = useClusterStore((s) => s.fetchClusters);
-  const recutClusters = useClusterStore((s) => s.recutClusters);
   const toggleMergeSelect = useClusterStore((s) => s.toggleMergeSelect);
   const clearMergeSelection = useClusterStore((s) => s.clearMergeSelection);
   const mergeSelectedClusters = useClusterStore((s) => s.mergeSelectedClusters);
@@ -32,31 +27,60 @@ export function ClusterView() {
   const splitSelected = useClusterStore((s) => s.splitSelected);
   const dismissCluster = useClusterStore((s) => s.dismissCluster);
   const toggleCollapsed = useClusterStore((s) => s.toggleCollapsed);
-  const expandAll = useClusterStore((s) => s.expandAll);
-  const collapseAll = useClusterStore((s) => s.collapseAll);
   const openLightbox = useClusterStore((s) => s.openLightbox);
   const closeLightbox = useClusterStore((s) => s.closeLightbox);
-  const markTreeStale = useClusterStore((s) => s.markTreeStale);
+  const acceptCluster = useClusterStore((s) => s.acceptCluster);
+  const addToGroup = useClusterStore((s) => s.addToGroup);
+  const loadCachedClusters = useClusterStore((s) => s.loadCachedClusters);
   const moveFocus = useClusterStore((s) => s.moveFocus);
 
-  const updateGroups = useGroupStore((s) => s.updateGroups);
-  const images = useImageStore((s) => s.images);
-  const setImages = useImageStore((s) => s.setImages);
+  const groups = useGroupStore((s) => s.groups);
   const showToast = useUIStore((s) => s.showToast);
+  const setHeaderSubtitle = useUIStore((s) => s.setHeaderSubtitle);
 
-  const visibleClusters = useMemo(
-    () => clusterData?.clusters ?? [],
-    [clusterData?.clusters],
-  );
+  const visibleClusters = clusterData?.clusters ?? [];
 
-  const hasError = progress.startsWith("Error:");
+  // Auto-load cached clusters on mount
+  useEffect(() => {
+    loadCachedClusters();
+  }, []);
 
+  // Update header subtitle
+  useEffect(() => {
+    const subtitle = clusterData
+      ? `${visibleClusters.length} clusters — ${groups.length} groups`
+      : loading ? "Loading..." : "Run clustering to start";
+    setHeaderSubtitle(subtitle);
+    return () => setHeaderSubtitle("");
+  }, [visibleClusters.length, groups.length, clusterData, loading]);
+
+  // Virtualization
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: visibleClusters.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: (index) => {
+      const cluster = visibleClusters[index];
+      if (!cluster || collapsedClusters.has(cluster.id)) return 56;
+      const containerWidth = scrollContainerRef.current?.clientWidth ?? 960;
+      const cols = Math.max(1, Math.floor(containerWidth / 168)); // 160px min + 8px gap
+      const thumbRows = Math.ceil(cluster.images.length / cols);
+      return 56 + thumbRows * 176 + 32;
+    },
+    measureElement: (el) => el.getBoundingClientRect().height,
+    overscan: 3,
+  });
+
+  // Focus scrolling via virtualizer
   useEffect(() => {
     if (focusedClusterId) {
-      document.getElementById(`cluster-${focusedClusterId}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      const idx = visibleClusters.findIndex(c => c.id === focusedClusterId);
+      if (idx !== -1) virtualizer.scrollToIndex(idx, { align: "nearest" });
     }
   }, [focusedClusterId]);
 
+  // Keyboard shortcuts
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -85,7 +109,7 @@ export function ClusterView() {
         case "g":
         case "G": {
           const cluster = visibleClusters.find(c => c.id === focusedClusterId);
-          if (cluster && !cluster.confirmedGroup) handleAcceptCluster(cluster);
+          if (cluster && !cluster.confirmedGroup) acceptCluster(cluster);
           break;
         }
         case "d":
@@ -99,7 +123,7 @@ export function ClusterView() {
         case "a":
         case "A": {
           const cluster = visibleClusters.find(c => c.id === focusedClusterId);
-          if (cluster?.confirmedGroup) handleAddToGroup(cluster);
+          if (cluster?.confirmedGroup) addToGroup(cluster);
           break;
         }
       }
@@ -108,73 +132,11 @@ export function ClusterView() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [mergeSelection.size, selectedImages.size, focusedClusterId, visibleClusters]);
 
-  function handleAcceptCluster(cluster: ClusterResultData) {
-    const name = cluster.autoName || `Cluster ${cluster.id}`;
-    updateGroups((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), name, images: cluster.images },
-    ]);
-    const consolidated = consolidateBlock(images, new Set(cluster.images));
-    setImages(consolidated);
-    showToast(`Created group "${name}" with ${cluster.images.length} images`, "success");
-    dismissCluster(cluster.id);
-    markTreeStale();
-  }
-
-  function handleAcceptAll(minSize: number) {
-    if (!clusterData) return;
-    const eligible = clusterData.clusters
-      .filter(c => !c.confirmedGroup && c.images.length >= minSize);
-
-    if (eligible.length === 0) {
-      showToast("No eligible clusters to accept", "warning");
-      return;
-    }
-
-    const totalImages = eligible.reduce((n, c) => n + c.images.length, 0);
-    if (!confirm(`Create ${eligible.length} groups from ${eligible.length} clusters (${totalImages} images total)?`)) {
-      return;
-    }
-
-    const newGroups = eligible.map(c => {
-      dismissCluster(c.id);
-      return { id: crypto.randomUUID(), name: c.autoName || `Cluster ${c.id}`, images: c.images };
-    });
-
-    updateGroups((prev) => [...prev, ...newGroups]);
-    showToast(`Created ${newGroups.length} groups`, "success");
-    markTreeStale();
-  }
-
-  function handleAddToGroup(cluster: ClusterResultData) {
-    if (!cluster.confirmedGroup) return;
-    const groupId = cluster.confirmedGroup.id;
-    const confirmedSet = new Set(cluster.confirmedGroup.images);
-    const suggested = cluster.images.filter(f => !confirmedSet.has(f));
-
-    const selectedInCluster = [...selectedImages]
-      .filter(key => key.startsWith(`${cluster.id}:`))
-      .map(key => key.slice(cluster.id.length + 1))
-      .filter(f => !confirmedSet.has(f));
-    const toAdd = selectedInCluster.length > 0 ? selectedInCluster : suggested;
-
-    updateGroups((prev) =>
-      prev.map(g =>
-        g.id === groupId
-          ? { ...g, images: [...g.images, ...toAdd] }
-          : g
-      )
-    );
-    showToast(`Added ${toAdd.length} images to "${cluster.confirmedGroup.name}"`, "success");
-    clearImageSelection();
-    markTreeStale();
-  }
-
-  async function handleAskClaude(cluster: ClusterResultData) {
+  async function handleAskClaude(clusterId: string, images: string[], autoName: string) {
     try {
       const res = await postJson("/api/cluster/contact-sheet", {
-        filenames: cluster.images,
-        clusterName: cluster.autoName || cluster.id,
+        filenames: images,
+        clusterName: autoName || clusterId,
       });
       const result: { path?: string } = await res.json();
       if (result.path) {
@@ -199,22 +161,10 @@ export function ClusterView() {
     );
   }
 
+  const virtualItems = virtualizer.getVirtualItems();
+
   return (
     <div className="cluster-view">
-      <ClusterToolbar
-        loading={loading}
-        progress={progress}
-        nClusters={clusterData?.nClusters ?? 200}
-        suggestedCounts={clusterData?.suggestedCounts ?? []}
-        totalClusters={visibleClusters.length}
-        hasError={hasError}
-        onRun={fetchClusters}
-        onRecut={recutClusters}
-        onExpandAll={expandAll}
-        onCollapseAll={collapseAll}
-        onAcceptAll={handleAcceptAll}
-      />
-
       {mergeSelection.size > 0 && (
         <MergeBar
           selection={mergeSelection}
@@ -225,30 +175,56 @@ export function ClusterView() {
         />
       )}
 
-      <div className="cluster-list">
-        {visibleClusters.map((cluster) => (
-          <ClusterCard
-            key={cluster.id}
-            cluster={cluster}
-            collapsed={collapsedClusters.has(cluster.id)}
-            mergeSelected={mergeSelection.has(cluster.id)}
-            focused={focusedClusterId === cluster.id}
-            selectedImages={selectedImages}
-            onToggleCollapse={() => toggleCollapsed(cluster.id)}
-            onMergeSelect={(e) => {
-              if (e.metaKey || e.ctrlKey) toggleMergeSelect(cluster.id);
-            }}
-            onImageSelect={(filename) => toggleImageSelect(cluster.id, filename)}
-            onImageRangeSelect={(index) => rangeSelectImages(cluster.id, index)}
-            onAccept={() => handleAcceptCluster(cluster)}
-            onAddToGroup={() => handleAddToGroup(cluster)}
-            onAskClaude={() => handleAskClaude(cluster)}
-            onDismiss={() => dismissCluster(cluster.id)}
-            onSplit={splitSelected}
-            onOpenLightbox={(index) => openLightbox(cluster.id, index)}
-          />
-        ))}
-      </div>
+      {!clusterData && !loading ? (
+        <div className="cluster-empty-state">
+          <div className="cluster-empty-icon">&#x2728;</div>
+          <div className="cluster-empty-title">No clusters yet</div>
+          <div className="cluster-empty-desc">Click "Run Clustering" to analyze images and group them by visual similarity</div>
+        </div>
+      ) : (
+        <div ref={scrollContainerRef} className="cluster-list">
+          <div style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}>
+            {virtualItems.map((virtualItem) => {
+              const cluster = visibleClusters[virtualItem.index];
+              if (!cluster) return null;
+              return (
+                <div
+                  key={cluster.id}
+                  data-index={virtualItem.index}
+                  ref={virtualizer.measureElement}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualItem.start}px)`,
+                  }}
+                >
+                  <ClusterCard
+                    cluster={cluster}
+                    collapsed={collapsedClusters.has(cluster.id)}
+                    mergeSelected={mergeSelection.has(cluster.id)}
+                    focused={focusedClusterId === cluster.id}
+                    selectedImages={selectedImages}
+                    onToggleCollapse={() => toggleCollapsed(cluster.id)}
+                    onMergeSelect={(e) => {
+                      if (e.metaKey || e.ctrlKey) toggleMergeSelect(cluster.id);
+                    }}
+                    onImageSelect={(filename) => toggleImageSelect(cluster.id, filename)}
+                    onImageRangeSelect={(index) => rangeSelectImages(cluster.id, index)}
+                    onAccept={() => acceptCluster(cluster)}
+                    onAddToGroup={() => addToGroup(cluster)}
+                    onAskClaude={() => handleAskClaude(cluster.id, cluster.images, cluster.autoName)}
+                    onDismiss={() => dismissCluster(cluster.id)}
+                    onSplit={splitSelected}
+                    onOpenLightbox={(index) => openLightbox(cluster.id, index)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {selectedImages.size > 0 && (
         <div className="cluster-selection-bar">

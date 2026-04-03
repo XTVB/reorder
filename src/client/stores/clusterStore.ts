@@ -1,6 +1,10 @@
 import { create } from "zustand";
 import type { ClusterData, ClusterResultData } from "../types.ts";
 import { postJson } from "../utils/helpers.ts";
+import { consolidateBlock } from "../utils/reorder.ts";
+import { useGroupStore } from "./groupStore.ts";
+import { useImageStore } from "./imageStore.ts";
+import { useUIStore } from "./uiStore.ts";
 
 interface ClusterState {
   clusterData: ClusterData | null;
@@ -36,6 +40,10 @@ interface ClusterState {
 
   mergeSelectedClusters: () => void;
   splitSelected: () => void;
+  acceptCluster: (cluster: ClusterResultData) => void;
+  acceptAllClusters: (minSize: number) => void;
+  addToGroup: (cluster: ClusterResultData) => void;
+  loadCachedClusters: () => Promise<void>;
 }
 
 function applyClusterResult(data: ClusterData): Partial<ClusterState> {
@@ -306,5 +314,92 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
       selectedImages: new Set(),
       lastClickedImage: null,
     });
+  },
+
+  acceptCluster: (cluster) => {
+    const name = cluster.autoName || `Cluster ${cluster.id}`;
+    const { updateGroups } = useGroupStore.getState();
+    const { images, setImages } = useImageStore.getState();
+    const { showToast } = useUIStore.getState();
+
+    updateGroups((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), name, images: cluster.images },
+    ]);
+    setImages(consolidateBlock(images, new Set(cluster.images)));
+    showToast(`Created group "${name}" with ${cluster.images.length} images`, "success");
+    get().dismissCluster(cluster.id);
+    set({ treeStale: true });
+  },
+
+  acceptAllClusters: (minSize) => {
+    const { clusterData } = get();
+    if (!clusterData) return;
+    const { showToast } = useUIStore.getState();
+
+    const eligible = clusterData.clusters
+      .filter(c => !c.confirmedGroup && c.images.length >= minSize);
+
+    if (eligible.length === 0) {
+      showToast("No eligible clusters to accept", "warning");
+      return;
+    }
+
+    const totalImages = eligible.reduce((n, c) => n + c.images.length, 0);
+    if (!confirm(`Create ${eligible.length} groups from ${totalImages} images?`)) {
+      return;
+    }
+
+    const dismissIds = new Set(eligible.map(c => c.id));
+    const newGroups = eligible.map(c => ({
+      id: crypto.randomUUID(), name: c.autoName || `Cluster ${c.id}`, images: c.images,
+    }));
+
+    const { updateGroups } = useGroupStore.getState();
+    const { images, setImages } = useImageStore.getState();
+    updateGroups((prev) => [...prev, ...newGroups]);
+    const allAccepted = new Set(eligible.flatMap(c => c.images));
+    setImages(consolidateBlock(images, allAccepted));
+    showToast(`Created ${newGroups.length} groups`, "success");
+    set({
+      clusterData: { ...clusterData, clusters: clusterData.clusters.filter(c => !dismissIds.has(c.id)) },
+      treeStale: true,
+    });
+  },
+
+  addToGroup: (cluster) => {
+    if (!cluster.confirmedGroup) return;
+    const groupId = cluster.confirmedGroup.id;
+    const confirmedSet = new Set(cluster.confirmedGroup.images);
+    const suggested = cluster.images.filter(f => !confirmedSet.has(f));
+
+    const { selectedImages } = get();
+    const selectedInCluster = [...selectedImages]
+      .filter(key => key.startsWith(`${cluster.id}:`))
+      .map(key => key.slice(cluster.id.length + 1))
+      .filter(f => !confirmedSet.has(f));
+    const toAdd = selectedInCluster.length > 0 ? selectedInCluster : suggested;
+
+    const { updateGroups } = useGroupStore.getState();
+    const { showToast } = useUIStore.getState();
+    updateGroups((prev) =>
+      prev.map(g =>
+        g.id === groupId
+          ? { ...g, images: [...g.images, ...toAdd] }
+          : g
+      )
+    );
+    showToast(`Added ${toAdd.length} images to "${cluster.confirmedGroup.name}"`, "success");
+    set({ selectedImages: new Set(), lastClickedImage: null, treeStale: true });
+  },
+
+  loadCachedClusters: async () => {
+    try {
+      const res = await fetch("/api/cluster/cache-status");
+      const { cached } = await res.json();
+      if (cached && !get().clusterData && !get().loading) {
+        await get().recutClusters(200);
+      }
+    } catch {}
   },
 }));

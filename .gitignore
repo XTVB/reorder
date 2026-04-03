@@ -35,3 +35,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Editor config
 .cursor
+
+# Rust build artifacts
+rust/cluster-tool/target
+
+# Python cache
+__pycache__

@@ -3,64 +3,105 @@ Default to using Bun instead of Node.js.
 - `bun run start.ts <directory>` to launch
 - `bun build src/client/index.tsx --outdir dist --minify` to test client compilation
 - `bun install` for dependencies, `bun test` for tests
+- Rust cluster tool: `cd rust/cluster-tool && cargo build --release`
 
 ## What This App Does
 
-A local macOS tool for reordering images in a directory via drag-and-drop. Opens a browser UI, lets the user rearrange image cards, then renames files with sequential numbering to persist the new order. Also supports grouping images, organizing groups into subfolders, and undo.
+A local macOS tool for reordering images in a directory via drag-and-drop. Opens a browser UI with two modes:
+
+1. **Reorder mode**: drag-and-drop image cards, group them, rename files with sequential numbering, organize into subfolders
+2. **Cluster mode**: CLIP-based visual clustering to identify photoshoot sets, review/accept/split/merge clusters, convert to groups
+
+Designed for iterative workflow: cluster → accept groups → reorder/rename → re-cluster to find stragglers → repeat.
 
 ## Architecture
 
-**Server** (`start.ts` → `src/server.ts`):
+### Server (`start.ts` → `src/server.ts`)
 - `Bun.serve()` with manual routing in `handleAPI()`. No framework.
-- `src/rename.ts` — all filesystem operations (list, rename, undo, organize, crash recovery)
-- `src/thumbnails.ts` — Sharp-based WebP thumbnail generation with content-addressable cache
-- Background thumbnail pre-generation on startup (8 concurrent workers)
-- HTTP caching: `no-cache` + ETag (inode+size) on image and thumbnail endpoints
+- `src/rename.ts` — filesystem operations (list, rename, undo, organize, crash recovery)
+- `src/thumbnails.ts` — Sharp WebP thumbnails with content-addressable cache (`inode-size.webp`)
+- `src/cluster.ts` — clustering orchestration: spawns Python/Rust, parses linkage tree, TF-IDF auto-naming, contact sheets
+- `src/tags-db.ts` — SQLite tag database (legacy, replaced by cluster mode)
 
-**Client** (`src/client/`):
-- React 19 SPA, built with `Bun.build()` (no Vite, no React compiler)
-- State: Zustand stores in `stores/` (imageStore, selectionStore, dndStore, groupStore, uiStore)
-- Hooks in `hooks/` — extracted from App.tsx (useGridLayout, useKeyboardShortcuts, useGroupOperations, useDragHandlers)
-- Components in `components/` (SortableCard, SortableGroupCard, GroupPopover, Lightbox, SearchBar, Toolbar, modals)
-- Utilities in `utils/` (helpers, gridItems, reorder)
-- `App.tsx` is a thin shell: store subscriptions, virtualization, DndContext, render loop
-- Drag-and-drop: `@dnd-kit/core` + `@dnd-kit/sortable` with `rectSortingStrategy`
-- Virtualization: `@tanstack/react-virtual` row virtualizer for 13k+ images
-- Grid layout: CSS `auto-fill` drives column count; JS reads it via `getComputedStyle` on a hidden measuring row (callback ref pattern)
-- In-app search: Cmd+F intercepted, floating search bar with match highlighting
+### Client (`src/client/`)
+- React 19 SPA, built with `Bun.build()` (no Vite)
+- State: Zustand stores in `stores/` (imageStore, selectionStore, dndStore, groupStore, uiStore, clusterStore)
+- Two modes via `AppMode = "reorder" | "cluster"` — AppShell in `index.tsx` switches between `<App />` and `<ClusterView />`
+- Drag-and-drop: `@dnd-kit/core` + `@dnd-kit/sortable`
+- Virtualization: `@tanstack/react-virtual` for 13k+ images in reorder mode
 
-**CSS** (`src/client/styles.css`):
-- Plain CSS with custom properties (dark theme). No framework.
-- Grid rows use `repeat(auto-fill, minmax(160px, 1fr))` — CSS owns the column layout
-- `.grid-measure-row` is the hidden element JS reads to determine column count and row height
+### Clustering Pipeline (three stages)
+
+```
+Stage 1: Python (scripts/extract_features.py)
+  → CLIP ViT-B/32 + color histogram extraction on MPS GPU
+  → Cached by content hash (blake2b of first 16KB + filesize) — survives file renames
+  → Output: .reorder-cache/clip_embeddings.npz + .filenames.json
+  → Requires: /tmp/imgcluster-env/bin/python3 (venv with torch, open-clip-torch, pillow, numpy)
+
+Stage 2: Rust (rust/cluster-tool/)
+  → Ward's linkage (NNC algorithm) matching scipy exactly
+  → Pre-seeds confirmed reorder groups as real clusters (true centroid/size/variance)
+  → Uses cosine distances + scipy's _ward update formula (square-sqrt)
+  → Parallel distance computation via rayon (~1.2s for 7000 images)
+  → Output: linkage tree binary + cluster assignments JSON
+
+Stage 3: Bun (src/cluster.ts)
+  → Re-cuts cached linkage tree at any N (instant, no subprocess)
+  → TF-IDF auto-naming: CLIP embeddings × 334-term vocabulary, z-score ranking
+  → Contact sheet generation via Sharp (4×3 grid, 400×400 thumbs)
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/cluster.ts` | Server-side clustering orchestration, tree parsing, auto-naming, contact sheets |
+| `src/client/stores/clusterStore.ts` | Client state for cluster mode (data, selection, lightbox, stale detection) |
+| `src/client/components/ClusterView/` | ClusterView, ClusterCard, ClusterToolbar, MergeBar |
+| `scripts/extract_features.py` | Python CLIP+color extraction with content-hash cache |
+| `scripts/precompute_text_embeddings.py` | One-time CLIP text embedding generation for auto-naming vocabulary |
+| `rust/cluster-tool/src/main.rs` | Rust Ward's linkage with pre-seeded groups |
+
+### Clustering API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/cluster` | Full pipeline (SSE progress stream). Body: `{nClusters?}` |
+| GET | `/api/cluster/status` | `{running: boolean}` — prevents double-triggering |
+| POST | `/api/cluster/recut` | Re-cut cached tree. Body: `{nClusters}`. Instant. |
+| POST | `/api/cluster/contact-sheet` | Generate thumbnail grid. Body: `{filenames, clusterName}` |
+
+### Disk Files (in target image directory)
+
+| File | Purpose |
+|------|---------|
+| `.reorder-groups.json` | Persisted groups (shared between reorder and cluster modes) |
+| `.reorder-cache/clip_embeddings.npz` | CLIP+color feature arrays (filename-ordered, for Rust) |
+| `.reorder-cache/clip_hash_cache.npz` | Feature cache keyed by content hash (survives renames) |
+| `.reorder-cache/clip_embeddings.filenames.json` | Filename→row mapping for the npz |
+| `.reorder-cache/text_embeddings.json` | Precomputed CLIP text embeddings (334 terms) |
+| `.reorder-cache/linkage_tree.bin` | Binary linkage tree (header: n_images, n_pre_merges, n_steps; then merge step array) |
+| `.reorder-cache/contact_sheets/` | Generated contact sheet JPEGs for "Ask Claude" |
 
 ## Key Patterns
 
-- **Thumbnail cache**: content-addressable using `inode-size.webp` keys — renames don't invalidate cache, no remapping needed. Orphans cleaned after pre-generation. Cache cleared on shutdown for directories ≤250 images.
-- **Rename safety**: two-phase rename with write-ahead manifest (`.reorder-pending.json`). `withRenameLock` serializes all filesystem-mutating operations. Crash recovery on startup completes interrupted renames (including partial step-1). `computeRenames` rejects duplicate filenames in the order array.
-- **Group atomicity**: Server remaps groups in the same `withRenameLock` call as file renames (save, undo, and crash recovery). Client reloads groups from server after save/undo rather than remapping locally. `flattenOrder` deduplicates to prevent expanded-group items appearing twice in the order array.
-- **Memoization**: event handlers in App.tsx use ref+useCallback pattern for stable references (see `handleGridItemClick`, `handleDragStart`, `handleDragEnd`). Group operations use `getState()` for store access since they're always called at event time.
-- **Browser cache busting**: `imageVersion` counter in imageStore bumps on `fetchImages()` (after save/undo). URL helpers append `?v=N` to bust the browser's in-memory `<img>` cache. HTTP cache correctness is handled by ETag + `no-cache`.
-- `postJson(url, body)` in `utils/helpers.ts` for all JSON POST fetches
-- `wasJustDragged()` suppresses click events that fire at the end of drag gestures
-- `updateGroups(fn)` in groupStore auto-prunes empty groups and skips persist on no-op
-- Group persistence is debounced (300ms) to the server via `POST /api/groups`
+- **Content-hash cache**: `blake2b(first 16KB + filesize)` keys embeddings, so renaming files doesn't invalidate the ~5min extraction
+- **Pre-seeded groups**: Rust linkage starts with confirmed groups as properly-initialized clusters (real centroid/size/variance), not zero-distance hacks
+- **Sorted merge steps**: NNC produces merges in execution order (not distance order); they're sorted before tree-cutting to match scipy's behavior
+- **SSE streaming**: `/api/cluster` returns `text/event-stream` with `progress`, `result`, and `error` events
+- **Stale tree detection**: Client tracks `treeStale` flag after group changes; shows banner prompting re-run
+- **TF-IDF caching**: globalAvg/globalStd arrays cached in `_tfidfStatsCache`, invalidated only when embeddings change
+- **Rename safety**: two-phase rename with write-ahead manifest. `withRenameLock` serializes filesystem operations
+- **Group atomicity**: Server remaps groups in same lock as renames. Client reloads after save/undo
+- **Browser cache busting**: `imageVersion` counter + `?v=N` URL parameter
 
-## File Structure
+## Python Environment
 
+The clustering Python scripts require a venv at `/tmp/imgcluster-env/` with:
 ```
-start.ts                        Entry point (CLI, build, server start)
-src/
-  server.ts                     HTTP server + API routes
-  rename.ts                     Filesystem operations + crash recovery
-  thumbnails.ts                 Sharp thumbnail generation + content-addressable cache
-  client/
-    index.html / index.tsx      HTML shell + React mount
-    App.tsx                     Thin shell (store wiring, virtualization, render)
-    types.ts                    Shared interfaces
-    styles.css                  All styles
-    stores/                     Zustand stores (5 files)
-    hooks/                      Extracted hooks (4 files)
-    components/                 UI components (12 files)
-    utils/                      Helpers, grid item computation, reorder logic
+torch torchvision open-clip-torch pillow numpy
 ```
+Set `CLUSTER_PYTHON` env var to override the Python path (default: `/tmp/imgcluster-env/bin/python3`).
+
+Create with: `uv venv /tmp/imgcluster-env && source /tmp/imgcluster-env/bin/activate && uv pip install torch torchvision open-clip-torch pillow numpy`

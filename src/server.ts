@@ -17,8 +17,9 @@ import {
   type FolderSaveRequest,
 } from "./rename.ts";
 import { getThumbnail } from "./thumbnails.ts";
-import { ingestTags, getAllTags, getClothingStructured, getDbStatus, remapTagsDb } from "./tags-db.ts";
+
 import { initLog, log, logError, logData } from "./log.ts";
+import { runFullCluster, runRecut, generateContactSheet, invalidateClusterCache, isClusterJobRunning, setClusterJobRunning } from "./cluster.ts";
 
 const GROUPS_FILE = ".reorder-groups.json";
 
@@ -52,7 +53,7 @@ async function remapGroups(targetDir: string, renames: RenameMapping[]): Promise
 }
 
 /**
- * Remap groups and tags DB after a rename operation, collecting non-fatal warnings.
+ * Remap groups after a rename operation, collecting non-fatal warnings.
  * Called identically from /api/save and /api/undo.
  */
 async function remapAfterRename(
@@ -73,14 +74,6 @@ async function remapAfterRename(
     warnings.push(`Group remapping failed: ${msg}`);
   }
 
-  try {
-    remapTagsDb(targetDir, renames);
-    log(label, "Remapped tags DB");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logError(label, "remapTagsDb failed", err);
-    warnings.push(`Tags DB remapping failed: ${msg}`);
-  }
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -151,8 +144,7 @@ export function createServer(targetDir: string, distDir: string, port: number) {
     log("recovery", result.message);
     if (result.status === "completed" && result.mappings && result.completed > 0) {
       await remapGroups(targetDir, result.mappings);
-      remapTagsDb(targetDir, result.mappings);
-      log("recovery", "Remapped groups and tags DB");
+      log("recovery", "Remapped groups");
     }
   }).catch((err) => {
     logError("recovery", "Failed", err);
@@ -315,29 +307,6 @@ async function handleAPI(
       });
     }
 
-    // Tag database routes
-    if (path === "/api/tags/status" && req.method === "GET") {
-      return json(getDbStatus(targetDir));
-    }
-
-    if (path === "/api/tags/ingest" && req.method === "POST") {
-      const body = (await req.json()) as { data: unknown };
-      const result = await ingestTags(targetDir, body.data);
-      return json(result);
-    }
-
-    if (path === "/api/tags/all" && req.method === "GET") {
-      const result = getAllTags(targetDir);
-      if (!result) return json({ error: "No tags database found. Ingest a tags file first." }, 404);
-      return json(result);
-    }
-
-    if (path === "/api/tags/clothing-structured" && req.method === "GET") {
-      const result = getClothingStructured(targetDir);
-      if (!result) return json({ error: "No tags database found" }, 404);
-      return json(result);
-    }
-
     // ---- Folder mode routes ----
 
     if (path === "/api/folders" && req.method === "GET") {
@@ -358,6 +327,69 @@ async function handleAPI(
         log("folders-save", `Complete in ${elapsed}ms — ${result.moves.length} moves, ${result.foldersCreated.length} created, ${result.foldersRemoved.length} removed`);
         return json({ success: true, ...result });
       });
+    }
+
+    // ---- Cluster routes ----
+
+    if (path === "/api/cluster" && req.method === "POST") {
+      const body = (await req.json()) as { nClusters?: number };
+      const nClusters = body.nClusters ?? 200;
+
+      if (isClusterJobRunning()) {
+        return json({ error: "Clustering already in progress" }, 409);
+      }
+      setClusterJobRunning(true);
+      log("cluster", `Full cluster request (SSE): n=${nClusters}`);
+
+      const stream = new ReadableStream({
+        async start(controller) {
+          const enc = new TextEncoder();
+          const send = (event: string, data: string) => {
+            controller.enqueue(enc.encode(`event: ${event}\ndata: ${data}\n\n`));
+          };
+          try {
+            const result = await runFullCluster(targetDir, nClusters, (line) => {
+              log("cluster", line);
+              send("progress", JSON.stringify({ message: line }));
+            });
+            invalidateClusterCache();
+            log("cluster", `Returned ${result.clusters.length} clusters`);
+            send("result", JSON.stringify(result));
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            send("error", JSON.stringify({ error: msg }));
+          } finally {
+            setClusterJobRunning(false);
+            controller.close();
+          }
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+        },
+      });
+    }
+
+    if (path === "/api/cluster/status" && req.method === "GET") {
+      return json({ running: isClusterJobRunning() });
+    }
+
+    if (path === "/api/cluster/recut" && req.method === "POST") {
+      const body = (await req.json()) as { nClusters: number };
+      log("cluster", `Re-cut request: n=${body.nClusters}`);
+      const result = await runRecut(targetDir, body.nClusters);
+      log("cluster", `Re-cut returned ${result.clusters.length} clusters`);
+      return json(result);
+    }
+
+    if (path === "/api/cluster/contact-sheet" && req.method === "POST") {
+      const body = (await req.json()) as { filenames: string[]; clusterName: string };
+      const outPath = await generateContactSheet(targetDir, body.filenames, body.clusterName);
+      return json({ path: outPath });
     }
 
     return json({ error: "Not found" }, 404);

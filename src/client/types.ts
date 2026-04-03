@@ -58,27 +58,19 @@ export type GridItem =
   | { type: "folder"; folderName: string }
   | { type: "folder-image"; folderName: string; filename: string };
 
-// Tag system types
-export type FilterMode = "AND" | "OR" | "NOT";
+export type AppMode = "reorder" | "cluster";
 
-export interface ActiveFilter {
-  category: string;
-  value: string;
-  mode: FilterMode;
+// Cluster types
+export interface ClusterResultData {
+  id: string;
+  autoName: string;
+  autoTags: { term: string; z: number }[];
+  images: string[];
+  confirmedGroup: { id: string; name: string; images: string[] } | null;
 }
 
-export interface ClothingItemData {
-  piece: string;
-  colors: string[];
-  styles: string[];
+export interface ClusterData {
+  clusters: ClusterResultData[];
+  suggestedCounts: number[];
+  nClusters: number;
 }
-
-export interface ImageTagData {
-  filename: string;
-  tags: Record<string, string[]>;
-  clothing: ClothingItemData[];
-}
-
-export type ClothingOption = ClothingItemData;
-
-export type AppMode = "reorder" | "tags" | "merge";

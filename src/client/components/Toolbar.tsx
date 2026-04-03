@@ -1,25 +1,19 @@
-import React, { useRef, useState } from "react";
+import React from "react";
 import { useImageStore } from "../stores/imageStore.ts";
 import { useSelectionStore } from "../stores/selectionStore.ts";
 import { useGroupStore, flushGroupPersist } from "../stores/groupStore.ts";
 import { useFolderStore } from "../stores/folderStore.ts";
 import { useUIStore } from "../stores/uiStore.ts";
-import { useTagStore } from "../stores/tagStore.ts";
 import { getErrorMessage, postJson } from "../utils/helpers.ts";
 import type { AppMode } from "../types.ts";
 import { GroupPicker } from "./GroupPicker.tsx";
 
 const MODES: { key: AppMode; label: string }[] = [
   { key: "reorder", label: "Reorder" },
-  { key: "tags", label: "Tags" },
-  { key: "merge", label: "Merge" },
+  { key: "cluster", label: "Cluster" },
 ];
 
 export function Toolbar({ onCreateGroup, onAddToGroup, onFolderSave }: { onCreateGroup?: () => void; onAddToGroup?: (groupId: string) => void; onFolderSave?: () => void }) {
-  const reimportRef = useRef<HTMLInputElement>(null);
-  const [reimporting, setReimporting] = useState(false);
-  const hasDb = useTagStore((s) => s.hasDb);
-  const ingestFile = useTagStore((s) => s.ingestFile);
   const images = useImageStore((s) => s.images);
   const hasChanges = useImageStore((s) => s.hasChanges);
   const fetchImages = useImageStore((s) => s.fetchImages);
@@ -58,23 +52,6 @@ export function Toolbar({ onCreateGroup, onAddToGroup, onFolderSave }: { onCreat
       await Promise.all([fetchFolders(), checkUndo()]);
     } else {
       await Promise.all([fetchImages(), checkUndo(), fetchGroups()]);
-    }
-  }
-
-  async function handleReimport(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setReimporting(true);
-    try {
-      const text = await file.text();
-      const data = JSON.parse(text);
-      const result = await ingestFile(data);
-      showToast(`Reimported ${result.ingested} images (${result.skipped} skipped)`, "success");
-    } catch (err) {
-      showToast(getErrorMessage(err, "Reimport failed"), "error");
-    } finally {
-      setReimporting(false);
-      if (reimportRef.current) reimportRef.current.value = "";
     }
   }
 
@@ -163,7 +140,7 @@ export function Toolbar({ onCreateGroup, onAddToGroup, onFolderSave }: { onCreat
       </div>
       <div className="header-info">
         <div className="header-title">
-          {appMode === "reorder" ? "Reorder Images" : appMode === "tags" ? "Tag Explorer" : "Merge Groups"}
+          {appMode === "reorder" ? "Reorder Images" : "Cluster"}
         </div>
         <div className="header-subtitle">
           {appMode === "reorder" ? (
@@ -174,32 +151,11 @@ export function Toolbar({ onCreateGroup, onAddToGroup, onFolderSave }: { onCreat
               : selectedIds.size > 0
               ? `${selectedIds.size} selected — drag to move`
               : `${images.length} image${images.length !== 1 ? "s" : ""} — drag to reorder`
-          ) : appMode === "tags" ? (
-            selectedIds.size > 0
-              ? `${selectedIds.size} selected`
-              : `${images.length} images`
           ) : (
             `${groups.length} groups`
           )}
         </div>
       </div>
-      {appMode === "tags" && (
-        <div className="header-actions">
-          {selectedIds.size > 0 && (
-            <button className="btn btn-secondary" onClick={onCreateGroup}>
-              Group ({selectedIds.size})
-            </button>
-          )}
-          {hasDb && (
-            <>
-              <input ref={reimportRef} type="file" accept=".json" style={{ display: "none" }} onChange={handleReimport} />
-              <button className="btn btn-secondary" onClick={() => reimportRef.current?.click()} disabled={reimporting}>
-                {reimporting ? "Reimporting..." : "Reimport Tags"}
-              </button>
-            </>
-          )}
-        </div>
-      )}
       {appMode === "reorder" && (
         <div className="header-actions">
           {selectedIds.size > 0 && (

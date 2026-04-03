@@ -53,7 +53,6 @@ import { PreviewModal } from "./components/PreviewModal.tsx";
 import { OrganizeModal } from "./components/OrganizeModal.tsx";
 import { PathsModal } from "./components/PathsModal.tsx";
 import { SearchBar, SearchContext, useSearchState } from "./components/SearchBar.tsx";
-import { Toast } from "./components/Toast.tsx";
 
 export function App() {
   // ---- Store subscriptions ----
@@ -621,8 +620,6 @@ export function App() {
           onConfirm={handleConfirmOrganize}
         />
       )}
-
-      <Toast />
     </SearchContext.Provider>
   );
 }

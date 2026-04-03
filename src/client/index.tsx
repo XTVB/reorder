@@ -1,13 +1,13 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
-import { TagExplorer } from "./components/TagExplorer/TagExplorer.tsx";
-import { MergeView } from "./components/MergeView/MergeView.tsx";
+import { ClusterView } from "./components/ClusterView/ClusterView.tsx";
+import { Toast } from "./components/Toast.tsx";
 import { useUIStore } from "./stores/uiStore.ts";
 import { useImageStore } from "./stores/imageStore.ts";
 import { useGroupStore } from "./stores/groupStore.ts";
 import { useSelectionStore } from "./stores/selectionStore.ts";
 import { useDndStore } from "./stores/dndStore.ts";
-import { useTagStore } from "./stores/tagStore.ts";
+import { useClusterStore } from "./stores/clusterStore.ts";
 
 // Expose all stores on window for console access / debugging
 (window as any).__stores = {
@@ -16,15 +16,18 @@ import { useTagStore } from "./stores/tagStore.ts";
   selection: useSelectionStore,
   dnd: useDndStore,
   ui: useUIStore,
-  tags: useTagStore,
+  cluster: useClusterStore,
 };
 
 function AppShell() {
   const appMode = useUIStore((s) => s.appMode);
 
-  if (appMode === "tags") return <TagExplorer />;
-  if (appMode === "merge") return <MergeView />;
-  return <App />;
+  return (
+    <>
+      {appMode === "cluster" ? <ClusterView /> : <App />}
+      <Toast />
+    </>
+  );
 }
 
 createRoot(document.getElementById("root")!).render(<AppShell />);

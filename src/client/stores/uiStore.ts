@@ -1,5 +1,11 @@
 import { create } from "zustand";
-import type { Toast, RenameMapping, OrganizeMapping, DirResponse, CanUndoResponse } from "../types.ts";
+import type {
+  CanUndoResponse,
+  DirResponse,
+  OrganizeMapping,
+  RenameMapping,
+  Toast,
+} from "../types.ts";
 
 let _toastTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -73,7 +79,9 @@ export const useUIStore = create<UIState>((set, get) => ({
     }
   },
 
-  setHeaderSubtitle: (s) => { if (s !== get().headerSubtitle) set({ headerSubtitle: s }); },
+  setHeaderSubtitle: (s) => {
+    if (s !== get().headerSubtitle) set({ headerSubtitle: s });
+  },
 
   fetchTargetDir: async () => {
     try {

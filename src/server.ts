@@ -1,25 +1,40 @@
-import { join, extname } from "node:path";
 import { stat } from "node:fs/promises";
+import { extname, join } from "node:path";
 import {
-  listImages,
-  computeRenames,
-  executeRenames,
+  broadcastProgress,
+  ensureTextEmbeddings,
+  extractFeatures,
+  generateContactSheet,
+  getLastProgress,
+  invalidateClusterCache,
+  isClusterJobRunning,
+  runFullCluster,
+  runLinkageOnly,
+  runRecut,
+  runRecutAdaptive,
+  runRecutByThreshold,
+  setClusterJobRunning,
+  subscribeProgress,
+  type WeightConfig,
+} from "./cluster.ts";
+import { initLog, log, logData, logError } from "./log.ts";
+import {
   canUndo,
-  undoRenames,
   computeOrganize,
-  executeOrganize,
-  recoverPendingRename,
-  withRenameLock,
-  listFolderData,
+  computeRenames,
   executeFolderSave,
+  executeOrganize,
+  executeRenames,
+  type FolderSaveRequest,
+  listFolderData,
+  listImages,
   type OrganizeGroup,
   type RenameMapping,
-  type FolderSaveRequest,
+  recoverPendingRename,
+  undoRenames,
+  withRenameLock,
 } from "./rename.ts";
 import { getThumbnail } from "./thumbnails.ts";
-
-import { initLog, log, logError, logData } from "./log.ts";
-import { runFullCluster, runRecut, generateContactSheet, invalidateClusterCache, isClusterJobRunning, setClusterJobRunning } from "./cluster.ts";
 
 const GROUPS_FILE = ".reorder-groups.json";
 
@@ -35,10 +50,21 @@ async function readGroupsFile(targetDir: string): Promise<unknown[]> {
 }
 
 async function writeGroupsFile(targetDir: string, groups: unknown[]) {
-  await Bun.write(join(targetDir, GROUPS_FILE), JSON.stringify(groups, null, 2));
+  const mainPath = join(targetDir, GROUPS_FILE);
+  const backupPath = join(targetDir, ".reorder-groups.bak.json");
+  try {
+    const existing = Bun.file(mainPath);
+    if (await existing.exists()) {
+      await Bun.write(backupPath, existing);
+    }
+  } catch {}
+  await Bun.write(mainPath, JSON.stringify(groups, null, 2));
 }
 
-async function remapGroups(targetDir: string, renames: RenameMapping[]): Promise<{ before: unknown[]; after: unknown[] }> {
+async function remapGroups(
+  targetDir: string,
+  renames: RenameMapping[],
+): Promise<{ before: unknown[]; after: unknown[] }> {
   const groups = await readGroupsFile(targetDir);
   if (groups.length === 0) return { before: [], after: [] };
   const renameMap = new Map(renames.map((r) => [r.from, r.to]));
@@ -65,15 +91,16 @@ async function remapAfterRename(
   try {
     const { after } = await remapGroups(targetDir, renames);
     log(label, `Remapped groups: ${after.length} groups`);
-    logData(label, `Groups (post-${label})`,
-      after.map((g: any) => `  ${g.name}: [${g.images?.join(", ")}]`).join("\n")
+    logData(
+      label,
+      `Groups (post-${label})`,
+      after.map((g: any) => `  ${g.name}: [${g.images?.join(", ")}]`).join("\n"),
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logError(label, "remapGroups failed", err);
     warnings.push(`Group remapping failed: ${msg}`);
   }
-
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -111,7 +138,7 @@ function makeETag(ino: number, size: number): string {
 async function serveFileWithCache(
   req: Request,
   filePath: string,
-  cacheControl: string
+  cacheControl: string,
 ): Promise<Response> {
   let s;
   try {
@@ -127,7 +154,7 @@ async function serveFileWithCache(
     headers: {
       "Content-Type": mimeType(filePath),
       "Cache-Control": cacheControl,
-      "ETag": etag,
+      ETag: etag,
     },
   });
 }
@@ -152,6 +179,7 @@ export function createServer(targetDir: string, distDir: string, port: number) {
 
   return Bun.serve({
     port,
+    idleTimeout: 255, // max allowed — SSE streams for extraction can have long gaps between messages
     async fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname;
@@ -189,11 +217,7 @@ export function createServer(targetDir: string, distDir: string, port: number) {
   });
 }
 
-async function handleAPI(
-  req: Request,
-  path: string,
-  targetDir: string
-): Promise<Response> {
+async function handleAPI(req: Request, path: string, targetDir: string): Promise<Response> {
   try {
     if (path === "/api/dir" && req.method === "GET") {
       return json({ dir: targetDir });
@@ -233,9 +257,9 @@ async function handleAPI(
         const warnings: string[] = [];
 
         if (body.groups) {
-          const groupSummary = (body.groups as any[]).map((g: any) =>
-            `  ${g.name}: [${g.images?.join(", ")}]`
-          ).join("\n");
+          const groupSummary = (body.groups as any[])
+            .map((g: any) => `  ${g.name}: [${g.images?.join(", ")}]`)
+            .join("\n");
           log("save", `Writing ${(body.groups as unknown[]).length} groups to disk before rename`);
           logData("save", "Groups (pre-rename)", groupSummary);
           await writeGroupsFile(targetDir, body.groups);
@@ -243,16 +267,26 @@ async function handleAPI(
 
         log("save", "Executing filesystem renames...");
         const renames = await executeRenames(targetDir, body.order);
-        const effective = renames.filter(r => r.from !== r.to);
-        log("save", `Filesystem renames complete: ${effective.length} changed, ${renames.length - effective.length} unchanged`);
-        logData("save", "All rename mappings",
-          renames.map(r => r.from === r.to ? `  ${r.from} (unchanged)` : `  ${r.from} → ${r.to}`).join("\n")
+        const effective = renames.filter((r) => r.from !== r.to);
+        log(
+          "save",
+          `Filesystem renames complete: ${effective.length} changed, ${renames.length - effective.length} unchanged`,
+        );
+        logData(
+          "save",
+          "All rename mappings",
+          renames
+            .map((r) => (r.from === r.to ? `  ${r.from} (unchanged)` : `  ${r.from} → ${r.to}`))
+            .join("\n"),
         );
 
         await remapAfterRename(targetDir, renames, "save", warnings);
 
         const elapsed = Date.now() - t0;
-        log("save", `Complete in ${elapsed}ms — ${effective.length} files renamed${warnings.length > 0 ? `, ${warnings.length} warning(s)` : ""}`);
+        log(
+          "save",
+          `Complete in ${elapsed}ms — ${effective.length} files renamed${warnings.length > 0 ? `, ${warnings.length} warning(s)` : ""}`,
+        );
         return json({ success: true, renames, warnings });
       });
     }
@@ -264,16 +298,23 @@ async function handleAPI(
         const warnings: string[] = [];
 
         const renames = await undoRenames(targetDir);
-        const effective = renames.filter(r => r.from !== r.to);
+        const effective = renames.filter((r) => r.from !== r.to);
         log("undo", `Filesystem undo complete: ${effective.length} files reversed`);
-        logData("undo", "All undo mappings",
-          renames.map(r => r.from === r.to ? `  ${r.from} (unchanged)` : `  ${r.from} → ${r.to}`).join("\n")
+        logData(
+          "undo",
+          "All undo mappings",
+          renames
+            .map((r) => (r.from === r.to ? `  ${r.from} (unchanged)` : `  ${r.from} → ${r.to}`))
+            .join("\n"),
         );
 
         await remapAfterRename(targetDir, renames, "undo", warnings);
 
         const elapsed = Date.now() - t0;
-        log("undo", `Complete in ${elapsed}ms — ${effective.length} files reversed${warnings.length > 0 ? `, ${warnings.length} warning(s)` : ""}`);
+        log(
+          "undo",
+          `Complete in ${elapsed}ms — ${effective.length} files reversed${warnings.length > 0 ? `, ${warnings.length} warning(s)` : ""}`,
+        );
         return json({ success: true, renames, warnings });
       });
     }
@@ -295,6 +336,14 @@ async function handleAPI(
     if (path === "/api/groups" && req.method === "POST") {
       const groups = (await req.json()) as unknown[];
       return withRenameLock(async () => {
+        log("groups", `Persisting ${groups.length} groups`);
+        logData(
+          "groups",
+          "Groups snapshot",
+          (groups as any[])
+            .map((g: any) => `  ${g.name}: [${(g.images ?? []).join(", ")}]`)
+            .join("\n"),
+        );
         await writeGroupsFile(targetDir, groups);
         return json({ success: true });
       });
@@ -327,11 +376,15 @@ async function handleAPI(
       const body = (await req.json()) as FolderSaveRequest;
       return withRenameLock(async () => {
         const t0 = Date.now();
-        const totalImages = body.folders.reduce((n, f) => n + f.images.length, 0) + body.rootImages.length;
+        const totalImages =
+          body.folders.reduce((n, f) => n + f.images.length, 0) + body.rootImages.length;
         log("folders-save", `Received save: ${body.folders.length} folders, ${totalImages} images`);
         const result = await executeFolderSave(targetDir, body, log);
         const elapsed = Date.now() - t0;
-        log("folders-save", `Complete in ${elapsed}ms — ${result.moves.length} moves, ${result.foldersCreated.length} created, ${result.foldersRemoved.length} removed`);
+        log(
+          "folders-save",
+          `Complete in ${elapsed}ms — ${result.moves.length} moves, ${result.foldersCreated.length} created, ${result.foldersRemoved.length} removed`,
+        );
         return json({ success: true, ...result });
       });
     }
@@ -339,8 +392,9 @@ async function handleAPI(
     // ---- Cluster routes ----
 
     if (path === "/api/cluster" && req.method === "POST") {
-      const body = (await req.json()) as { nClusters?: number };
+      const body = (await req.json()) as { nClusters?: number; weights?: WeightConfig };
       const nClusters = body.nClusters ?? 200;
+      const weights = body.weights;
 
       if (isClusterJobRunning()) {
         return json({ error: "Clustering already in progress" }, 409);
@@ -351,14 +405,33 @@ async function handleAPI(
       const stream = new ReadableStream({
         async start(controller) {
           const enc = new TextEncoder();
+          let closed = false;
           const send = (event: string, data: string) => {
-            controller.enqueue(enc.encode(`event: ${event}\ndata: ${data}\n\n`));
+            if (closed) return;
+            try {
+              controller.enqueue(enc.encode(`event: ${event}\ndata: ${data}\n\n`));
+            } catch {
+              closed = true;
+            }
           };
+          const keepalive = setInterval(() => {
+            if (closed) return;
+            try {
+              controller.enqueue(enc.encode(": keepalive\n\n"));
+            } catch {
+              closed = true;
+            }
+          }, 30_000);
           try {
-            const result = await runFullCluster(targetDir, nClusters, (line) => {
-              log("cluster", line);
-              send("progress", JSON.stringify({ message: line }));
-            });
+            const result = await runFullCluster(
+              targetDir,
+              nClusters,
+              (line) => {
+                log("cluster", line);
+                send("progress", JSON.stringify({ message: line }));
+              },
+              weights,
+            );
             invalidateClusterCache();
             log("cluster", `Returned ${result.clusters.length} clusters`);
             send("result", JSON.stringify(result));
@@ -366,8 +439,9 @@ async function handleAPI(
             const msg = err instanceof Error ? err.message : String(err);
             send("error", JSON.stringify({ error: msg }));
           } finally {
+            clearInterval(keepalive);
             setClusterJobRunning(false);
-            controller.close();
+            if (!closed) controller.close();
           }
         },
       });
@@ -376,13 +450,59 @@ async function handleAPI(
         headers: {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
-          "Connection": "keep-alive",
+          Connection: "keep-alive",
         },
       });
     }
 
     if (path === "/api/cluster/status" && req.method === "GET") {
-      return json({ running: isClusterJobRunning() });
+      return json({ running: isClusterJobRunning(), progress: getLastProgress() });
+    }
+
+    if (path === "/api/cluster/progress" && req.method === "GET") {
+      if (!isClusterJobRunning()) {
+        return json({ running: false });
+      }
+      const stream = new ReadableStream({
+        start(controller) {
+          const enc = new TextEncoder();
+          let closed = false;
+          const write = (s: string) => {
+            if (closed) return;
+            try {
+              controller.enqueue(enc.encode(s));
+            } catch {
+              closed = true;
+            }
+          };
+          // Send current progress immediately
+          const last = getLastProgress();
+          if (last) write(`event: progress\ndata: ${JSON.stringify({ message: last })}\n\n`);
+          // Subscribe to future updates
+          // Keepalive
+          const keepalive = setInterval(() => {
+            if (closed) {
+              clearInterval(keepalive);
+              return;
+            }
+            write(": keepalive\n\n");
+          }, 30_000);
+          const unsub = subscribeProgress((msg) => {
+            if (!msg) {
+              write(`event: result\ndata: {}\n\n`);
+              unsub();
+              clearInterval(keepalive);
+              if (!closed) controller.close();
+              closed = true;
+            } else {
+              write(`event: progress\ndata: ${JSON.stringify({ message: msg })}\n\n`);
+            }
+          });
+        },
+      });
+      return new Response(stream, {
+        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+      });
     }
 
     if (path === "/api/cluster/cache-status" && req.method === "GET") {
@@ -390,11 +510,101 @@ async function handleAPI(
       return json({ cached });
     }
 
+    if (path === "/api/cluster/embeddings-status" && req.method === "GET") {
+      const npzExists = await Bun.file(
+        join(targetDir, ".reorder-cache", "clip_embeddings.npz"),
+      ).exists();
+      return json({ ready: npzExists });
+    }
+
+    if (path === "/api/cluster/extract" && req.method === "POST") {
+      if (isClusterJobRunning()) {
+        return json({ error: "Extraction already in progress" }, 409);
+      }
+      const body = (await req.json().catch(() => ({}))) as { models?: string[] };
+      const models = body.models; // e.g. ["pecore_l", "pecore_g"]
+      setClusterJobRunning(true);
+      log(
+        "cluster",
+        `Extract embeddings request (SSE)${models ? ` models=${models.join(",")}` : ""}`,
+      );
+
+      const stream = new ReadableStream({
+        async start(controller) {
+          const enc = new TextEncoder();
+          let closed = false;
+          const send = (event: string, data: string) => {
+            if (closed) return;
+            try {
+              controller.enqueue(enc.encode(`event: ${event}\ndata: ${data}\n\n`));
+            } catch {
+              closed = true;
+            }
+          };
+          // SSE keepalive: send a comment every 30s to prevent idle timeout
+          const keepalive = setInterval(() => {
+            if (closed) return;
+            try {
+              controller.enqueue(enc.encode(": keepalive\n\n"));
+            } catch {
+              closed = true;
+            }
+          }, 30_000);
+          try {
+            const result = await extractFeatures(
+              targetDir,
+              (line) => {
+                broadcastProgress(line);
+                send("progress", JSON.stringify({ message: line }));
+              },
+              models,
+            );
+            invalidateClusterCache();
+            await ensureTextEmbeddings(targetDir);
+            broadcastProgress("");
+            send("result", JSON.stringify(result));
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            broadcastProgress("");
+            send("error", JSON.stringify({ error: msg }));
+          } finally {
+            clearInterval(keepalive);
+            setClusterJobRunning(false);
+            if (!closed) controller.close();
+          }
+        },
+      });
+      return new Response(stream, {
+        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+      });
+    }
+
     if (path === "/api/cluster/recut" && req.method === "POST") {
-      const body = (await req.json()) as { nClusters: number };
-      log("cluster", `Re-cut request: n=${body.nClusters}`);
-      const result = await runRecut(targetDir, body.nClusters);
+      const body = (await req.json()) as {
+        nClusters?: number;
+        threshold?: number;
+        minClusterSize?: number;
+      };
+      let result;
+      if (body.minClusterSize != null) {
+        log("cluster", `Re-cut request: adaptive minClusterSize=${body.minClusterSize}`);
+        result = await runRecutAdaptive(targetDir, body.minClusterSize);
+      } else if (body.threshold != null) {
+        log("cluster", `Re-cut request: threshold=${body.threshold}`);
+        result = await runRecutByThreshold(targetDir, body.threshold);
+      } else {
+        log("cluster", `Re-cut request: n=${body.nClusters}`);
+        result = await runRecut(targetDir, body.nClusters ?? 200);
+      }
       log("cluster", `Re-cut returned ${result.clusters.length} clusters`);
+      return json(result);
+    }
+
+    if (path === "/api/cluster/test" && req.method === "POST") {
+      const body = (await req.json()) as { nClusters?: number; weights?: WeightConfig };
+      const nClusters = body.nClusters ?? 200;
+      log("cluster", `Test linkage: n=${nClusters} weights=${JSON.stringify(body.weights)}`);
+      const result = await runLinkageOnly(targetDir, nClusters, body.weights);
       return json(result);
     }
 

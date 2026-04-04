@@ -1,4 +1,4 @@
-import type { ImageInfo, ImageGroup } from "../types.ts";
+import type { ImageGroup, ImageInfo } from "../types.ts";
 import { toGroupSortId } from "./helpers.ts";
 
 /** Reorder items by splicing selected items to the drop target position. */
@@ -6,7 +6,7 @@ export function multiDragReorder(
   items: string[],
   selected: Set<string>,
   activeId: string,
-  overId: string
+  overId: string,
 ): string[] {
   const sel = items.filter((id) => selected.has(id));
   const rest = items.filter((id) => !selected.has(id));
@@ -23,7 +23,7 @@ export function multiDragReorder(
 export function remapGroupsAfterSave(
   groups: ImageGroup[],
   oldOrder: string[],
-  newOrder: string[]
+  newOrder: string[],
 ): ImageGroup[] {
   const renameMap = new Map<string, string>();
   for (let i = 0; i < oldOrder.length; i++) {
@@ -41,7 +41,7 @@ export function remapGroupsAfterSave(
 export function flattenOrder(
   ids: string[],
   groups: ImageGroup[],
-  images: ImageInfo[]
+  images: ImageInfo[],
 ): ImageInfo[] {
   const imap = new Map(images.map((i) => [i.filename, i]));
   const gmap = new Map(groups.map((g) => [toGroupSortId(g.id), g]));
@@ -83,10 +83,7 @@ export function consolidateBlock(images: ImageInfo[], filenames: Set<string>): I
   return out;
 }
 
-export function repositionBlock(
-  imgs: ImageInfo[],
-  orderedFilenames: string[]
-): ImageInfo[] {
+export function repositionBlock(imgs: ImageInfo[], orderedFilenames: string[]): ImageInfo[] {
   const set = new Set(orderedFilenames);
   const imgMap = new Map(imgs.map((i) => [i.filename, i]));
   const reordered = orderedFilenames.map((fn) => imgMap.get(fn)!).filter(Boolean);

@@ -51,7 +51,11 @@ export const useGroupStore = create<GroupState>((set, get) => ({
 
   // Applies fn, prunes empty groups, skips persist if unchanged
   updateGroups: (fn) => {
-    const { groups } = get();
+    const { groups, groupsLoaded } = get();
+    if (!groupsLoaded) {
+      console.warn("updateGroups called before groups were loaded — ignoring to prevent data loss");
+      return;
+    }
     let next = fn(groups);
     if (next === groups) return;
     next = next.filter((g) => g.images.length > 0);
@@ -78,4 +82,3 @@ export const useGroupStore = create<GroupState>((set, get) => ({
   expandGroup: (id) => set({ expandedGroupId: id }),
   collapseGroup: () => set({ expandedGroupId: null }),
 }));
-

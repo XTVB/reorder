@@ -1,5 +1,5 @@
-import React from "react";
-import type { ImageInfo, ImageGroup } from "../types.ts";
+import type React from "react";
+import type { ImageGroup, ImageInfo } from "../types.ts";
 import { ExpandedGroupItem } from "./ExpandedGroupItem.tsx";
 
 interface PopoverShellProps {
@@ -34,7 +34,9 @@ export function PopoverShell({
     <div className="group-popover" {...dataProps} onClick={(e) => e.stopPropagation()}>
       <div className="group-popover-header">
         <span className="group-popover-name">{displayName}</span>
-        <span className="group-popover-count">{images.length} image{images.length !== 1 ? "s" : ""}</span>
+        <span className="group-popover-count">
+          {images.length} image{images.length !== 1 ? "s" : ""}
+        </span>
         <div className="group-popover-actions">{actions}</div>
       </div>
       <div className="group-popover-grid">
@@ -94,9 +96,15 @@ export function GroupPopover({
       activeId={activeId}
       actions={
         <>
-          <button className="btn btn-small btn-secondary" onClick={() => onRename(group.id)}>Rename</button>
-          <button className="btn btn-small btn-danger" onClick={() => onDelete(group.id)}>Dissolve</button>
-          <button className="btn btn-small btn-secondary" onClick={onCollapse}>Close</button>
+          <button className="btn btn-small btn-secondary" onClick={() => onRename(group.id)}>
+            Rename
+          </button>
+          <button className="btn btn-small btn-danger" onClick={() => onDelete(group.id)}>
+            Dissolve
+          </button>
+          <button className="btn btn-small btn-secondary" onClick={onCollapse}>
+            Close
+          </button>
         </>
       }
       onRemove={(fn) => onRemoveFromGroup(group.id, fn)}

@@ -33,7 +33,7 @@ export function useGridLayout() {
       setLayout((prev) =>
         prev.columnCount === cols && prev.rowHeight === rowHeight
           ? prev
-          : { columnCount: cols, rowHeight }
+          : { columnCount: cols, rowHeight },
       );
     }
 

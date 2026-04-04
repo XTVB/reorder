@@ -41,7 +41,9 @@
   z-index: 510;
   padding: 8px 14px;
   border-radius: var(--radius);
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .lightbox-nav:hover {

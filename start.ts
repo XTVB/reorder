@@ -1,8 +1,8 @@
-import { join, resolve, basename } from "node:path";
-import { access, constants, mkdir, copyFile, stat, readdir } from "node:fs/promises";
-import { createServer } from "./src/server.ts";
+import { access, constants, copyFile, mkdir, readdir, stat } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
 import { listImages } from "./src/rename.ts";
-import { preGenerateThumbnails, clearCache } from "./src/thumbnails.ts";
+import { createServer } from "./src/server.ts";
+import { clearCache, preGenerateThumbnails } from "./src/thumbnails.ts";
 
 const DEFAULT_PORT = 4928;
 
@@ -59,10 +59,10 @@ async function main() {
   // Copy static files in parallel
   const clientDir = join(import.meta.dir, "src/client");
   const stylesDir = join(clientDir, "styles");
-  const cssFiles = (await readdir(stylesDir)).filter(f => f.endsWith(".css"));
+  const cssFiles = (await readdir(stylesDir)).filter((f) => f.endsWith(".css"));
   await Promise.all([
     copyFile(join(clientDir, "index.html"), join(distDir, "index.html")),
-    ...cssFiles.map(f => copyFile(join(stylesDir, f), join(distDir, f))),
+    ...cssFiles.map((f) => copyFile(join(stylesDir, f), join(distDir, f))),
   ]);
 
   // Find available port and start server
@@ -72,9 +72,7 @@ async function main() {
     try {
       server = createServer(absDir, distDir, port);
       break;
-    } catch {
-      continue;
-    }
+    } catch {}
   }
   if (!server) {
     console.error("No available port found");
@@ -91,12 +89,14 @@ async function main() {
 
   // Background thumbnail pre-generation (fire-and-forget)
   let imageCount = 0;
-  listImages(absDir).then((filenames) => {
-    imageCount = filenames.length;
-    if (filenames.length > 0) {
-      preGenerateThumbnails(absDir, filenames).catch(() => {});
-    }
-  }).catch(() => {});
+  listImages(absDir)
+    .then((filenames) => {
+      imageCount = filenames.length;
+      if (filenames.length > 0) {
+        preGenerateThumbnails(absDir, filenames).catch(() => {});
+      }
+    })
+    .catch(() => {});
 
   // Print alias suggestion
   const scriptPath = join(import.meta.dir, "start.ts");

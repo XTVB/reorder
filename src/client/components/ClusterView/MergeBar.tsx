@@ -11,7 +11,7 @@ interface Props {
 
 export function MergeBar({ selection, clusters, onMerge, onCancel, onRemove }: Props) {
   const selected = useMemo(
-    () => clusters.filter(c => selection.has(c.id)),
+    () => clusters.filter((c) => selection.has(c.id)),
     [clusters, selection],
   );
 
@@ -19,20 +19,18 @@ export function MergeBar({ selection, clusters, onMerge, onCancel, onRemove }: P
     <div className="cluster-merge-bar">
       <span className="merge-count">{selection.size} clusters selected</span>
       <div className="merge-tags">
-        {selected.map(c => (
+        {selected.map((c) => (
           <span key={c.id} className="merge-tag" onClick={() => onRemove(c.id)}>
             {c.autoName || c.id} ({c.images.length}) ×
           </span>
         ))}
       </div>
-      <button
-        className="btn btn-merge"
-        onClick={onMerge}
-        disabled={selection.size < 2}
-      >
+      <button className="btn btn-merge" onClick={onMerge} disabled={selection.size < 2}>
         Merge
       </button>
-      <button className="btn btn-small" onClick={onCancel}>Cancel</button>
+      <button className="btn btn-small" onClick={onCancel}>
+        Cancel
+      </button>
     </div>
   );
 }

@@ -1,5 +1,5 @@
-import { join } from "node:path";
 import { appendFile, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 const MAX_LINES = 50000;
 

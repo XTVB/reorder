@@ -1,0 +1,218 @@
+.compare-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+.compare-controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.compare-n-input {
+  width: 70px;
+  padding: 4px 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.compare-separator {
+  width: 1px;
+  height: 24px;
+  background: var(--border);
+  margin: 0 4px;
+}
+.compare-extract-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-right: 2px;
+}
+.compare-extract-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.compare-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Add config panel */
+.compare-add-panel {
+  display: flex;
+  gap: 24px;
+  padding: 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.compare-add-section {
+  flex: 1;
+  min-width: 280px;
+}
+.compare-add-heading {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.compare-preset-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.compare-preset-grid .btn {
+  font-size: 11px;
+}
+.compare-custom-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.compare-custom-label {
+  padding: 4px 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  width: 200px;
+}
+.compare-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.compare-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.compare-slider-label {
+  width: 70px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.compare-slider-row input[type="range"] {
+  flex: 1;
+  max-width: 150px;
+  accent-color: var(--accent);
+}
+.compare-slider-value {
+  width: 30px;
+  font-size: 12px;
+  color: var(--text-primary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tabs */
+.compare-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.compare-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 6px 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  transition: background 0.15s;
+  min-width: 100px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  position: relative;
+}
+.compare-tab:hover {
+  background: var(--bg-hover);
+}
+.compare-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.compare-tab-label {
+  font-weight: 600;
+  font-size: 12px;
+}
+.compare-tab-status {
+  font-size: 10px;
+  opacity: 0.8;
+}
+.compare-tab-weights {
+  font-size: 9px;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+.compare-tab-close {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  font-size: 14px;
+  opacity: 0.4;
+  cursor: pointer;
+  line-height: 1;
+}
+.compare-tab-close:hover {
+  opacity: 1;
+}
+
+/* Weight summary bar */
+.compare-weight-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.compare-weight-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.compare-weight-pill.active {
+  background: var(--accent-dim, rgba(99, 102, 241, 0.15));
+  color: var(--accent);
+  border-color: var(--accent);
+}

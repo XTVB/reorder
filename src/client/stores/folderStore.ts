@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import type { FolderGroup, FolderData, ImageInfo } from "../types.ts";
-import { useImageStore } from "./imageStore.ts";
+import type { FolderData, FolderGroup, ImageInfo } from "../types.ts";
 import { postJson, stripFolderNumber } from "../utils/helpers.ts";
+import { useImageStore } from "./imageStore.ts";
 
 const FOLDER_MODE_KEY = "reorder-folder-mode";
 
@@ -16,7 +16,7 @@ const FOLDER_MODE_KEY = "reorder-folder-mode";
 interface FolderState {
   /** Current desired state (may differ from disk after local edits) */
   folders: FolderGroup[];
-  rootImages: string[];   // compound paths (bare for root-native files)
+  rootImages: string[]; // compound paths (bare for root-native files)
   folderMap: Map<string, FolderGroup>;
 
   /** Snapshot of disk state at last fetch */
@@ -55,13 +55,16 @@ function buildFolderMap(folders: FolderGroup[]): Map<string, FolderGroup> {
 }
 
 function computeHasChanges(
-  folders: FolderGroup[], rootImages: string[],
-  diskFolders: FolderGroup[], diskRootImages: string[],
+  folders: FolderGroup[],
+  rootImages: string[],
+  diskFolders: FolderGroup[],
+  diskRootImages: string[],
 ): boolean {
   if (folders.length !== diskFolders.length) return true;
   if (rootImages.length !== diskRootImages.length) return true;
   for (let i = 0; i < folders.length; i++) {
-    const a = folders[i]!, b = diskFolders[i]!;
+    const a = folders[i]!,
+      b = diskFolders[i]!;
     if (a.name !== b.name) return true;
     if (a.images.length !== b.images.length) return true;
     for (let j = 0; j < a.images.length; j++) {
@@ -79,7 +82,8 @@ function syncImageStore(folders: FolderGroup[], rootImages: string[]) {
   const images = allImages(folders, rootImages);
   const { originalOrder } = useImageStore.getState();
   const imageMap = new Map(images.map((i) => [i.filename, i]));
-  const hasChanges = images.length !== originalOrder.length ||
+  const hasChanges =
+    images.length !== originalOrder.length ||
     images.some((img, i) => img.filename !== originalOrder[i]);
   useImageStore.setState({ images, imageMap, hasChanges });
 }
@@ -169,9 +173,7 @@ export const useFolderStore = create<FolderState>((set, get) => ({
     const match = folderName.match(/^(\d+\s*-\s*)/);
     const prefix = match ? match[1] : "";
     const newName = prefix ? `${prefix}${newTitle}` : newTitle;
-    const updated = folders.map((f) =>
-      f.name === folderName ? { ...f, name: newName } : f
-    );
+    const updated = folders.map((f) => (f.name === folderName ? { ...f, name: newName } : f));
     setFolders(set, get, updated, rootImages, {
       expandedFolderName: expandedFolderName === folderName ? newName : expandedFolderName,
     });
@@ -213,9 +215,7 @@ export const useFolderStore = create<FolderState>((set, get) => ({
 
   reorderWithinFolder: (folderName, newOrder) => {
     const { folders, rootImages } = get();
-    const updated = folders.map((f) =>
-      f.name === folderName ? { ...f, images: newOrder } : f
-    );
+    const updated = folders.map((f) => (f.name === folderName ? { ...f, images: newOrder } : f));
     setFolders(set, get, updated, rootImages);
   },
 }));

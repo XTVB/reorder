@@ -1,16 +1,24 @@
-import React from "react";
-import { useUIStore } from "../stores/uiStore.ts";
-import { useSelectionStore } from "../stores/selectionStore.ts";
+import type React from "react";
 import { useClusterStore } from "../stores/clusterStore.ts";
-
-type AppMode = "reorder" | "cluster";
+import { useSelectionStore } from "../stores/selectionStore.ts";
+import { useUIStore } from "../stores/uiStore.ts";
+import type { AppMode } from "../types.ts";
 
 const MODES: { key: AppMode; label: string; path: string }[] = [
   { key: "reorder", label: "Reorder", path: "/reorder" },
   { key: "cluster", label: "Cluster", path: "/cluster" },
+  { key: "cluster-compare", label: "Compare", path: "/cluster-compare" },
 ];
 
-export function AppShellHeader({ mode, navigate, children }: { mode: AppMode; navigate: (path: string) => void; children?: React.ReactNode }) {
+export function AppShellHeader({
+  mode,
+  navigate,
+  children,
+}: {
+  mode: AppMode;
+  navigate: (path: string) => void;
+  children?: React.ReactNode;
+}) {
   const headerSubtitle = useUIStore((s) => s.headerSubtitle);
   const clearSelection = useSelectionStore((s) => s.clearSelection);
   const clearImageSelection = useClusterStore((s) => s.clearImageSelection);
@@ -37,16 +45,10 @@ export function AppShellHeader({ mode, navigate, children }: { mode: AppMode; na
         </div>
       </div>
       <div className="app-header-center">
-        <div className="header-title">
-          {mode === "reorder" ? "Reorder Images" : "Cluster"}
-        </div>
-        {headerSubtitle && (
-          <div className="header-subtitle">{headerSubtitle}</div>
-        )}
+        <div className="header-title">{mode === "reorder" ? "Reorder Images" : "Cluster"}</div>
+        {headerSubtitle && <div className="header-subtitle">{headerSubtitle}</div>}
       </div>
-      <div className="app-header-right">
-        {children}
-      </div>
+      <div className="app-header-right">{children}</div>
     </header>
   );
 }

@@ -6,7 +6,9 @@
   border-radius: var(--radius);
   overflow: hidden;
   cursor: grab;
-  transition: box-shadow 0.15s, border-color 0.15s;
+  transition:
+    box-shadow 0.15s,
+    border-color 0.15s;
   user-select: none;
   -webkit-user-select: none;
 }

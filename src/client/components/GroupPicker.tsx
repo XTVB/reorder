@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import type React from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ImageGroup } from "../types.ts";
 
 interface GroupPickerProps {
@@ -24,11 +25,10 @@ export function GroupPicker({ groups, onSelect, selectedCount }: GroupPickerProp
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const filtered = query
-    ? groups.filter((g) => fuzzyMatch(query, g.name))
-    : groups;
+  const filtered = query ? groups.filter((g) => fuzzyMatch(query, g.name)) : groups;
 
   // Reset highlight when filter changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: query is the intentional trigger to reset highlight position
   useEffect(() => {
     setHighlightIdx(0);
   }, [query]);
@@ -54,10 +54,13 @@ export function GroupPicker({ groups, onSelect, selectedCount }: GroupPickerProp
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
-  const handleSelect = useCallback((groupId: string) => {
-    onSelect(groupId);
-    setOpen(false);
-  }, [onSelect]);
+  const handleSelect = useCallback(
+    (groupId: string) => {
+      onSelect(groupId);
+      setOpen(false);
+    },
+    [onSelect],
+  );
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "ArrowDown") {

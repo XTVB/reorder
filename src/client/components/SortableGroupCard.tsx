@@ -1,6 +1,7 @@
-import React, { memo, useRef, useEffect, useCallback } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import type React from "react";
+import { memo, useCallback, useEffect, useRef } from "react";
 import type { ImageGroup } from "../types.ts";
 import { cn, toGroupSortId, wasJustDragged } from "../utils/helpers.ts";
 import { GroupThumbGrid } from "./GroupThumbGrid.tsx";
@@ -30,15 +31,24 @@ export const SortableGroupCard = memo(function SortableGroupCard({
   onClick: (e: React.MouseEvent) => void;
   popover?: React.ReactNode;
 }) {
-  const { attributes, listeners, setNodeRef: setSortRef, transform, transition, isDragging } =
-    useSortable({ id: toGroupSortId(group.id) });
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setSortRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: toGroupSortId(group.id) });
 
   const cardRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const setNodeRef = useCallback((node: HTMLDivElement | null) => {
-    setSortRef(node);
-    (cardRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
-  }, [setSortRef]);
+  const setNodeRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      setSortRef(node);
+      (cardRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+    },
+    [setSortRef],
+  );
 
   useEffect(() => {
     if (!isExpanded || !cardRef.current || !popoverRef.current) return;
@@ -59,7 +69,9 @@ export const SortableGroupCard = memo(function SortableGroupCard({
   }
 
   const style = {
-    transform: isFrozen ? (frozenTransform.current ?? CSS.Transform.toString(transform)) : CSS.Transform.toString(transform),
+    transform: isFrozen
+      ? (frozenTransform.current ?? CSS.Transform.toString(transform))
+      : CSS.Transform.toString(transform),
     transition: isFrozen ? "none" : transition,
   };
 
@@ -97,7 +109,11 @@ export const SortableGroupCard = memo(function SortableGroupCard({
         </span>
         <span className="group-count">{group.images.length}</span>
       </div>
-      {popover && <div ref={popoverRef} className="group-popover-anchor">{popover}</div>}
+      {popover && (
+        <div ref={popoverRef} className="group-popover-anchor">
+          {popover}
+        </div>
+      )}
     </div>
   );
 });

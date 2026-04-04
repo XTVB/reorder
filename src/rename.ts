@@ -1,8 +1,17 @@
-import { readdir, rename, stat, access, constants, unlink, mkdir, rmdir } from "node:fs/promises";
-import { join, extname } from "node:path";
+import { access, constants, mkdir, readdir, rename, rmdir, stat, unlink } from "node:fs/promises";
+import { extname, join } from "node:path";
 
 const IMAGE_EXTENSIONS = new Set([
-  ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif", ".bmp", ".tiff", ".tif",
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+  ".svg",
+  ".avif",
+  ".bmp",
+  ".tiff",
+  ".tif",
 ]);
 
 export interface RenameMapping {
@@ -35,7 +44,9 @@ let _renameLock: Promise<unknown> = Promise.resolve();
 export function withRenameLock<T>(fn: () => Promise<T>): Promise<T> {
   const prev = _renameLock;
   let resolve: () => void;
-  _renameLock = new Promise<void>((r) => { resolve = r; });
+  _renameLock = new Promise<void>((r) => {
+    resolve = r;
+  });
   return prev.then(fn).finally(() => resolve!());
 }
 
@@ -79,10 +90,7 @@ export function computeRenames(order: string[]): RenameMapping[] {
   });
 }
 
-async function twoPhaseRename(
-  dir: string,
-  mappings: RenameMapping[]
-): Promise<string> {
+async function twoPhaseRename(dir: string, mappings: RenameMapping[]): Promise<string> {
   const id = crypto.randomUUID().slice(0, 8);
 
   // Write manifest before touching any files
@@ -112,9 +120,7 @@ async function twoPhaseRename(
   return id;
 }
 
-async function readTagsJson(
-  dir: string
-): Promise<Record<string, unknown> | null> {
+async function readTagsJson(dir: string): Promise<Record<string, unknown> | null> {
   try {
     const raw = await Bun.file(join(dir, TAGS_FILE)).text();
     return JSON.parse(raw);
@@ -126,11 +132,11 @@ async function readTagsJson(
 async function writeRemappedTags(
   dir: string,
   tags: Record<string, unknown>,
-  mappings: RenameMapping[]
+  mappings: RenameMapping[],
 ): Promise<void> {
   const renameMap = new Map(mappings.map((m) => [m.from, m.to]));
   const remapped = Object.entries(tags).map(
-    ([key, value]) => [renameMap.get(key) ?? key, value] as const
+    ([key, value]) => [renameMap.get(key) ?? key, value] as const,
   );
 
   // Sort so image keys (e.g. 001.jpg) appear in order; non-image keys first
@@ -148,19 +154,16 @@ async function assertFilesExist(dir: string, paths: string[], context: string): 
       } catch {
         missing.push(p);
       }
-    })
+    }),
   );
   if (missing.length > 0) {
     throw new Error(
-      `Cannot ${context}: ${missing.length} file(s) not found on disk (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", ..." : ""}). Try refreshing first.`
+      `Cannot ${context}: ${missing.length} file(s) not found on disk (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", ..." : ""}). Try refreshing first.`,
     );
   }
 }
 
-export async function executeRenames(
-  dir: string,
-  order: string[]
-): Promise<RenameMapping[]> {
+export async function executeRenames(dir: string, order: string[]): Promise<RenameMapping[]> {
   // Check write access
   try {
     await access(dir, constants.W_OK);
@@ -177,7 +180,11 @@ export async function executeRenames(
     return mappings;
   }
 
-  await assertFilesExist(dir, effectiveMappings.map((m) => m.from), "rename");
+  await assertFilesExist(
+    dir,
+    effectiveMappings.map((m) => m.from),
+    "rename",
+  );
 
   // Snapshot tags.json before renaming (for undo)
   const originalTags = await readTagsJson(dir);
@@ -246,10 +253,7 @@ export async function undoRenames(dir: string): Promise<RenameMapping[]> {
 
   // Restore original tags.json if it was saved
   if (history.originalTags) {
-    await Bun.write(
-      join(dir, TAGS_FILE),
-      JSON.stringify(history.originalTags, null, 2)
-    );
+    await Bun.write(join(dir, TAGS_FILE), JSON.stringify(history.originalTags, null, 2));
   }
 
   // Remove history file and backup
@@ -273,10 +277,7 @@ export interface OrganizeMapping {
   files: RenameMapping[];
 }
 
-export function computeOrganize(
-  groups: OrganizeGroup[],
-  imageOrder: string[]
-): OrganizeMapping[] {
+export function computeOrganize(groups: OrganizeGroup[], imageOrder: string[]): OrganizeMapping[] {
   // Determine group order based on first appearance in imageOrder
   const posMap = new Map(imageOrder.map((fn, i) => [fn, i]));
   const sorted = [...groups].sort((a, b) => {
@@ -307,7 +308,7 @@ export function computeOrganize(
 export async function executeOrganize(
   dir: string,
   groups: OrganizeGroup[],
-  imageOrder: string[]
+  imageOrder: string[],
 ): Promise<OrganizeMapping[]> {
   try {
     await access(dir, constants.W_OK);
@@ -317,13 +318,13 @@ export async function executeOrganize(
 
   const mappings = computeOrganize(groups, imageOrder);
 
-  await Promise.all(mappings.map(async ({ folder, files }) => {
-    const subdir = join(dir, folder);
-    await mkdir(subdir, { recursive: true });
-    await Promise.all(files.map(({ from, to }) =>
-      rename(join(dir, from), join(subdir, to))
-    ));
-  }));
+  await Promise.all(
+    mappings.map(async ({ folder, files }) => {
+      const subdir = join(dir, folder);
+      await mkdir(subdir, { recursive: true });
+      await Promise.all(files.map(({ from, to }) => rename(join(dir, from), join(subdir, to))));
+    }),
+  );
 
   return mappings;
 }
@@ -385,14 +386,20 @@ export async function recoverPendingRename(dir: string): Promise<RecoveryResult>
   if (batchTemps.size === 0) {
     // No matching temps — check if step 2 already completed (all target files exist)
     const existResults = await Promise.all(
-      mappings.map(({ to }) => Bun.file(join(dir, to)).exists())
+      mappings.map(({ to }) => Bun.file(join(dir, to)).exists()),
     );
     const missing = mappings.filter((_, i) => !existResults[i]).map((m) => m.to);
 
     if (missing.length === 0) {
-      console.log(`[recovery] Stale manifest for batch ${batchId} — all targets exist. Removing manifest.`);
+      console.log(
+        `[recovery] Stale manifest for batch ${batchId} — all targets exist. Removing manifest.`,
+      );
       await unlink(join(dir, PENDING_FILE)).catch(() => {});
-      return { status: "completed", completed: 0, message: `Batch ${batchId} already completed — removed stale manifest` };
+      return {
+        status: "completed",
+        completed: 0,
+        message: `Batch ${batchId} already completed — removed stale manifest`,
+      };
     }
 
     return {
@@ -435,9 +442,10 @@ export async function recoverPendingRename(dir: string): Promise<RecoveryResult>
 
   // Check for orphaned temps from OTHER batches
   const otherTemps = tempFiles.filter((f) => !f.startsWith(batchPrefix));
-  const otherWarning = otherTemps.length > 0
-    ? ` (${otherTemps.length} orphaned temp files from other batches remain)`
-    : "";
+  const otherWarning =
+    otherTemps.length > 0
+      ? ` (${otherTemps.length} orphaned temp files from other batches remain)`
+      : "";
 
   const total = step1Completed + step2Completed;
   return {
@@ -453,8 +461,8 @@ export async function recoverPendingRename(dir: string): Promise<RecoveryResult>
 /* ------------------------------------------------------------------ */
 
 export interface FolderGroup {
-  name: string;       // subdirectory name on disk
-  images: string[];   // bare filenames within that subdir
+  name: string; // subdirectory name on disk
+  images: string[]; // bare filenames within that subdir
 }
 
 export interface FolderData {
@@ -479,7 +487,7 @@ export async function listFolderData(dir: string): Promise<FolderData> {
     subdirs.map(async (name) => ({
       name,
       images: await listImages(join(dir, name)),
-    }))
+    })),
   );
   return { folders, rootImages };
 }
@@ -494,13 +502,13 @@ export async function listFolderData(dir: string): Promise<FolderData> {
  * or bare filename for root images. The server resolves these to physical files.
  */
 export interface FolderSaveRequest {
-  folders: { title: string; images: string[] }[];  // images are original compound paths
-  rootImages: string[];                              // original bare filenames
+  folders: { title: string; images: string[] }[]; // images are original compound paths
+  rootImages: string[]; // original bare filenames
 }
 
 interface FolderMove {
-  from: string;   // relative to targetDir, e.g. "001 - Day 1/001.jpg" or "standalone.jpg"
-  to: string;     // relative to targetDir, e.g. "001 - Beach/003.jpg"
+  from: string; // relative to targetDir, e.g. "001 - Day 1/001.jpg" or "standalone.jpg"
+  to: string; // relative to targetDir, e.g. "001 - Beach/003.jpg"
 }
 
 interface FolderSaveManifest {
@@ -553,7 +561,9 @@ export async function executeFolderSave(
     for (let ii = 0; ii < folder.images.length; ii++) {
       const srcPath = folder.images[ii]!; // compound path like "OldFolder/001 - Title.jpg"
       const num = String(ii + 1).padStart(imgPadLen, "0");
-      const title = extractTitle(srcPath.includes("/") ? srcPath.slice(srcPath.lastIndexOf("/") + 1) : srcPath);
+      const title = extractTitle(
+        srcPath.includes("/") ? srcPath.slice(srcPath.lastIndexOf("/") + 1) : srcPath,
+      );
       const ext = extname(srcPath).toLowerCase();
       const destFile = `${num}${title}${ext}`;
       moves.push({ from: srcPath, to: `${destFolder}/${destFile}` });
@@ -565,7 +575,9 @@ export async function executeFolderSave(
   for (let i = 0; i < req.rootImages.length; i++) {
     const srcPath = req.rootImages[i]!;
     const num = String(i + 1).padStart(rootPadLen, "0");
-    const title = extractTitle(srcPath.includes("/") ? srcPath.slice(srcPath.lastIndexOf("/") + 1) : srcPath);
+    const title = extractTitle(
+      srcPath.includes("/") ? srcPath.slice(srcPath.lastIndexOf("/") + 1) : srcPath,
+    );
     const ext = extname(srcPath).toLowerCase();
     const destFile = `${num}${title}${ext}`;
     moves.push({ from: srcPath, to: destFile });
@@ -585,9 +597,16 @@ export async function executeFolderSave(
   const foldersToCreate = targetFolders.filter((f) => !existingSet.has(f));
   const foldersToRemove = existingFolders.filter((f) => !targetSet.has(f));
 
-  await assertFilesExist(dir, effectiveMoves.map((m) => m.from), "save folders");
+  await assertFilesExist(
+    dir,
+    effectiveMoves.map((m) => m.from),
+    "save folders",
+  );
 
-  _log("folders-save", `${effectiveMoves.length} file moves, ${foldersToCreate.length} folders to create, ${foldersToRemove.length} to remove`);
+  _log(
+    "folders-save",
+    `${effectiveMoves.length} file moves, ${foldersToCreate.length} folders to create, ${foldersToRemove.length} to remove`,
+  );
 
   // --- Write manifest ---
   const batchId = crypto.randomUUID().slice(0, 8);

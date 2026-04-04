@@ -1,4 +1,4 @@
-import React from "react";
+import type React from "react";
 
 export function Modal({
   title,
@@ -14,7 +14,9 @@ export function Modal({
   return (
     <div
       className="modal-backdrop"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div className="modal">
         <div className="modal-header">{title}</div>

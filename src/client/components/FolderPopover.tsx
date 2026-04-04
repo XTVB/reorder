@@ -1,5 +1,5 @@
-import React from "react";
-import type { ImageInfo, FolderGroup } from "../types.ts";
+import type React from "react";
+import type { FolderGroup, ImageInfo } from "../types.ts";
 import { stripFolderNumber } from "../utils/helpers.ts";
 import { PopoverShell } from "./GroupPopover.tsx";
 
@@ -40,9 +40,15 @@ export function FolderPopover({
       activeId={activeId}
       actions={
         <>
-          <button className="btn btn-small btn-secondary" onClick={() => onRename(folder.name)}>Rename</button>
-          <button className="btn btn-small btn-danger" onClick={() => onDissolve(folder.name)}>Dissolve</button>
-          <button className="btn btn-small btn-secondary" onClick={onCollapse}>Close</button>
+          <button className="btn btn-small btn-secondary" onClick={() => onRename(folder.name)}>
+            Rename
+          </button>
+          <button className="btn btn-small btn-danger" onClick={() => onDissolve(folder.name)}>
+            Dissolve
+          </button>
+          <button className="btn btn-small btn-secondary" onClick={onCollapse}>
+            Close
+          </button>
         </>
       }
       onRemove={(fn) => onRemoveFromFolder(folder.name, fn)}

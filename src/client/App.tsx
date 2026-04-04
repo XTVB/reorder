@@ -1,57 +1,55 @@
-import React, { useEffect, useCallback, useRef, useMemo } from "react";
 import {
-  DndContext,
+  type CollisionDetection,
   closestCenter,
+  DndContext,
+  DragOverlay,
   KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
-  DragOverlay,
-  type CollisionDetection,
 } from "@dnd-kit/core";
 import {
+  rectSortingStrategy,
   SortableContext,
   sortableKeyboardCoordinates,
-  rectSortingStrategy,
 } from "@dnd-kit/sortable";
 import { useVirtualizer } from "@tanstack/react-virtual";
-
-import { useImageStore } from "./stores/imageStore.ts";
-import { useSelectionStore } from "./stores/selectionStore.ts";
-import { useDndStore } from "./stores/dndStore.ts";
-import { useGroupStore, flushGroupPersist } from "./stores/groupStore.ts";
-import { useFolderStore } from "./stores/folderStore.ts";
-import { useUIStore } from "./stores/uiStore.ts";
-import {
-  isGroupSortId,
-  isFolderSortId,
-  fromGroupSortId,
-  fromFolderSortId,
-  toGroupSortId,
-  toFolderSortId,
-  getErrorMessage,
-  imageUrl,
-  stripFolderNumber,
-  postJson,
-} from "./utils/helpers.ts";
-import { computeGridItems, gridItemId } from "./utils/gridItems.ts";
-
-import { useGridLayout } from "./hooks/useGridLayout.ts";
-import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts.ts";
-import { useGroupOperations } from "./hooks/useGroupOperations.ts";
-import { useDragHandlers } from "./hooks/useDragHandlers.ts";
-
-import { SortableCard } from "./components/SortableCard.tsx";
-import { SortableGroupCard } from "./components/SortableGroupCard.tsx";
-import { SortableFolderCard } from "./components/SortableFolderCard.tsx";
-import { GroupThumbGrid } from "./components/GroupThumbGrid.tsx";
-import { GroupPopover } from "./components/GroupPopover.tsx";
+import type React from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { FolderPopover } from "./components/FolderPopover.tsx";
+import { GroupPopover } from "./components/GroupPopover.tsx";
+import { GroupThumbGrid } from "./components/GroupThumbGrid.tsx";
 import { Lightbox } from "./components/Lightbox.tsx";
-import { PreviewModal } from "./components/PreviewModal.tsx";
 import { OrganizeModal } from "./components/OrganizeModal.tsx";
 import { PathsModal } from "./components/PathsModal.tsx";
+import { PreviewModal } from "./components/PreviewModal.tsx";
 import { SearchBar, SearchContext, useSearchState } from "./components/SearchBar.tsx";
+import { SortableCard } from "./components/SortableCard.tsx";
+import { SortableFolderCard } from "./components/SortableFolderCard.tsx";
+import { SortableGroupCard } from "./components/SortableGroupCard.tsx";
+import { useDragHandlers } from "./hooks/useDragHandlers.ts";
+import { useGridLayout } from "./hooks/useGridLayout.ts";
+import { useGroupOperations } from "./hooks/useGroupOperations.ts";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts.ts";
+import { useDndStore } from "./stores/dndStore.ts";
+import { useFolderStore } from "./stores/folderStore.ts";
+import { flushGroupPersist, useGroupStore } from "./stores/groupStore.ts";
+import { useImageStore } from "./stores/imageStore.ts";
+import { useSelectionStore } from "./stores/selectionStore.ts";
+import { useUIStore } from "./stores/uiStore.ts";
+import { computeGridItems, gridItemId } from "./utils/gridItems.ts";
+import {
+  fromFolderSortId,
+  fromGroupSortId,
+  getErrorMessage,
+  imageUrl,
+  isFolderSortId,
+  isGroupSortId,
+  postJson,
+  stripFolderNumber,
+  toFolderSortId,
+  toGroupSortId,
+} from "./utils/helpers.ts";
 
 export function App() {
   // ---- Store subscriptions ----
@@ -110,32 +108,43 @@ export function App() {
   // ---- DnD sensors ----
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
   // ---- Computed grid ----
   const gridItems = useMemo(
-    () => computeGridItems(images, folderModeEnabled
-      ? { mode: "folders", folders, expandedFolderName }
-      : { mode: "groups", groups, enabled: groupsEnabled, expandedGroupId }),
-    [images, groups, groupsEnabled, expandedGroupId, folders, folderModeEnabled, expandedFolderName]
+    () =>
+      computeGridItems(
+        images,
+        folderModeEnabled
+          ? { mode: "folders", folders, expandedFolderName }
+          : { mode: "groups", groups, enabled: groupsEnabled, expandedGroupId },
+      ),
+    [
+      images,
+      groups,
+      groupsEnabled,
+      expandedGroupId,
+      folders,
+      folderModeEnabled,
+      expandedFolderName,
+    ],
   );
   const gridIds = useMemo(() => gridItems.map(gridItemId), [gridItems]);
 
   const visibleItems = useMemo(
     () => gridItems.filter((item) => item.type !== "group-image" && item.type !== "folder-image"),
-    [gridItems]
+    [gridItems],
   );
 
-  const isMultiDragging =
-    activeId !== null && selectedIds.size > 1 && selectedIds.has(activeId);
+  const isMultiDragging = activeId !== null && selectedIds.size > 1 && selectedIds.has(activeId);
 
   // ---- Virtualization ----
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const { columnCount, rowHeight, measureRowRef } = useGridLayout();
 
   const rows = useMemo(() => {
-    const result: typeof visibleItems[] = [];
+    const result: (typeof visibleItems)[] = [];
     for (let i = 0; i < visibleItems.length; i += columnCount) {
       result.push(visibleItems.slice(i, i + columnCount));
     }
@@ -151,9 +160,12 @@ export function App() {
 
   // ---- Search ----
   const searchState = useSearchState();
-  const scrollToRow = useCallback((rowIndex: number) => {
-    virtualizer.scrollToIndex(rowIndex, { align: "center" });
-  }, [virtualizer]);
+  const scrollToRow = useCallback(
+    (rowIndex: number) => {
+      virtualizer.scrollToIndex(rowIndex, { align: "center" });
+    },
+    [virtualizer],
+  );
 
   // ---- Collision detection (stable) ----
   const activeIdRef = useRef<string | null>(null);
@@ -166,9 +178,7 @@ export function App() {
     const aid = activeIdRef.current;
     const frozen = frozenGroupRef.current;
     if (aid && !isGroupSortId(aid) && !isFolderSortId(aid) && frozen) {
-      const excludeId = isFolderSortId(frozen)
-        ? frozen
-        : toGroupSortId(frozen);
+      const excludeId = isFolderSortId(frozen) ? frozen : toGroupSortId(frozen);
       return results.filter((c) => String(c.id) !== excludeId);
     }
     return results;
@@ -185,6 +195,7 @@ export function App() {
   });
 
   // ---- Initial data fetch ----
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only effect — all called functions are stable Zustand selectors
   useEffect(() => {
     fetchTargetDir();
     // Skip re-fetching if images are already loaded (e.g. switching back from cluster mode).
@@ -205,7 +216,6 @@ export function App() {
       fetchGroups();
     }
     checkUndo();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Clean stale group entries when images change
@@ -223,7 +233,7 @@ export function App() {
       }, []);
       return changed ? cleaned : prev;
     });
-  }, [images, groupsLoaded, saving, updateGroups]);
+  }, [folderModeEnabled, images, groupsLoaded, saving, updateGroups]);
 
   // ---- Card click ----
   const handleGridItemClickImpl = (id: string, e: React.MouseEvent) => {
@@ -271,7 +281,7 @@ export function App() {
   gridItemClickRef.current = handleGridItemClickImpl;
   const handleGridItemClick = useCallback(
     (id: string, e: React.MouseEvent) => gridItemClickRef.current(id, e),
-    []
+    [],
   );
 
   // ---- Save / Confirm ----
@@ -337,7 +347,12 @@ export function App() {
   }, []);
 
   const handleDissolveFolder = useCallback((folderName: string) => {
-    if (!confirm(`Dissolve "${stripFolderNumber(folderName) || folderName}"? Images will be moved to root on save.`)) return;
+    if (
+      !confirm(
+        `Dissolve "${stripFolderNumber(folderName) || folderName}"? Images will be moved to root on save.`,
+      )
+    )
+      return;
     useFolderStore.getState().dissolveFolder(folderName);
   }, []);
 
@@ -346,12 +361,23 @@ export function App() {
   }, []);
 
   // ---- Drag overlay helpers ----
-  const activeImage = activeId && !isGroupSortId(activeId) && !isFolderSortId(activeId) ? imageMap.get(activeId) ?? null : null;
-  const activeGroup = activeId && isGroupSortId(activeId) ? groupMap.get(fromGroupSortId(activeId)) ?? null : null;
-  const activeFolder = activeId && isFolderSortId(activeId) ? folderMap.get(fromFolderSortId(activeId)) ?? null : null;
+  const activeImage =
+    activeId && !isGroupSortId(activeId) && !isFolderSortId(activeId)
+      ? (imageMap.get(activeId) ?? null)
+      : null;
+  const activeGroup =
+    activeId && isGroupSortId(activeId) ? (groupMap.get(fromGroupSortId(activeId)) ?? null) : null;
+  const activeFolder =
+    activeId && isFolderSortId(activeId)
+      ? (folderMap.get(fromFolderSortId(activeId)) ?? null)
+      : null;
 
   const activeGridIndex = activeImage
-    ? gridItems.findIndex((i) => (i.type === "image" || i.type === "group-image" || i.type === "folder-image") && i.filename === activeImage.filename)
+    ? gridItems.findIndex(
+        (i) =>
+          (i.type === "image" || i.type === "group-image" || i.type === "folder-image") &&
+          i.filename === activeImage.filename,
+      )
     : activeGroup
       ? gridItems.findIndex((i) => i.type === "group" && i.groupId === activeGroup.id)
       : activeFolder
@@ -374,7 +400,6 @@ export function App() {
 
   return (
     <SearchContext.Provider value={searchState}>
-
       {error && <div className="error-banner">{error}</div>}
 
       {images.length === 0 && !error ? (
@@ -401,11 +426,16 @@ export function App() {
                 <div style={{ height: totalHeight, width: "100%", position: "relative" }}>
                   {virtualRows.map((virtualRow) => {
                     const row = rows[virtualRow.index]!;
-                    const hasExpandedGroup = (expandedGroupId != null && row.some(
-                      (item) => item.type === "group" && item.groupId === expandedGroupId
-                    )) || (expandedFolderName != null && row.some(
-                      (item) => item.type === "folder" && item.folderName === expandedFolderName
-                    ));
+                    const hasExpandedGroup =
+                      (expandedGroupId != null &&
+                        row.some(
+                          (item) => item.type === "group" && item.groupId === expandedGroupId,
+                        )) ||
+                      (expandedFolderName != null &&
+                        row.some(
+                          (item) =>
+                            item.type === "folder" && item.folderName === expandedFolderName,
+                        ));
                     return (
                       <div
                         key={virtualRow.key}
@@ -436,24 +466,28 @@ export function App() {
                                 isExpanded={isExp}
                                 isFrozen={frozenGroupId === sortId}
                                 isSelected={selectedIds.has(sortId)}
-                                isGhost={isMultiDragging && selectedIds.has(sortId) && sortId !== activeId}
+                                isGhost={
+                                  isMultiDragging && selectedIds.has(sortId) && sortId !== activeId
+                                }
                                 isSearchMatch={searchState.matchIds.has(sortId)}
                                 isCurrentSearchMatch={searchState.currentMatchId === sortId}
                                 onClick={(e: React.MouseEvent) => handleGridItemClick(sortId, e)}
-                                popover={isExp ? (
-                                  <FolderPopover
-                                    folder={folder}
-                                    imageMap={imageMap}
-                                    selectedIds={selectedIds}
-                                    isMultiDragging={isMultiDragging}
-                                    activeId={activeId}
-                                    onRename={handleRenameFolder}
-                                    onDissolve={handleDissolveFolder}
-                                    onCollapse={collapseFolder}
-                                    onRemoveFromFolder={handleRemoveFromFolder}
-                                    onCardClick={handleGridItemClick}
-                                  />
-                                ) : undefined}
+                                popover={
+                                  isExp ? (
+                                    <FolderPopover
+                                      folder={folder}
+                                      imageMap={imageMap}
+                                      selectedIds={selectedIds}
+                                      isMultiDragging={isMultiDragging}
+                                      activeId={activeId}
+                                      onRename={handleRenameFolder}
+                                      onDissolve={handleDissolveFolder}
+                                      onCollapse={collapseFolder}
+                                      onRemoveFromFolder={handleRemoveFromFolder}
+                                      onCardClick={handleGridItemClick}
+                                    />
+                                  ) : undefined
+                                }
                               />
                             );
                           }
@@ -473,24 +507,28 @@ export function App() {
                                 isExpanded={isExp}
                                 isFrozen={frozenGroupId === gid}
                                 isSelected={selectedIds.has(sortId)}
-                                isGhost={isMultiDragging && selectedIds.has(sortId) && sortId !== activeId}
+                                isGhost={
+                                  isMultiDragging && selectedIds.has(sortId) && sortId !== activeId
+                                }
                                 isSearchMatch={searchState.matchIds.has(sortId)}
                                 isCurrentSearchMatch={searchState.currentMatchId === sortId}
                                 onClick={(e: React.MouseEvent) => handleGridItemClick(sortId, e)}
-                                popover={isExp ? (
-                                  <GroupPopover
-                                    group={group}
-                                    imageMap={imageMap}
-                                    selectedIds={selectedIds}
-                                    isMultiDragging={isMultiDragging}
-                                    activeId={activeId}
-                                    onRename={groupOps.handleRenameGroup}
-                                    onDelete={groupOps.handleDeleteGroup}
-                                    onCollapse={collapseGroup}
-                                    onRemoveFromGroup={groupOps.handleRemoveFromGroup}
-                                    onCardClick={handleGridItemClick}
-                                  />
-                                ) : undefined}
+                                popover={
+                                  isExp ? (
+                                    <GroupPopover
+                                      group={group}
+                                      imageMap={imageMap}
+                                      selectedIds={selectedIds}
+                                      isMultiDragging={isMultiDragging}
+                                      activeId={activeId}
+                                      onRename={groupOps.handleRenameGroup}
+                                      onDelete={groupOps.handleDeleteGroup}
+                                      onCollapse={collapseGroup}
+                                      onRemoveFromGroup={groupOps.handleRemoveFromGroup}
+                                      onCardClick={handleGridItemClick}
+                                    />
+                                  ) : undefined
+                                }
                               />
                             );
                           }
@@ -503,7 +541,11 @@ export function App() {
                               image={img}
                               gridIndex={visibleIdx}
                               isSelected={selectedIds.has(item.filename)}
-                              isGhost={isMultiDragging && selectedIds.has(item.filename) && item.filename !== activeId}
+                              isGhost={
+                                isMultiDragging &&
+                                selectedIds.has(item.filename) &&
+                                item.filename !== activeId
+                              }
                               isSearchMatch={searchState.matchIds.has(item.filename)}
                               isCurrentSearchMatch={searchState.currentMatchId === item.filename}
                               onCardClick={handleGridItemClick}
@@ -521,7 +563,12 @@ export function App() {
             {activeImage ? (
               <div className={isMultiDragging ? "drag-overlay-multi" : undefined}>
                 <div className="card card-dragging">
-                  <img className="card-thumb" src={imageUrl(activeImage.filename)} alt={activeImage.filename} draggable={false} />
+                  <img
+                    className="card-thumb"
+                    src={imageUrl(activeImage.filename)}
+                    alt={activeImage.filename}
+                    draggable={false}
+                  />
                   <div className="card-info">
                     <span className="card-badge">{activeGridIndex + 1}</span>
                     <span className="card-name">{activeImage.filename}</span>
@@ -542,10 +589,14 @@ export function App() {
               </div>
             ) : activeFolder ? (
               <div className="card group-card card-dragging">
-                <GroupThumbGrid images={activeFolder.images.map((fn) => `${activeFolder.name}/${fn}`)} />
+                <GroupThumbGrid
+                  images={activeFolder.images.map((fn) => `${activeFolder.name}/${fn}`)}
+                />
                 <div className="card-info">
                   <span className="card-badge">{activeGridIndex + 1}</span>
-                  <span className="card-name">{stripFolderNumber(activeFolder.name) || activeFolder.name}</span>
+                  <span className="card-name">
+                    {stripFolderNumber(activeFolder.name) || activeFolder.name}
+                  </span>
                 </div>
               </div>
             ) : null}
@@ -565,23 +616,25 @@ export function App() {
         />
       )}
 
-      {showPaths && targetDir && (() => {
-        const pathsText = images
-          .filter((i) => selectedIds.has(i.filename))
-          .map((i) => `@"${targetDir}/${i.filename}"`)
-          .join("\n");
-        return (
-          <PathsModal
-            pathsText={pathsText}
-            onClose={() => setShowPaths(false)}
-            onCopy={() => {
-              navigator.clipboard.writeText(pathsText);
-              setShowPaths(false);
-              showToast("Paths copied to clipboard", "success");
-            }}
-          />
-        );
-      })()}
+      {showPaths &&
+        targetDir &&
+        (() => {
+          const pathsText = images
+            .filter((i) => selectedIds.has(i.filename))
+            .map((i) => `@"${targetDir}/${i.filename}"`)
+            .join("\n");
+          return (
+            <PathsModal
+              pathsText={pathsText}
+              onClose={() => setShowPaths(false)}
+              onCopy={() => {
+                navigator.clipboard.writeText(pathsText);
+                setShowPaths(false);
+                showToast("Paths copied to clipboard", "success");
+              }}
+            />
+          );
+        })()}
 
       {showOrganize && (
         <OrganizeModal

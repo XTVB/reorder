@@ -1,14 +1,20 @@
-import { useEffect, useCallback, useRef } from "react";
+import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
-import type { DragStartEvent, DragEndEvent } from "@dnd-kit/core";
+import { useCallback, useEffect, useRef } from "react";
+import { useDndStore } from "../stores/dndStore.ts";
+import { useFolderStore } from "../stores/folderStore.ts";
+import { useGroupStore } from "../stores/groupStore.ts";
 import { useImageStore } from "../stores/imageStore.ts";
 import { useSelectionStore } from "../stores/selectionStore.ts";
-import { useDndStore } from "../stores/dndStore.ts";
-import { useGroupStore } from "../stores/groupStore.ts";
-import { useFolderStore } from "../stores/folderStore.ts";
-import { isGroupSortId, isFolderSortId, fromFolderSortId, toFolderSortId, setDragEndTime } from "../utils/helpers.ts";
-import { multiDragReorder, flattenOrder, repositionBlock } from "../utils/reorder.ts";
 import { computeGridItems, gridItemId } from "../utils/gridItems.ts";
+import {
+  fromFolderSortId,
+  isFolderSortId,
+  isGroupSortId,
+  setDragEndTime,
+  toFolderSortId,
+} from "../utils/helpers.ts";
+import { flattenOrder, multiDragReorder, repositionBlock } from "../utils/reorder.ts";
 
 interface DragHandlersDeps {
   addImagesToGroup: (groupId: string, filenames: string[]) => void;
@@ -44,7 +50,8 @@ export function useDragHandlers({ addImagesToGroup, handleGroupReorder }: DragHa
         const popoverEl = el.closest("[data-group-popover]") as HTMLElement | null;
         if (popoverEl?.dataset.groupPopover) return popoverEl.dataset.groupPopover;
         const folderPopoverEl = el.closest("[data-folder-popover]") as HTMLElement | null;
-        if (folderPopoverEl?.dataset.folderPopover) return toFolderSortId(folderPopoverEl.dataset.folderPopover);
+        if (folderPopoverEl?.dataset.folderPopover)
+          return toFolderSortId(folderPopoverEl.dataset.folderPopover);
         // Check folder cards
         const folderEl = el.closest("[data-folder-name]") as HTMLElement | null;
         if (folderEl?.dataset.folderName) {
@@ -102,18 +109,23 @@ export function useDragHandlers({ addImagesToGroup, handleGroupReorder }: DragHa
   };
   const dragStartRef = useRef(handleDragStartImpl);
   dragStartRef.current = handleDragStartImpl;
-  const handleDragStart = useCallback(
-    (event: DragStartEvent) => dragStartRef.current(event),
-    []
-  );
+  const handleDragStart = useCallback((event: DragStartEvent) => dragStartRef.current(event), []);
 
   // Drag end
   const handleDragEndImpl = (event: DragEndEvent) => {
     const { dragOverGroupId, clearDrag } = useDndStore.getState();
     const { selectedIds, removeFromSelection } = useSelectionStore.getState();
     const { images, setImages } = useImageStore.getState();
-    const { groups, groupsEnabled, expandedGroupId, groupMap, updateGroups, collapseGroup } = useGroupStore.getState();
-    const { folderModeEnabled, folders, expandedFolderName, reorderFolders, moveImages, reorderWithinFolder } = useFolderStore.getState();
+    const { groups, groupsEnabled, expandedGroupId, groupMap, updateGroups, collapseGroup } =
+      useGroupStore.getState();
+    const {
+      folderModeEnabled,
+      folders,
+      expandedFolderName,
+      reorderFolders,
+      moveImages,
+      reorderWithinFolder,
+    } = useFolderStore.getState();
 
     const dropGroupId = dragOverGroupId;
     clearDrag();
@@ -172,9 +184,8 @@ export function useDragHandlers({ addImagesToGroup, handleGroupReorder }: DragHa
 
     // ---- Regular (non-folder) mode drag end ----
     const isAidGroup = isGroupSortId(aid);
-    const toAdd = !isAidGroup && selectedIds.size > 0 && selectedIds.has(aid)
-      ? [...selectedIds]
-      : [aid];
+    const toAdd =
+      !isAidGroup && selectedIds.size > 0 && selectedIds.has(aid) ? [...selectedIds] : [aid];
 
     if (dropGroupId && dropGroupId !== expandedGroupId && !isAidGroup && groupsEnabled) {
       addImagesToGroup(dropGroupId, toAdd);
@@ -189,22 +200,35 @@ export function useDragHandlers({ addImagesToGroup, handleGroupReorder }: DragHa
     if (!over || active.id === over.id) return;
     const oid = over.id as string;
 
-    const gridItems = computeGridItems(images, { mode: "groups", groups, enabled: groupsEnabled, expandedGroupId });
+    const gridItems = computeGridItems(images, {
+      mode: "groups",
+      groups,
+      enabled: groupsEnabled,
+      expandedGroupId,
+    });
     const gridIds = gridItems.map(gridItemId);
 
-    const expandedGroup = expandedGroupId ? groupMap.get(expandedGroupId) ?? null : null;
+    const expandedGroup = expandedGroupId ? (groupMap.get(expandedGroupId) ?? null) : null;
     const expandedSet = expandedGroup ? new Set(expandedGroup.images) : null;
     const activeInExpanded = expandedSet?.has(aid) ?? false;
     const overInExpanded = expandedSet?.has(oid) ?? false;
 
     // Reorder within expanded group
     if (activeInExpanded && overInExpanded && expandedGroup) {
-      const selectedInGroup = selectedIds.size > 0 && selectedIds.has(aid)
-        ? new Set([...selectedIds].filter((fn) => expandedSet!.has(fn)))
-        : null;
-      const newOrder = selectedInGroup && selectedInGroup.size > 1
-        ? (selectedInGroup.has(oid) ? null : multiDragReorder(expandedGroup.images, selectedInGroup, aid, oid))
-        : arrayMove([...expandedGroup.images], expandedGroup.images.indexOf(aid), expandedGroup.images.indexOf(oid));
+      const selectedInGroup =
+        selectedIds.size > 0 && selectedIds.has(aid)
+          ? new Set([...selectedIds].filter((fn) => expandedSet!.has(fn)))
+          : null;
+      const newOrder =
+        selectedInGroup && selectedInGroup.size > 1
+          ? selectedInGroup.has(oid)
+            ? null
+            : multiDragReorder(expandedGroup.images, selectedInGroup, aid, oid)
+          : arrayMove(
+              [...expandedGroup.images],
+              expandedGroup.images.indexOf(aid),
+              expandedGroup.images.indexOf(oid),
+            );
       if (!newOrder) return;
       handleGroupReorder(expandedGroup.id, newOrder);
       return;
@@ -212,21 +236,23 @@ export function useDragHandlers({ addImagesToGroup, handleGroupReorder }: DragHa
 
     // Dragged out of expanded group
     if (activeInExpanded && !overInExpanded && expandedGroup) {
-      const toRemove = selectedIds.size > 0 && selectedIds.has(aid)
-        ? new Set([...selectedIds].filter((fn) => expandedSet!.has(fn)))
-        : new Set([aid]);
+      const toRemove =
+        selectedIds.size > 0 && selectedIds.has(aid)
+          ? new Set([...selectedIds].filter((fn) => expandedSet!.has(fn)))
+          : new Set([aid]);
       const updatedGroups = groups
         .map((g) =>
           g.id === expandedGroup.id
             ? { ...g, images: g.images.filter((fn) => !toRemove.has(fn)) }
-            : g
+            : g,
         )
         .filter((g) => g.images.length > 0);
       updateGroups(() => updatedGroups);
       if (!updatedGroups.some((g) => g.id === expandedGroupId)) collapseGroup();
-      const newIds = toRemove.size > 1
-        ? multiDragReorder(gridIds, toRemove, aid, oid)
-        : arrayMove([...gridIds], gridIds.indexOf(aid), gridIds.indexOf(oid));
+      const newIds =
+        toRemove.size > 1
+          ? multiDragReorder(gridIds, toRemove, aid, oid)
+          : arrayMove([...gridIds], gridIds.indexOf(aid), gridIds.indexOf(oid));
       setImages(flattenOrder(newIds, updatedGroups, images));
       return;
     }
@@ -251,17 +277,16 @@ export function useDragHandlers({ addImagesToGroup, handleGroupReorder }: DragHa
     // Default: normal grid reorder
     const isMultiDrag = selectedIds.size > 1 && selectedIds.has(aid);
     const newIds = isMultiDrag
-      ? (selectedIds.has(oid) ? null : multiDragReorder(gridIds, selectedIds, aid, oid))
+      ? selectedIds.has(oid)
+        ? null
+        : multiDragReorder(gridIds, selectedIds, aid, oid)
       : arrayMove([...gridIds], gridIds.indexOf(aid), gridIds.indexOf(oid));
     if (!newIds) return;
     setImages(flattenOrder(newIds, groups, images));
   };
   const dragEndRef = useRef(handleDragEndImpl);
   dragEndRef.current = handleDragEndImpl;
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => dragEndRef.current(event),
-    []
-  );
+  const handleDragEnd = useCallback((event: DragEndEvent) => dragEndRef.current(event), []);
 
   return { handleDragStart, handleDragEnd };
 }

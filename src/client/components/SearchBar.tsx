@@ -1,7 +1,16 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } from "react";
+import type React from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useGroupStore } from "../stores/groupStore.ts";
 import type { GridItem } from "../types.ts";
 import { gridItemId } from "../utils/gridItems.ts";
-import { useGroupStore } from "../stores/groupStore.ts";
 
 // Context to share search state between SearchBar and App
 type SearchContextType = ReturnType<typeof useSearchState>;
@@ -29,17 +38,32 @@ export function useSearchState() {
 
   const open = useCallback(() => setIsOpen(true), []);
 
-  return { isOpen, query, setQuery, matchIds, setMatchIds, currentMatchId, setCurrentMatchId, open, close };
+  return {
+    isOpen,
+    query,
+    setQuery,
+    matchIds,
+    setMatchIds,
+    currentMatchId,
+    setCurrentMatchId,
+    open,
+    close,
+  };
 }
 
 export function SearchBar({ gridItems, onScrollToRow, columnCount }: SearchBarProps) {
-  const { isOpen, query, setQuery, matchIds, setMatchIds, setCurrentMatchId, open, close } = useSearchContext()!;
+  const { isOpen, query, setQuery, matchIds, setMatchIds, setCurrentMatchId, open, close } =
+    useSearchContext()!;
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const groupMap = useGroupStore((s) => s.groupMap);
 
   // Compute matches (pure — no state updates)
-  const { gridIndices: matches, orderedIds, ids } = useMemo(() => {
+  const {
+    gridIndices: matches,
+    orderedIds,
+    ids,
+  } = useMemo(() => {
     if (!query.trim()) {
       return { gridIndices: [] as number[], orderedIds: [] as string[], ids: new Set<string>() };
     }
@@ -150,10 +174,20 @@ export function SearchBar({ gridItems, onScrollToRow, columnCount }: SearchBarPr
             : "No matches"
           : ""}
       </span>
-      <button className="search-nav-btn" onClick={goPrev} disabled={matches.length === 0} title="Previous (Shift+Enter)">
+      <button
+        className="search-nav-btn"
+        onClick={goPrev}
+        disabled={matches.length === 0}
+        title="Previous (Shift+Enter)"
+      >
         &#8593;
       </button>
-      <button className="search-nav-btn" onClick={goNext} disabled={matches.length === 0} title="Next (Enter)">
+      <button
+        className="search-nav-btn"
+        onClick={goNext}
+        disabled={matches.length === 0}
+        title="Next (Enter)"
+      >
         &#8595;
       </button>
       <button className="search-close-btn" onClick={close} title="Close (Esc)">

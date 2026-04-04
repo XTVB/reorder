@@ -10,12 +10,20 @@ interface PreviewModalProps {
 
 export function PreviewModal({ renames, onClose, onConfirm }: PreviewModalProps) {
   return (
-    <Modal title="Preview Renames" onClose={onClose} footer={
-      <>
-        <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
-        <button className="btn btn-primary" onClick={onConfirm}>Confirm Rename</button>
-      </>
-    }>
+    <Modal
+      title="Preview Renames"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={onConfirm}>
+            Confirm Rename
+          </button>
+        </>
+      }
+    >
       <table className="rename-table">
         <thead>
           <tr>

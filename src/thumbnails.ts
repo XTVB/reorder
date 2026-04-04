@@ -1,5 +1,5 @@
+import { mkdir, readdir, rm, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { stat, mkdir, readdir, unlink, rm } from "node:fs/promises";
 import sharp from "sharp";
 
 const CACHE_DIR = ".reorder-cache";
@@ -30,10 +30,7 @@ async function generateThumbnail(sourcePath: string, cachePath: string): Promise
     .toFile(cachePath);
 }
 
-export async function getThumbnail(
-  targetDir: string,
-  filename: string
-): Promise<{ path: string }> {
+export async function getThumbnail(targetDir: string, filename: string): Promise<{ path: string }> {
   const cacheDir = await ensureCacheDir(targetDir);
   const sourcePath = join(targetDir, filename);
 
@@ -68,7 +65,7 @@ export async function clearCache(targetDir: string): Promise<void> {
 export async function preGenerateThumbnails(
   targetDir: string,
   filenames: string[],
-  concurrency = 8
+  concurrency = 8,
 ): Promise<void> {
   const cacheDir = await ensureCacheDir(targetDir);
   let completed = 0;

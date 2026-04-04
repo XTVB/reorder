@@ -5,9 +5,16 @@
   padding: 24px;
 }
 
-.grid-scroll-container::-webkit-scrollbar { width: 6px; }
-.grid-scroll-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-.grid-scroll-container::-webkit-scrollbar-track { background: transparent; }
+.grid-scroll-container::-webkit-scrollbar {
+  width: 6px;
+}
+.grid-scroll-container::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.grid-scroll-container::-webkit-scrollbar-track {
+  background: transparent;
+}
 
 /* Virtual grid row — CSS auto-fill handles column count and sizing */
 .grid-row {

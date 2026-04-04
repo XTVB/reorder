@@ -1,8 +1,9 @@
-import React, { memo, useRef, useEffect, useCallback } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import type React from "react";
+import { memo, useCallback, useEffect, useRef } from "react";
 import type { FolderGroup } from "../types.ts";
-import { cn, toFolderSortId, wasJustDragged, stripFolderNumber } from "../utils/helpers.ts";
+import { cn, stripFolderNumber, toFolderSortId, wasJustDragged } from "../utils/helpers.ts";
 import { GroupThumbGrid } from "./GroupThumbGrid.tsx";
 
 export const SortableFolderCard = memo(function SortableFolderCard({
@@ -31,15 +32,24 @@ export const SortableFolderCard = memo(function SortableFolderCard({
   popover?: React.ReactNode;
 }) {
   const sortId = toFolderSortId(folder.name);
-  const { attributes, listeners, setNodeRef: setSortRef, transform, transition, isDragging } =
-    useSortable({ id: sortId });
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setSortRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: sortId });
 
   const cardRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const setNodeRef = useCallback((node: HTMLDivElement | null) => {
-    setSortRef(node);
-    (cardRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
-  }, [setSortRef]);
+  const setNodeRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      setSortRef(node);
+      (cardRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+    },
+    [setSortRef],
+  );
 
   useEffect(() => {
     if (!isExpanded || !cardRef.current || !popoverRef.current) return;
@@ -60,7 +70,9 @@ export const SortableFolderCard = memo(function SortableFolderCard({
   }
 
   const style = {
-    transform: isFrozen ? (frozenTransform.current ?? CSS.Transform.toString(transform)) : CSS.Transform.toString(transform),
+    transform: isFrozen
+      ? (frozenTransform.current ?? CSS.Transform.toString(transform))
+      : CSS.Transform.toString(transform),
     transition: isFrozen ? "none" : transition,
   };
 
@@ -98,7 +110,11 @@ export const SortableFolderCard = memo(function SortableFolderCard({
         </span>
         <span className="group-count">{folder.images.length}</span>
       </div>
-      {popover && <div ref={popoverRef} className="group-popover-anchor">{popover}</div>}
+      {popover && (
+        <div ref={popoverRef} className="group-popover-anchor">
+          {popover}
+        </div>
+      )}
     </div>
   );
 });

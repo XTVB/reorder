@@ -1,7 +1,8 @@
 import { create } from "zustand";
-import type { ClusterData, ClusterResultData } from "../types.ts";
+import type { ClusterData, ClusterResultData, WeightConfig } from "../types.ts";
 import { postJson } from "../utils/helpers.ts";
 import { consolidateBlock } from "../utils/reorder.ts";
+import { consumeSSE } from "../utils/sse.ts";
 import { useGroupStore } from "./groupStore.ts";
 import { useImageStore } from "./imageStore.ts";
 import { useUIStore } from "./uiStore.ts";
@@ -10,16 +11,20 @@ interface ClusterState {
   clusterData: ClusterData | null;
   loading: boolean;
   progress: string;
-  mergeSelection: Set<string>;      // cluster IDs selected for merging
-  selectedImages: Set<string>;       // keys: "clusterId:filename"
+  mergeSelection: Set<string>; // cluster IDs selected for merging
+  selectedImages: Set<string>; // keys: "clusterId:filename"
   collapsedClusters: Set<string>;
   lastClickedImage: { clusterId: string; index: number } | null;
   lightbox: { clusterId: string; imageIndex: number } | null;
   treeStale: boolean;
   focusedClusterId: string | null;
+  weights: WeightConfig;
 
+  setWeights: (w: WeightConfig) => void;
   fetchClusters: (nClusters?: number) => Promise<void>;
   recutClusters: (nClusters: number) => Promise<void>;
+  recutByThreshold: (threshold: number) => Promise<void>;
+  recutAdaptive: (minClusterSize: number) => Promise<void>;
   toggleMergeSelect: (clusterId: string) => void;
   clearMergeSelection: () => void;
   toggleImageSelect: (clusterId: string, filename: string) => void;
@@ -80,14 +85,18 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
   lightbox: null,
   treeStale: false,
   focusedClusterId: null,
+  weights: { pecore_g: 1.0, color: 0.5 },
+
+  setWeights: (w) => set({ weights: w, treeStale: true }),
 
   fetchClusters: async (nClusters = 200) => {
     set({ loading: true, progress: "Starting clustering..." });
     try {
+      const { weights } = get();
       const response = await fetch("/api/cluster", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nClusters }),
+        body: JSON.stringify({ nClusters, weights }),
       });
 
       if (response.status === 409) {
@@ -95,43 +104,20 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
         return;
       }
 
-      const reader = response.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
       let result: ClusterData | null = null;
-      let eventType = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            eventType = line.slice(7);
-          } else if (line.startsWith("data: ")) {
-            const data = JSON.parse(line.slice(6));
-            if (eventType === "progress") {
-              set({ progress: data.message });
-            } else if (eventType === "result") {
-              result = data;
-            } else if (eventType === "error") {
-              set({ loading: false, progress: `Error: ${data.error}` });
-              return;
-            }
-            eventType = "";
-          } else if (line === "") {
-            eventType = "";
-          }
-        }
-      }
+      await consumeSSE(response, {
+        onProgress: (message) => set({ progress: message }),
+        onResult: (data) => {
+          result = data as ClusterData;
+        },
+        onError: (error) => {
+          set({ loading: false, progress: `Error: ${error}` });
+        },
+      });
 
       if (result) {
         set({ ...applyClusterResult(result), treeStale: false });
-      } else {
+      } else if (!get().progress.startsWith("Error:")) {
         set({ loading: false, progress: "No results returned" });
       }
     } catch (err) {
@@ -143,6 +129,28 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
     set({ loading: true, progress: "Re-cutting tree..." });
     try {
       const res = await postJson("/api/cluster/recut", { nClusters });
+      const result: ClusterData = await res.json();
+      set(applyClusterResult(result));
+    } catch (err) {
+      set({ loading: false, progress: `Error: ${err}` });
+    }
+  },
+
+  recutByThreshold: async (threshold: number) => {
+    set({ loading: true, progress: "Re-cutting tree..." });
+    try {
+      const res = await postJson("/api/cluster/recut", { threshold });
+      const result: ClusterData = await res.json();
+      set(applyClusterResult(result));
+    } catch (err) {
+      set({ loading: false, progress: `Error: ${err}` });
+    }
+  },
+
+  recutAdaptive: async (minClusterSize: number) => {
+    set({ loading: true, progress: "Adaptive re-cut..." });
+    try {
+      const res = await postJson("/api/cluster/recut", { minClusterSize });
       const result: ClusterData = await res.json();
       set(applyClusterResult(result));
     } catch (err) {
@@ -164,7 +172,7 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
     const key = `${clusterId}:${filename}`;
     if (sel.has(key)) sel.delete(key);
     else sel.add(key);
-    const cluster = get().clusterData?.clusters.find(c => c.id === clusterId);
+    const cluster = get().clusterData?.clusters.find((c) => c.id === clusterId);
     const index = cluster?.images.indexOf(filename) ?? -1;
     set({ selectedImages: sel, lastClickedImage: { clusterId, index } });
   },
@@ -172,7 +180,7 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
   rangeSelectImages: (clusterId, toIndex) => {
     const { lastClickedImage, clusterData } = get();
     if (!lastClickedImage || lastClickedImage.clusterId !== clusterId || !clusterData) return;
-    const cluster = clusterData.clusters.find(c => c.id === clusterId);
+    const cluster = clusterData.clusters.find((c) => c.id === clusterId);
     if (!cluster) return;
 
     const from = Math.min(lastClickedImage.index, toIndex);
@@ -193,7 +201,7 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
     set({
       clusterData: {
         ...clusterData,
-        clusters: clusterData.clusters.filter(c => c.id !== clusterId),
+        clusters: clusterData.clusters.filter((c) => c.id !== clusterId),
       },
     });
   },
@@ -210,7 +218,7 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
   collapseAll: () => {
     const data = get().clusterData;
     if (!data) return;
-    set({ collapsedClusters: new Set(data.clusters.map(c => c.id)) });
+    set({ collapsedClusters: new Set(data.clusters.map((c) => c.id)) });
   },
 
   openLightbox: (clusterId, imageIndex) => set({ lightbox: { clusterId, imageIndex } }),
@@ -226,7 +234,7 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
       set({ focusedClusterId: clusters[direction === 1 ? 0 : clusters.length - 1]!.id });
       return;
     }
-    const idx = clusters.findIndex(c => c.id === focusedClusterId);
+    const idx = clusters.findIndex((c) => c.id === focusedClusterId);
     const next = idx + direction;
     if (next >= 0 && next < clusters.length) {
       set({ focusedClusterId: clusters[next]!.id });
@@ -239,8 +247,8 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
     set({
       clusterData: {
         ...clusterData,
-        clusters: clusterData.clusters.map(c =>
-          c.id === clusterId ? { ...c, autoName: name } : c
+        clusters: clusterData.clusters.map((c) =>
+          c.id === clusterId ? { ...c, autoName: name } : c,
         ),
       },
     });
@@ -250,25 +258,28 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
     const { mergeSelection, clusterData } = get();
     if (!clusterData || mergeSelection.size < 2) return;
 
-    const selected = clusterData.clusters.filter(c => mergeSelection.has(c.id));
+    const selected = clusterData.clusters.filter((c) => mergeSelection.has(c.id));
     if (selected.length < 2) return;
     selected.sort((a, b) => b.images.length - a.images.length);
-    const target = selected.find(c => c.confirmedGroup) ?? selected[0];
+    const target = selected.find((c) => c.confirmedGroup) ?? selected[0];
     if (!target) return;
-    const sources = selected.filter(c => c.id !== target.id);
+    const sources = selected.filter((c) => c.id !== target.id);
 
     const seen = new Set(target.images);
     const mergedImages = [...target.images];
     for (const src of sources) {
       for (const f of src.images) {
-        if (!seen.has(f)) { seen.add(f); mergedImages.push(f); }
+        if (!seen.has(f)) {
+          seen.add(f);
+          mergedImages.push(f);
+        }
       }
     }
 
-    const sourceIds = new Set(sources.map(s => s.id));
+    const sourceIds = new Set(sources.map((s) => s.id));
     const newClusters = clusterData.clusters
-      .filter(c => !sourceIds.has(c.id))
-      .map(c => c.id === target.id ? { ...c, images: mergedImages.sort() } : c);
+      .filter((c) => !sourceIds.has(c.id))
+      .map((c) => (c.id === target.id ? { ...c, images: mergedImages.sort() } : c));
 
     set({
       clusterData: { ...clusterData, clusters: newClusters },
@@ -287,15 +298,15 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
       byCluster.get(clusterId)!.push(filename);
     }
 
-    let newClusters = [...clusterData.clusters];
+    const newClusters = [...clusterData.clusters];
     for (const [clusterId, filenames] of byCluster) {
-      const sourceIdx = newClusters.findIndex(c => c.id === clusterId);
+      const sourceIdx = newClusters.findIndex((c) => c.id === clusterId);
       if (sourceIdx === -1) continue;
       const source = newClusters[sourceIdx];
       if (!source || filenames.length >= source.images.length) continue;
 
       const removeSet = new Set(filenames);
-      const remaining = source.images.filter(f => !removeSet.has(f));
+      const remaining = source.images.filter((f) => !removeSet.has(f));
       const splitFiles = filenames.sort();
 
       newClusters[sourceIdx] = { ...source, images: remaining };
@@ -318,14 +329,16 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
 
   acceptCluster: (cluster) => {
     const name = cluster.autoName || `Cluster ${cluster.id}`;
-    const { updateGroups } = useGroupStore.getState();
+    const { updateGroups, groupsLoaded } = useGroupStore.getState();
     const { images, setImages } = useImageStore.getState();
     const { showToast } = useUIStore.getState();
 
-    updateGroups((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), name, images: cluster.images },
-    ]);
+    if (!groupsLoaded) {
+      showToast("Groups still loading — please wait", "warning");
+      return;
+    }
+
+    updateGroups((prev) => [...prev, { id: crypto.randomUUID(), name, images: cluster.images }]);
     setImages(consolidateBlock(images, new Set(cluster.images)));
     showToast(`Created group "${name}" with ${cluster.images.length} images`, "success");
     get().dismissCluster(cluster.id);
@@ -336,9 +349,16 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
     const { clusterData } = get();
     if (!clusterData) return;
     const { showToast } = useUIStore.getState();
+    const { groupsLoaded } = useGroupStore.getState();
 
-    const eligible = clusterData.clusters
-      .filter(c => !c.confirmedGroup && c.images.length >= minSize);
+    if (!groupsLoaded) {
+      showToast("Groups still loading — please wait", "warning");
+      return;
+    }
+
+    const eligible = clusterData.clusters.filter(
+      (c) => !c.confirmedGroup && c.images.length >= minSize,
+    );
 
     if (eligible.length === 0) {
       showToast("No eligible clusters to accept", "warning");
@@ -350,47 +370,75 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
       return;
     }
 
-    const dismissIds = new Set(eligible.map(c => c.id));
-    const newGroups = eligible.map(c => ({
-      id: crypto.randomUUID(), name: c.autoName || `Cluster ${c.id}`, images: c.images,
+    const dismissIds = new Set(eligible.map((c) => c.id));
+    const newGroups = eligible.map((c) => ({
+      id: crypto.randomUUID(),
+      name: c.autoName || `Cluster ${c.id}`,
+      images: c.images,
     }));
 
     const { updateGroups } = useGroupStore.getState();
     const { images, setImages } = useImageStore.getState();
     updateGroups((prev) => [...prev, ...newGroups]);
-    const allAccepted = new Set(eligible.flatMap(c => c.images));
+    const allAccepted = new Set(eligible.flatMap((c) => c.images));
     setImages(consolidateBlock(images, allAccepted));
     showToast(`Created ${newGroups.length} groups`, "success");
     set({
-      clusterData: { ...clusterData, clusters: clusterData.clusters.filter(c => !dismissIds.has(c.id)) },
+      clusterData: {
+        ...clusterData,
+        clusters: clusterData.clusters.filter((c) => !dismissIds.has(c.id)),
+      },
       treeStale: true,
     });
   },
 
   addToGroup: (cluster) => {
     if (!cluster.confirmedGroup) return;
+    const { groupsLoaded } = useGroupStore.getState();
+    if (!groupsLoaded) {
+      useUIStore.getState().showToast("Groups still loading — please wait", "warning");
+      return;
+    }
     const groupId = cluster.confirmedGroup.id;
     const confirmedSet = new Set(cluster.confirmedGroup.images);
-    const suggested = cluster.images.filter(f => !confirmedSet.has(f));
+    const suggested = cluster.images.filter((f) => !confirmedSet.has(f));
 
-    const { selectedImages } = get();
+    const { selectedImages, clusterData } = get();
     const selectedInCluster = [...selectedImages]
-      .filter(key => key.startsWith(`${cluster.id}:`))
-      .map(key => key.slice(cluster.id.length + 1))
-      .filter(f => !confirmedSet.has(f));
+      .filter((key) => key.startsWith(`${cluster.id}:`))
+      .map((key) => key.slice(cluster.id.length + 1))
+      .filter((f) => !confirmedSet.has(f));
     const toAdd = selectedInCluster.length > 0 ? selectedInCluster : suggested;
 
     const { updateGroups } = useGroupStore.getState();
     const { showToast } = useUIStore.getState();
     updateGroups((prev) =>
-      prev.map(g =>
-        g.id === groupId
-          ? { ...g, images: [...g.images, ...toAdd] }
-          : g
-      )
+      prev.map((g) => (g.id === groupId ? { ...g, images: [...g.images, ...toAdd] } : g)),
     );
     showToast(`Added ${toAdd.length} images to "${cluster.confirmedGroup.name}"`, "success");
-    set({ selectedImages: new Set(), lastClickedImage: null, treeStale: true });
+
+    // Update the cluster's confirmedGroup snapshot so it reflects the new state
+    const newConfirmedImages = [...cluster.confirmedGroup.images, ...toAdd];
+    const updatedClusters = clusterData
+      ? clusterData.clusters.map((c) =>
+          c.id === cluster.id
+            ? { ...c, confirmedGroup: { ...cluster.confirmedGroup!, images: newConfirmedImages } }
+            : c,
+        )
+      : [];
+
+    // Auto-collapse if all images are now confirmed
+    const collapsed = new Set(get().collapsedClusters);
+    const allConfirmed = newConfirmedImages.length >= cluster.images.length;
+    if (allConfirmed) collapsed.add(cluster.id);
+
+    set({
+      clusterData: clusterData ? { ...clusterData, clusters: updatedClusters } : null,
+      collapsedClusters: collapsed,
+      selectedImages: new Set(),
+      lastClickedImage: null,
+      treeStale: true,
+    });
   },
 
   loadCachedClusters: async () => {

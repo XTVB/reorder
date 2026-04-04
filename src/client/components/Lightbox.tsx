@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
+import type React from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ImageInfo } from "../types.ts";
 import { fullImageUrl } from "../utils/helpers.ts";
 
@@ -32,6 +33,7 @@ export function Lightbox({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only — uses refs for current index/onClose to avoid re-registering on every navigation
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       switch (e.key) {
@@ -115,7 +117,12 @@ export function Lightbox({
   }
 
   return (
-    <div className="lightbox-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div
+      className="lightbox-backdrop"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <button className="lightbox-close" onClick={onClose} aria-label="Close">
         &times;
       </button>
@@ -152,10 +159,10 @@ export function Lightbox({
 
       <div className="lightbox-bar">
         <span className="lightbox-filename">{image.filename}</span>
-        <span className="lightbox-counter">{index + 1} / {images.length}</span>
-        {isZoomed && (
-          <span className="lightbox-zoom">{Math.round(scale * 100)}%</span>
-        )}
+        <span className="lightbox-counter">
+          {index + 1} / {images.length}
+        </span>
+        {isZoomed && <span className="lightbox-zoom">{Math.round(scale * 100)}%</span>}
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
-import { useImageStore } from "../stores/imageStore.ts";
 import { useGroupStore } from "../stores/groupStore.ts";
+import { useImageStore } from "../stores/imageStore.ts";
 import { useSelectionStore } from "../stores/selectionStore.ts";
 import { consolidateBlock, repositionBlock } from "../utils/reorder.ts";
 
@@ -21,19 +21,21 @@ export function useGroupOperations() {
     const targetGroup = newGroups.find((g) => g.id === groupId);
     if (!targetGroup) return;
 
-    setImages((() => {
-      const allGroupImages = new Set(targetGroup.images);
-      const toMove = images.filter((i) => fileSet.has(i.filename));
-      const rest = images.filter((i) => !fileSet.has(i.filename));
-      let lastIdx = -1;
-      for (let i = 0; i < rest.length; i++) {
-        if (allGroupImages.has(rest[i]!.filename)) lastIdx = i;
-      }
-      if (lastIdx === -1) return images;
-      const out = [...rest];
-      out.splice(lastIdx + 1, 0, ...toMove);
-      return out;
-    })());
+    setImages(
+      (() => {
+        const allGroupImages = new Set(targetGroup.images);
+        const toMove = images.filter((i) => fileSet.has(i.filename));
+        const rest = images.filter((i) => !fileSet.has(i.filename));
+        let lastIdx = -1;
+        for (let i = 0; i < rest.length; i++) {
+          if (allGroupImages.has(rest[i]!.filename)) lastIdx = i;
+        }
+        if (lastIdx === -1) return images;
+        const out = [...rest];
+        out.splice(lastIdx + 1, 0, ...toMove);
+        return out;
+      })(),
+    );
 
     removeFromSelection(filenames);
   }
@@ -41,9 +43,7 @@ export function useGroupOperations() {
   function handleGroupReorder(groupId: string, newOrder: string[]) {
     const { updateGroups } = useGroupStore.getState();
     const { images, setImages } = useImageStore.getState();
-    updateGroups((prev) =>
-      prev.map((g) => (g.id === groupId ? { ...g, images: newOrder } : g))
-    );
+    updateGroups((prev) => prev.map((g) => (g.id === groupId ? { ...g, images: newOrder } : g)));
     setImages(repositionBlock(images, newOrder));
   }
 
@@ -53,10 +53,8 @@ export function useGroupOperations() {
     if (group && group.images.length <= 1) collapseGroup();
     updateGroups((prev) =>
       prev.map((g) =>
-        g.id === groupId
-          ? { ...g, images: g.images.filter((fn) => fn !== filename) }
-          : g
-      )
+        g.id === groupId ? { ...g, images: g.images.filter((fn) => fn !== filename) } : g,
+      ),
     );
   }
 
@@ -66,9 +64,7 @@ export function useGroupOperations() {
     if (!group) return;
     const name = prompt("New group name:", group.name);
     if (!name?.trim()) return;
-    updateGroups((prev) =>
-      prev.map((g) => g.id === groupId ? { ...g, name: name.trim() } : g)
-    );
+    updateGroups((prev) => prev.map((g) => (g.id === groupId ? { ...g, name: name.trim() } : g)));
   }
 
   function handleDeleteGroup(groupId: string) {
@@ -92,10 +88,7 @@ export function useGroupOperations() {
       .map((i) => i.filename);
 
     setImages(consolidateBlock(images, selectedIds));
-    updateGroups((prev) => [
-      ...prev,
-      { id, name: name.trim(), images: selectedInOrder },
-    ]);
+    updateGroups((prev) => [...prev, { id, name: name.trim(), images: selectedInOrder }]);
     clearSelection();
   };
   const createGroupRef = useRef(handleCreateGroupImpl);

@@ -1,11 +1,11 @@
 import React, { useEffect } from "react";
+import { useGroupOperations } from "../hooks/useGroupOperations.ts";
+import { useFolderStore } from "../stores/folderStore.ts";
+import { flushGroupPersist, useGroupStore } from "../stores/groupStore.ts";
 import { useImageStore } from "../stores/imageStore.ts";
 import { useSelectionStore } from "../stores/selectionStore.ts";
-import { useGroupStore, flushGroupPersist } from "../stores/groupStore.ts";
-import { useFolderStore } from "../stores/folderStore.ts";
 import { useUIStore } from "../stores/uiStore.ts";
 import { getErrorMessage, postJson, stripFolderNumber } from "../utils/helpers.ts";
-import { useGroupOperations } from "../hooks/useGroupOperations.ts";
 import { GroupPicker } from "./GroupPicker.tsx";
 
 export function Toolbar() {
@@ -44,16 +44,19 @@ export function Toolbar() {
   const groupOps = useGroupOperations();
 
   // Update header subtitle when counts change
+  // biome-ignore lint/correctness/useExhaustiveDependencies: setHeaderSubtitle is a stable Zustand action
   useEffect(() => {
     let subtitle: string;
     if (folderModeEnabled) {
-      subtitle = selectedIds.size > 0
-        ? `${selectedIds.size} selected`
-        : `${folders.length} folder${folders.length !== 1 ? "s" : ""} — drag to reorder`;
+      subtitle =
+        selectedIds.size > 0
+          ? `${selectedIds.size} selected`
+          : `${folders.length} folder${folders.length !== 1 ? "s" : ""} — drag to reorder`;
     } else {
-      subtitle = selectedIds.size > 0
-        ? `${selectedIds.size} selected — drag to move`
-        : `${images.length} image${images.length !== 1 ? "s" : ""} — drag to reorder`;
+      subtitle =
+        selectedIds.size > 0
+          ? `${selectedIds.size} selected — drag to move`
+          : `${images.length} image${images.length !== 1 ? "s" : ""} — drag to reorder`;
     }
     setHeaderSubtitle(subtitle);
     return () => setHeaderSubtitle("");
@@ -135,7 +138,11 @@ export function Toolbar() {
   async function handleFolderSave() {
     setSaving(true);
     try {
-      const { folders: currentFolders, rootImages: currentRoot, fetchFolders: refreshFolders } = useFolderStore.getState();
+      const {
+        folders: currentFolders,
+        rootImages: currentRoot,
+        fetchFolders: refreshFolders,
+      } = useFolderStore.getState();
       const body = {
         folders: currentFolders.map((f) => ({
           title: stripFolderNumber(f.name) || f.name,
@@ -173,7 +180,9 @@ export function Toolbar() {
           {groups.length > 0 && (
             <GroupPicker
               groups={groups}
-              onSelect={(groupId) => groupOps.addImagesToGroup(groupId, [...useSelectionStore.getState().selectedIds])}
+              onSelect={(groupId) =>
+                groupOps.addImagesToGroup(groupId, [...useSelectionStore.getState().selectedIds])
+              }
               selectedCount={selectedIds.size}
             />
           )}
@@ -184,7 +193,11 @@ export function Toolbar() {
         className={`btn ${folderModeEnabled ? "btn-primary" : "btn-secondary"}`}
         onClick={handleToggleFolderMode}
         disabled={!folderModeEnabled && groups.length > 0}
-        title={!folderModeEnabled && groups.length > 0 ? "Clear groups first to enable folder mode" : undefined}
+        title={
+          !folderModeEnabled && groups.length > 0
+            ? "Clear groups first to enable folder mode"
+            : undefined
+        }
       >
         Folders {folderModeEnabled ? "On" : "Off"}
       </button>

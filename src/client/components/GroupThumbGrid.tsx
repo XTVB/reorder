@@ -6,12 +6,7 @@ export const GroupThumbGrid = React.memo(function GroupThumbGrid({ images }: { i
     const n = images.length;
     if (n === 0) return [];
     if (n <= 4) return images.slice();
-    return [
-      images[0],
-      images[Math.floor(n / 3)],
-      images[Math.floor((n * 2) / 3)],
-      images[n - 1],
-    ];
+    return [images[0], images[Math.floor(n / 3)], images[Math.floor((n * 2) / 3)], images[n - 1]];
   }, [images]);
 
   return (
@@ -19,12 +14,7 @@ export const GroupThumbGrid = React.memo(function GroupThumbGrid({ images }: { i
       {[0, 1, 2, 3].map((i) => (
         <div key={i} className="group-thumb-slot">
           {thumbs[i] ? (
-            <img
-              src={imageUrl(thumbs[i])}
-              alt=""
-              loading="lazy"
-              draggable={false}
-            />
+            <img src={imageUrl(thumbs[i])} alt="" loading="lazy" draggable={false} />
           ) : (
             <div className="group-thumb-empty" />
           )}

@@ -58,9 +58,18 @@ export type GridItem =
   | { type: "folder"; folderName: string }
   | { type: "folder-image"; folderName: string; filename: string };
 
-export type AppMode = "reorder" | "cluster";
+export type AppMode = "reorder" | "cluster" | "cluster-compare";
 
 // Cluster types
+
+export interface WeightConfig {
+  clip?: number;
+  color?: number;
+  dino?: number;
+  pecore_l?: number;
+  pecore_g?: number;
+}
+
 export interface ClusterResultData {
   id: string;
   autoName: string;
@@ -69,8 +78,15 @@ export interface ClusterResultData {
   confirmedGroup: { id: string; name: string; images: string[] } | null;
 }
 
+export interface DistanceProfile {
+  distances: number[];
+  nAfterPremerge: number;
+  nGroups: number;
+}
+
 export interface ClusterData {
   clusters: ClusterResultData[];
   suggestedCounts: number[];
   nClusters: number;
+  distanceProfile?: DistanceProfile;
 }

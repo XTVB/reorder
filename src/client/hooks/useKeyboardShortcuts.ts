@@ -8,7 +8,11 @@ interface KeyboardShortcutsDeps {
   onCreateGroup: () => void;
 }
 
-export function useKeyboardShortcuts({ isLightboxOpen, searchState, onCreateGroup }: KeyboardShortcutsDeps) {
+export function useKeyboardShortcuts({
+  isLightboxOpen,
+  searchState,
+  onCreateGroup,
+}: KeyboardShortcutsDeps) {
   const collapseGroup = useGroupStore((s) => s.collapseGroup);
   const clearSelection = useSelectionStore((s) => s.clearSelection);
 
@@ -21,7 +25,10 @@ export function useKeyboardShortcuts({ isLightboxOpen, searchState, onCreateGrou
     function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         if (lightboxOpenRef.current) return;
-        if (searchState.isOpen) { searchState.close(); return; }
+        if (searchState.isOpen) {
+          searchState.close();
+          return;
+        }
         const expId = useGroupStore.getState().expandedGroupId;
         if (expId) collapseGroup();
         else if (useSelectionStore.getState().selectedIds.size > 0) clearSelection();

@@ -6,7 +6,9 @@
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s, opacity 0.15s;
+  transition:
+    background 0.15s,
+    opacity 0.15s;
   white-space: nowrap;
 }
 
@@ -42,7 +44,6 @@
 .btn-danger:hover:not(:disabled) {
   background: rgba(255, 87, 87, 0.1);
 }
-
 
 .btn-small {
   padding: 4px 10px;

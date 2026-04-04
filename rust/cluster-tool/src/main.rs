@@ -37,6 +37,18 @@ struct Cli {
     /// Color feature weight
     #[arg(long, default_value_t = 0.5)]
     color_weight: f32,
+
+    /// DINOv2 feature weight
+    #[arg(long, default_value_t = 0.0)]
+    dino_weight: f32,
+
+    /// PE-Core-L feature weight
+    #[arg(long, default_value_t = 0.0)]
+    pecore_l_weight: f32,
+
+    /// PE-Core-bigG feature weight
+    #[arg(long, default_value_t = 0.0)]
+    pecore_g_weight: f32,
 }
 
 // ── Data types ───────────────────────────────────────────────────────────────
@@ -88,8 +100,22 @@ fn main() {
     let file = File::open(&cli.embeddings).expect("Failed to open embeddings file");
     let mut npz = NpzReader::new(file).expect("Failed to read npz");
 
-    let clip: Array2<f32> = npz.by_name("clip").expect("Missing 'clip' array");
-    let color: Array2<f32> = npz.by_name("color").expect("Missing 'color' array");
+    // Only load embedding arrays with non-zero weight to save I/O and memory
+    let emb_specs: Vec<(&str, f32, bool)> = vec![
+        ("clip", cli.clip_weight, false),       // already L2-normalized
+        ("dino", cli.dino_weight, false),
+        ("pecore_l", cli.pecore_l_weight, false),
+        ("pecore_g", cli.pecore_g_weight, false),
+        ("color", cli.color_weight, true),       // needs per-row L2 normalization
+    ];
+    let loaded: Vec<(Array2<f32>, f32, bool)> = emb_specs
+        .iter()
+        .filter(|(_, w, _)| *w > 0.0)
+        .map(|(name, w, norm)| {
+            let arr: Array2<f32> = npz.by_name(name).unwrap_or_else(|_| panic!("Missing '{}' array", name));
+            (arr, *w, *norm)
+        })
+        .collect();
 
     // Filenames are stored in a separate JSON file (numpy can't round-trip strings reliably)
     let filenames_path = cli.embeddings.with_extension("filenames.json");
@@ -100,18 +126,19 @@ fn main() {
             .unwrap_or_else(|_| panic!("Invalid filenames JSON: {:?}", filenames_path))
     };
 
-    let n_images = clip.nrows();
-    eprintln!(
-        "Loaded {} images, CLIP dim={}, color dim={}",
-        n_images,
-        clip.ncols(),
-        color.ncols()
-    );
+    let n_images = filenames.len();
+    let active_desc: Vec<String> = emb_specs
+        .iter()
+        .filter(|(_, w, _)| *w > 0.0)
+        .zip(loaded.iter())
+        .map(|((name, w, _), (arr, _, _))| format!("{}={}d×{}", name, arr.ncols(), w))
+        .collect();
+    eprintln!("Loaded {} images, active: {}", n_images, active_desc.join(", "));
 
     // Build combined feature vectors as a flat row-major Vec<f32> for cache-efficient
     // access in the parallel distance computation.
-    let (features_flat, feat_dim) =
-        build_combined_features_flat(&clip, &color, cli.clip_weight, cli.color_weight);
+    let emb_arrays: Vec<(&Array2<f32>, f32, bool)> = loaded.iter().map(|(a, w, n)| (a, *w, *n)).collect();
+    let (features_flat, feat_dim) = build_combined_features_flat(&emb_arrays, n_images);
     eprintln!("Combined feature dim: {}", feat_dim);
 
     // Build filename→index map
@@ -169,7 +196,7 @@ fn main() {
 
     // Save linkage tree
     if !cli.output_tree.is_empty() {
-        save_linkage_tree(&sorted_steps, n_images, n_pre_merges, &cli.output_tree);
+        save_linkage_tree(&sorted_steps, n_images, n_pre_merges, n_groups, &cli.output_tree);
         eprintln!("Saved linkage tree to {}", cli.output_tree);
     }
 
@@ -181,6 +208,7 @@ fn main() {
         n_initial_after_premerge,
         cli.n_clusters,
         n_pre_merges,
+        n_groups,
     );
 
     // Build output — labels are per original image, need to group them
@@ -200,37 +228,43 @@ fn main() {
 /// Returns a flat row-major Vec<f32> and the feature dimension.
 /// Using a flat Vec instead of ndarray removes ndarray indexing overhead in
 /// the hot distance-computation loop.
+/// Build combined feature vector from multiple embedding arrays.
+/// Each entry is (array, weight, needs_l2_norm). Arrays already L2-normalized
+/// from Python have needs_l2_norm=false; color features need per-row normalization.
 fn build_combined_features_flat(
-    clip: &Array2<f32>,
-    color: &Array2<f32>,
-    clip_weight: f32,
-    color_weight: f32,
+    arrays: &[(&Array2<f32>, f32, bool)],
+    n: usize,
 ) -> (Vec<f32>, usize) {
-    let n = clip.nrows();
-    let clip_dim = clip.ncols();
-    let color_dim = color.ncols();
-    let combined_dim = clip_dim + color_dim;
+    let combined_dim: usize = arrays.iter().map(|(a, _, _)| a.ncols()).sum();
     let mut features = vec![0.0f32; n * combined_dim];
 
-    // ndarray rows are contiguous in standard C (row-major) layout
-    let clip_data = clip.as_slice().expect("clip array must be contiguous");
-    let color_data = color.as_slice().expect("color array must be contiguous");
+    // Pre-extract contiguous slices and dims
+    let slices: Vec<(&[f32], usize, f32, bool)> = arrays
+        .iter()
+        .map(|(a, w, norm)| {
+            let data = a.as_slice().expect("array must be contiguous");
+            (data, a.ncols(), *w, *norm)
+        })
+        .collect();
 
     for i in 0..n {
         let out = &mut features[i * combined_dim..][..combined_dim];
+        let mut offset = 0;
 
-        // CLIP features (already L2-normalized from Python)
-        let clip_row = &clip_data[i * clip_dim..][..clip_dim];
-        for (o, &c) in out[..clip_dim].iter_mut().zip(clip_row) {
-            *o = c * clip_weight;
-        }
-
-        // L2-normalize color features per row, then weight
-        let color_row = &color_data[i * color_dim..][..color_dim];
-        let color_norm_sq: f32 = color_row.iter().map(|&x| x * x).sum();
-        let color_norm = color_norm_sq.sqrt().max(1e-10);
-        for (o, &c) in out[clip_dim..].iter_mut().zip(color_row) {
-            *o = (c / color_norm) * color_weight;
+        for &(data, dim, weight, needs_norm) in &slices {
+            let row = &data[i * dim..][..dim];
+            if needs_norm {
+                let norm_sq: f32 = row.iter().map(|&x| x * x).sum();
+                let norm = norm_sq.sqrt().max(1e-10);
+                for (o, &v) in out[offset..offset + dim].iter_mut().zip(row) {
+                    *o = (v / norm) * weight;
+                }
+            } else {
+                for (o, &v) in out[offset..offset + dim].iter_mut().zip(row) {
+                    *o = v * weight;
+                }
+            }
+            offset += dim;
         }
     }
 
@@ -436,15 +470,21 @@ fn wards_linkage_cosine(
     // Using a Vec rather than a BTreeSet keeps iteration cache-friendly.
     let mut active_indices: Vec<usize> = (0..n_images).collect();
 
+    // Pre-compute sorted members and representative (highest index) for each group
+    let group_sorted: Vec<Vec<usize>> = groups
+        .iter()
+        .filter(|g| g.member_indices.len() >= 2)
+        .map(|g| {
+            let mut m = g.member_indices.clone();
+            m.sort();
+            m
+        })
+        .collect();
+
     eprintln!("  Pre-merging {} groups...", n_groups);
     let mut pre_merge_steps: Vec<MergeStep> = Vec::new();
 
-    for group in groups {
-        if group.member_indices.len() < 2 {
-            continue;
-        }
-        let mut members = group.member_indices.clone();
-        members.sort();
+    for members in &group_sorted {
         let target = *members.last().unwrap();
 
         for &member in &members[..members.len() - 1] {
@@ -494,6 +534,17 @@ fn wards_linkage_cosine(
         pre_merge_steps.len(),
         active_indices.len()
     );
+
+    // ── Prevent confirmed groups from ever being merged with each other ───
+    // We use 1e18 rather than f64::MAX because the Ward update formula squares
+    // distances — MAX² overflows to infinity and the subtraction produces NaN.
+    const GROUP_BARRIER: f64 = 1e18;
+    let group_reps: Vec<usize> = group_sorted.iter().map(|m| *m.last().unwrap()).collect();
+    for i in 0..group_reps.len() {
+        for j in (i + 1)..group_reps.len() {
+            set_dist(&mut dist, group_reps[i], group_reps[j], n_images, GROUP_BARRIER);
+        }
+    }
 
     // ── Step 3: NNC (nearest-neighbor chain) Ward's linkage ──────────────
     //
@@ -615,6 +666,7 @@ fn cut_tree(
     n_after_premerge: usize,
     n_clusters: usize,
     n_pre_merges: usize,
+    n_groups: usize,
 ) -> Vec<u32> {
     // Union-find over original image indices.
     // The input steps are already sorted by distance (done in main() before
@@ -644,10 +696,12 @@ fn cut_tree(
 
     // Main steps are already sorted by distance in the input slice.
     // Apply sorted main steps until we reach n_clusters.
-    let main_merges_needed = if n_clusters >= n_after_premerge {
+    // Never go below n_groups clusters — confirmed groups must stay separate.
+    let min_clusters = n_clusters.max(n_groups);
+    let main_merges_needed = if min_clusters >= n_after_premerge {
         0
     } else {
-        n_after_premerge - n_clusters
+        n_after_premerge - min_clusters
     };
 
     for step in merge_steps[n_pre_merges..].iter().take(main_merges_needed) {
@@ -678,13 +732,14 @@ fn cut_tree(
 
 // ── Linkage tree I/O ─────────────────────────────────────────────────────────
 
-fn save_linkage_tree(steps: &[MergeStep], n_images: usize, n_pre_merges: usize, path: &str) {
+fn save_linkage_tree(steps: &[MergeStep], n_images: usize, n_pre_merges: usize, n_groups: usize, path: &str) {
     let file = File::create(path).expect("Failed to create tree file");
     let mut w = BufWriter::new(file);
 
-    // Header: n_images, n_pre_merges, n_total_steps
+    // Header: n_images, n_pre_merges, n_groups, n_total_steps
     w.write_u32::<LittleEndian>(n_images as u32).unwrap();
     w.write_u32::<LittleEndian>(n_pre_merges as u32).unwrap();
+    w.write_u32::<LittleEndian>(n_groups as u32).unwrap();
     w.write_u32::<LittleEndian>(steps.len() as u32).unwrap();
 
     for step in steps {

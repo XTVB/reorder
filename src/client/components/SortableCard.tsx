@@ -1,6 +1,6 @@
-import React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import React from "react";
 import type { ImageInfo } from "../types.ts";
 import { cn, imageUrl, wasJustDragged } from "../utils/helpers.ts";
 
@@ -21,8 +21,9 @@ export const SortableCard = React.memo(function SortableCard({
   isCurrentSearchMatch?: boolean;
   onCardClick: (filename: string, e: React.MouseEvent) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: image.filename });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: image.filename,
+  });
 
   const style = { transform: CSS.Transform.toString(transform), transition };
 

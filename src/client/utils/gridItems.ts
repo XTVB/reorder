@@ -1,5 +1,5 @@
-import type { ImageInfo, ImageGroup, FolderGroup, GridItem } from "../types.ts";
-import { toGroupSortId, toFolderSortId } from "./helpers.ts";
+import type { FolderGroup, GridItem, ImageGroup, ImageInfo } from "../types.ts";
+import { toFolderSortId, toGroupSortId } from "./helpers.ts";
 
 type GridMode =
   | { mode: "folders"; folders: FolderGroup[]; expandedFolderName: string | null }

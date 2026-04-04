@@ -1,7 +1,8 @@
-import React, { useState, useRef, useEffect, useMemo } from "react";
-import type { ClusterResultData } from "../../types.ts";
-import { imageUrl, cn } from "../../utils/helpers.ts";
+import type React from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useClusterStore } from "../../stores/clusterStore.ts";
+import type { ClusterResultData } from "../../types.ts";
+import { cn, imageUrl } from "../../utils/helpers.ts";
 
 interface Props {
   cluster: ClusterResultData;
@@ -22,26 +23,35 @@ interface Props {
 }
 
 export function ClusterCard({
-  cluster, collapsed, mergeSelected, focused, selectedImages,
-  onToggleCollapse, onMergeSelect, onImageSelect, onImageRangeSelect,
-  onAccept, onAddToGroup, onAskClaude, onDismiss, onSplit, onOpenLightbox,
+  cluster,
+  collapsed,
+  mergeSelected,
+  focused,
+  selectedImages,
+  onToggleCollapse,
+  onMergeSelect,
+  onImageSelect,
+  onImageRangeSelect,
+  onAccept,
+  onAddToGroup,
+  onAskClaude,
+  onDismiss,
+  onSplit,
+  onOpenLightbox,
 }: Props) {
   const hasGroup = !!cluster.confirmedGroup;
 
   const confirmedSet = useMemo(
-    () => hasGroup ? new Set(cluster.confirmedGroup!.images) : new Set<string>(),
+    () => (hasGroup ? new Set(cluster.confirmedGroup!.images) : new Set<string>()),
     [hasGroup, cluster.confirmedGroup?.images],
   );
 
   const suggestedImages = useMemo(
-    () => cluster.images.filter(f => !confirmedSet.has(f)),
+    () => cluster.images.filter((f) => !confirmedSet.has(f)),
     [cluster.images, confirmedSet],
   );
 
-  const imageIndex = useMemo(
-    () => new Map(cluster.images.map((f, i) => [f, i])),
-    [cluster.images],
-  );
+  const imageIndex = useMemo(() => new Map(cluster.images.map((f, i) => [f, i])), [cluster.images]);
 
   const isFullyGrouped = hasGroup && suggestedImages.length === 0;
 
@@ -55,7 +65,7 @@ export function ClusterCard({
   );
 
   function renderThumbs(files: string[], confirmed: boolean) {
-    return files.map(f => (
+    return files.map((f) => (
       <ThumbCard
         key={f}
         filename={f}
@@ -71,8 +81,17 @@ export function ClusterCard({
 
   return (
     <div className={cardClass} onClick={onMergeSelect}>
-      <div className="cluster-header" onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }}>
-        <span className={`cluster-chevron ${collapsed ? "" : "cluster-chevron-open"}`} aria-hidden />
+      <div
+        className="cluster-header"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleCollapse();
+        }}
+      >
+        <span
+          className={`cluster-chevron ${collapsed ? "" : "cluster-chevron-open"}`}
+          aria-hidden
+        />
         <span className={`cluster-status-dot ${statusClass}`} />
 
         {isFullyGrouped && <span className="cluster-check">✓</span>}
@@ -85,25 +104,34 @@ export function ClusterCard({
 
         <span className="cluster-count">{cluster.images.length} images</span>
 
-        {!collapsed && cluster.autoTags.slice(0, 4).map(t => (
-          <span key={t.term} className="cluster-tag" title={`z=${t.z.toFixed(1)}`}>
-            {t.term}
-          </span>
-        ))}
+        {!collapsed &&
+          cluster.autoTags.slice(0, 4).map((t) => (
+            <span key={t.term} className="cluster-tag" title={`z=${t.z.toFixed(1)}`}>
+              {t.term}
+            </span>
+          ))}
 
         <div className="cluster-actions" onClick={(e) => e.stopPropagation()}>
           {!hasGroup && (
-            <button className="btn btn-small btn-create" onClick={onAccept}>Create Group</button>
+            <button className="btn btn-small btn-create" onClick={onAccept}>
+              Create Group
+            </button>
           )}
           {hasGroup && suggestedImages.length > 0 && (
             <button className="btn btn-small btn-add" onClick={onAddToGroup}>
               Add {suggestedImages.length} to Group
             </button>
           )}
-          <button className="btn btn-small" onClick={onAskClaude} title="Generate contact sheet for Claude">
+          <button
+            className="btn btn-small"
+            onClick={onAskClaude}
+            title="Generate contact sheet for Claude"
+          >
             Ask Claude
           </button>
-          <button className="btn btn-small btn-dismiss" onClick={onDismiss}>×</button>
+          <button className="btn btn-small btn-dismiss" onClick={onDismiss}>
+            ×
+          </button>
         </div>
       </div>
 
@@ -139,7 +167,13 @@ export function ClusterCard({
 }
 
 function ThumbCard({
-  filename, index, isConfirmed, isSelected, onSelect, onRangeSelect, onOpenLightbox,
+  filename,
+  index,
+  isConfirmed,
+  isSelected,
+  onSelect,
+  onRangeSelect,
+  onOpenLightbox,
 }: {
   filename: string;
   index: number;
@@ -169,27 +203,48 @@ function ThumbCard({
         }
       }}
     >
-      <img src={imageUrl(filename)} loading="lazy" decoding="async" alt={filename} draggable={false} />
+      <img
+        src={imageUrl(filename)}
+        loading="lazy"
+        decoding="async"
+        alt={filename}
+        draggable={false}
+      />
       <span className="cluster-thumb-name">{filename}</span>
     </div>
   );
 }
 
-function EditableName({ name, clusterId, editable }: { name: string; clusterId: string; editable: boolean }) {
+function EditableName({
+  name,
+  clusterId,
+  editable,
+}: {
+  name: string;
+  clusterId: string;
+  editable: boolean;
+}) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(name);
   const inputRef = useRef<HTMLInputElement>(null);
   const renameCluster = useClusterStore((s) => s.renameCluster);
 
-  useEffect(() => { setValue(name); }, [name]);
-  useEffect(() => { if (editing) inputRef.current?.select(); }, [editing]);
+  useEffect(() => {
+    setValue(name);
+  }, [name]);
+  useEffect(() => {
+    if (editing) inputRef.current?.select();
+  }, [editing]);
 
   if (!editable || !editing) {
     return (
       <span
         className={`cluster-name ${editable ? "editable" : ""}`}
         onClick={(e) => {
-          if (editable) { e.stopPropagation(); setEditing(true); }
+          if (editable) {
+            e.stopPropagation();
+            setEditing(true);
+          }
         }}
         title={editable ? "Click to rename" : undefined}
       >
@@ -204,11 +259,20 @@ function EditableName({ name, clusterId, editable }: { name: string; clusterId: 
       className="cluster-name-input"
       value={value}
       onChange={(e) => setValue(e.target.value)}
-      onBlur={() => { renameCluster(clusterId, value); setEditing(false); }}
+      onBlur={() => {
+        renameCluster(clusterId, value);
+        setEditing(false);
+      }}
       onKeyDown={(e) => {
         e.stopPropagation();
-        if (e.key === "Enter") { renameCluster(clusterId, value); setEditing(false); }
-        if (e.key === "Escape") { setValue(name); setEditing(false); }
+        if (e.key === "Enter") {
+          renameCluster(clusterId, value);
+          setEditing(false);
+        }
+        if (e.key === "Escape") {
+          setValue(name);
+          setEditing(false);
+        }
       }}
       onClick={(e) => e.stopPropagation()}
     />

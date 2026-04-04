@@ -557,7 +557,7 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
                 broadcastProgress(line);
                 send("progress", JSON.stringify({ message: line }));
               },
-              models,
+              models ? { force: models } : undefined,
             );
             invalidateClusterCache();
             await ensureTextEmbeddings(targetDir);

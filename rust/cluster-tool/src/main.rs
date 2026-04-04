@@ -111,9 +111,14 @@ fn main() {
     let loaded: Vec<(Array2<f32>, f32, bool)> = emb_specs
         .iter()
         .filter(|(_, w, _)| *w > 0.0)
-        .map(|(name, w, norm)| {
-            let arr: Array2<f32> = npz.by_name(name).unwrap_or_else(|_| panic!("Missing '{}' array", name));
-            (arr, *w, *norm)
+        .filter_map(|(name, w, norm)| {
+            match npz.by_name::<ndarray::OwnedRepr<f32>, ndarray::Ix2>(name) {
+                Ok(arr) => Some((arr, *w, *norm)),
+                Err(_) => {
+                    eprintln!("WARNING: '{}' array not found in embeddings (weight={:.1}), skipping", name, w);
+                    None
+                }
+            }
         })
         .collect();
 

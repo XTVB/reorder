@@ -78,9 +78,16 @@ def main():
                         help="Cache directory (default: <image_dir>/.reorder-cache)")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--models", default=None,
-                        help="Comma-separated list of models to extract (e.g. 'pecore_l,pecore_g'). "
+                        help="Comma-separated list of models to force re-extract (e.g. 'pecore_l,pecore_g'). "
                              "Default: extract all models with missing/outdated cache.")
+    parser.add_argument("--required", default=None,
+                        help="Comma-separated list of required models. Only these (if missing/outdated) "
+                             "will be extracted; others are skipped even if missing.")
     args = parser.parse_args()
+
+    # Parse set arguments once up front
+    forced_models = set(args.models.split(",")) if args.models else None
+    required_set = set(args.required.split(",")) if args.required else None
 
     image_dir = os.path.abspath(args.image_dir)
     cache_dir = args.cache_dir or os.path.join(image_dir, ".reorder-cache")
@@ -148,15 +155,35 @@ def main():
             cached = {}
             models_to_extract = set(EMB_KEYS)
 
-    # If --models is specified, only extract those (even if cached)
-    if args.models:
-        requested = set(args.models.split(","))
-        invalid = requested - set(EMB_KEYS)
+    # If --models is specified, force re-extract those specific models.
+    # If --required is specified, only extract models in that set (if missing/outdated).
+    if forced_models:
+        invalid = forced_models - set(EMB_KEYS)
         if invalid:
             print(f"  WARNING: unknown models: {invalid}", file=sys.stderr)
         # Force re-extraction of requested models, keep others as-is
-        models_to_extract = requested & set(EMB_KEYS)
+        models_to_extract = forced_models & set(EMB_KEYS)
         print(f"  Requested models: {models_to_extract}", file=sys.stderr)
+    else:
+        # Auto/required mode: detect zero-padded entries from previous partial --models runs.
+        # L2-normalized embeddings can never be all-zero; zeros mean the entry was
+        # never actually extracted (hash-list expansion zero-padded it).
+        for k in list(cached.keys()):
+            if k in models_to_extract or k not in {"clip", "dino", "pecore_l", "pecore_g"}:
+                continue
+            arr = cached[k]
+            if np.any(~np.any(arr, axis=1)):
+                models_to_extract.add(k)
+                del cached[k]
+                print(f"  {k}: zero embeddings detected (incomplete extraction), will re-extract", file=sys.stderr)
+
+    # --required: limit extraction to only the required models (don't extract others
+    # even if missing). Unlike --models, this doesn't force re-extraction.
+    if required_set and not forced_models:
+        skipped = models_to_extract - required_set
+        if skipped:
+            print(f"  Skipping unrequired models: {skipped}", file=sys.stderr)
+            models_to_extract &= required_set
 
     # Find which content hashes need extraction (new images not in cache)
     needed = []
@@ -179,6 +206,8 @@ def main():
         print("All features cached, nothing to extract.", file=sys.stderr)
         ordered = {}
         for k in EMB_KEYS:
+            if k not in cached:
+                continue
             arr = cached[k]
             out = np.zeros((len(image_files), arr.shape[1]), dtype=np.float32)
             for i, f in enumerate(image_files):
@@ -198,13 +227,7 @@ def main():
     if needs_new_images:
         print(f"New images to extract: {len(needed)}", file=sys.stderr)
 
-    import torch
-    import open_clip
     from PIL import Image
-    from concurrent.futures import ThreadPoolExecutor
-
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    print(f"  Using device: {device}", file=sys.stderr)
     import gc
 
     # For models needing full re-extraction, process ALL images.
@@ -260,27 +283,42 @@ def main():
                     embs = embs / embs.norm(dim=-1, keepdim=True)
                 results.append(embs.cpu().numpy().astype(np.float32))
                 all_colors.extend(colors)
-
-                done = batch_end
-                elapsed = time.time() - t0
-                rate = done / elapsed if elapsed > 0 else 0
-                eta = (n - done) / rate if rate > 0 else 0
-                print(f"  {label}: {done}/{n} ({done/n*100:.0f}%) "
-                      f"- {rate:.1f} img/s - ETA {eta:.0f}s", file=sys.stderr)
+                _report_progress(label, batch_end, n, t0)
 
         return np.vstack(results), all_colors
 
     # For each model, decide what to extract:
     # - Model in models_to_extract → run on ALL images (all_items)
     # - Model NOT in models_to_extract but new images exist → run on `needed` only
-    # - Model NOT in models_to_extract and no new images → skip (already cached)
-    def items_for(model_key):
+    #   (only in pure auto mode — not when --models or --required limits the scope)
+    # - Otherwise → skip (already cached or not requested)
+    def _items_for(model_key):
         if model_key in models_to_extract:
             return all_items  # full re-extraction
-        elif needed:
-            return needed     # just new images
+        elif needed and not forced_models and not required_set:
+            return needed     # just new images (pure auto mode only)
+        elif needed and required_set and model_key in required_set:
+            return needed     # new images for a required model that's already cached
         else:
-            return []         # fully cached
+            return []         # fully cached or not requested
+
+    items_map = {k: _items_for(k) for k in EMB_KEYS}
+
+    # Only import heavy ML libraries if a neural model pass is actually needed.
+    _neural_keys = {"clip", "pecore_l", "pecore_g", "dino"}
+    if any(items_map[k] for k in _neural_keys):
+        import torch
+        import open_clip
+        from concurrent.futures import ThreadPoolExecutor
+        device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+        print(f"  Using device: {device}", file=sys.stderr)
+
+    def _report_progress(label, done, total, t0):
+        elapsed = time.time() - t0
+        rate = done / elapsed if elapsed > 0 else 0
+        eta = (total - done) / rate if rate > 0 else 0
+        print(f"  {label}: {done}/{total} ({done/total*100:.0f}%) "
+              f"- {rate:.1f} img/s - ETA {eta:.0f}s", file=sys.stderr)
 
     def _free_model(*objs):
         for o in objs:
@@ -365,8 +403,44 @@ def main():
         )
         print(f"  Saved {key} to cache ({n} entries)", file=sys.stderr)
 
+    # ── Standalone color extraction (when requested without CLIP) ──────────
+    # Color features are just HSV histograms + RGB moments — no model needed.
+    # Normally color piggybacks on the CLIP pass, but when requested independently
+    # via --models, extract standalone with just PIL.
+    standalone_color = (
+        "color" in models_to_extract
+        and "clip" not in models_to_extract
+        and not items_map["clip"]
+    )
+
     pass_num = 0
-    total_passes = sum(1 for k in EMB_KEYS if items_for(k))
+    # Color doesn't have its own pass unless standalone
+    total_passes = sum(1 for k in EMB_KEYS if k != "color" and items_map[k])
+    if standalone_color:
+        total_passes += 1
+
+    new_arrays = {}
+    new_color = np.zeros((0, 77), dtype=np.float32)
+
+    if standalone_color:
+        color_items = items_map["color"]
+        pass_num += 1
+        print(f"  [Pass {pass_num}/{total_passes}] Color histograms ({len(color_items)} images)", file=sys.stderr)
+        color_results = []
+        t0 = time.time()
+        n = len(color_items)
+        for i, (fname, h) in enumerate(color_items):
+            path = os.path.join(image_dir, fname)
+            try:
+                img = Image.open(path).convert("RGB")
+                color_results.append(extract_color_features(img))
+            except Exception as e:
+                print(f"  WARNING: skipping {fname}: {e}", file=sys.stderr)
+                color_results.append(np.zeros(77, dtype=np.float32))
+            if (i + 1) % 200 == 0 or i == n - 1:
+                _report_progress("Color", i + 1, n, t0)
+        new_color = np.array(color_results, dtype=np.float32) if color_results else np.zeros((0, 77), dtype=np.float32)
+        _save_model_to_cache("color", new_color, color_items)
 
     # ── open_clip models (data-driven) ───────────────────────────────────────
     # (key, model_name, pretrained, input_hw, batch_divisor, dim, label)
@@ -376,14 +450,12 @@ def main():
         ("pecore_g", "PE-Core-bigG-14-448","meta",              448, 8,  1280, "PE-Core-G"),
     ]
 
-    new_arrays = {}
-    new_color = np.zeros((0, 77), dtype=np.float32)
-
     for key, model_name, pretrained, hw, batch_div, dim, label in OPEN_CLIP_MODELS:
-        model_items = items_for(key)
+        model_items = items_map[key]
         if model_items:
             pass_num += 1
-            extract_color = (key == "clip")
+            # Extract color during CLIP pass (unless already done standalone)
+            extract_color = (key == "clip") and not standalone_color
             print(f"  [Pass {pass_num}/{total_passes}] {label} ({len(model_items)} images)", file=sys.stderr)
             model, _, preprocess = open_clip.create_model_and_transforms(
                 model_name, pretrained=pretrained, device=device
@@ -407,7 +479,7 @@ def main():
     new_pecore_g = new_arrays["pecore_g"]
 
     # ── DINOv2 ViT-L/14 (uses torch.hub, not open_clip) ─────────────────────
-    dino_items = items_for("dino")
+    dino_items = items_map["dino"]
     if dino_items:
         pass_num += 1
         import contextlib
@@ -434,7 +506,7 @@ def main():
     # For each model: if it was fully re-extracted, the new array IS the complete data.
     # If only new images were extracted, merge with existing cache.
     # Build a unified hash list from all images we have data for.
-    new_hashes_map = {k: [h for _, h in items_for(k)] for k in EMB_KEYS}
+    new_hashes_map = {k: [h for _, h in items_map[k]] for k in EMB_KEYS}
     new_data_map = {
         "clip": new_clip, "dino": new_dino,
         "pecore_l": new_pecore_l, "pecore_g": new_pecore_g,
@@ -480,7 +552,9 @@ def main():
                     out[hash_to_idx[h]] = new_arr[row]
             all_arrays[k] = out
         else:
-            # Fully cached, just reindex
+            # Fully cached, just reindex (skip if model not in cache at all)
+            if k not in cached:
+                continue
             dim = cached[k].shape[1]
             out = np.zeros((n_total, dim), dtype=np.float32)
             for h, old_idx in cached_hashes.items():
@@ -488,8 +562,8 @@ def main():
                     out[hash_to_idx[h]] = cached[k][old_idx]
             all_arrays[k] = out
 
-    # Save hash-keyed cache with per-model version keys
-    version_keys = {f"_v_{k}": np.array(v) for k, v in MODEL_VERSIONS.items()}
+    # Save hash-keyed cache with per-model version keys (only for models with data)
+    version_keys = {f"_v_{k}": np.array(v) for k, v in MODEL_VERSIONS.items() if k in all_arrays}
     np.savez_compressed(
         hash_cache_path,
         hashes=np.array(all_hash_list),
@@ -501,6 +575,8 @@ def main():
     # Write filename-ordered arrays for Rust
     ordered = {}
     for k in EMB_KEYS:
+        if k not in all_arrays:
+            continue
         arr = all_arrays[k]
         out = np.zeros((len(image_files), arr.shape[1]), dtype=np.float32)
         for i, f in enumerate(image_files):

@@ -70,7 +70,7 @@ interface TextEmbeddings {
 export async function extractFeatures(
   targetDir: string,
   onProgress?: (line: string) => void,
-  models?: string[],
+  opts?: { force?: string[]; required?: string[] },
 ): Promise<{ total: number; cached: number; extracted: number }> {
   const script = join(SCRIPTS_DIR, "extract_features.py");
   const cache = cacheDir(targetDir);
@@ -82,8 +82,11 @@ export async function extractFeatures(
   }
 
   const args = [PYTHON, script, targetDir, "--cache-dir", cache];
-  if (models && models.length > 0) {
-    args.push("--models", models.join(","));
+  if (opts?.force && opts.force.length > 0) {
+    args.push("--models", opts.force.join(","));
+  }
+  if (opts?.required && opts.required.length > 0) {
+    args.push("--required", opts.required.join(","));
   }
 
   log("cluster", `Extracting features: ${args.join(" ")}`);
@@ -812,14 +815,30 @@ function computeSuggestedCounts(nImages: number): number[] {
 
 // ── Full pipeline ────────────────────────────────────────────────────────────
 
+/** Derive the set of model keys needed for a given weight config. */
+function modelsForWeights(weights?: WeightConfig): string[] | undefined {
+  if (!weights) return undefined; // no config → extract all (auto mode)
+  // Rust defaults: clip=1.0, color=0.5, others=0.0
+  const defaults: Record<string, number> = { clip: 1.0, color: 0.5, dino: 0.0, pecore_l: 0.0, pecore_g: 0.0 };
+  const needed: string[] = [];
+  for (const [key, defaultVal] of Object.entries(defaults)) {
+    const val = weights[key as keyof WeightConfig] ?? defaultVal;
+    if (val > 0) needed.push(key);
+  }
+  // CLIP is always needed for TF-IDF auto-naming
+  if (!needed.includes("clip")) needed.push("clip");
+  return needed;
+}
+
 export async function runFullCluster(
   targetDir: string,
   nClusters: number,
   onProgress?: (line: string) => void,
   weights?: WeightConfig,
 ): Promise<ClusterData> {
+  const required = modelsForWeights(weights);
   const [extraction] = await Promise.all([
-    extractFeatures(targetDir, onProgress),
+    extractFeatures(targetDir, onProgress, required ? { required } : undefined),
     ensureTextEmbeddings(targetDir),
   ]);
   log("cluster", `Extraction: ${extraction.extracted} new, ${extraction.cached} cached`);

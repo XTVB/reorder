@@ -1,7 +1,7 @@
 import React from "react";
 import { useMergeSuggestionsStore } from "../../stores/mergeSuggestionsStore.ts";
 import type { MergeSuggestionSimilar } from "../../types.ts";
-import { MergeSuggestionCard } from "./MergeSuggestionCard.tsx";
+import { MergeSuggestionCard, type OpenCardHandler } from "./MergeSuggestionCard.tsx";
 
 interface Props {
   refGroupId: string;
@@ -10,6 +10,9 @@ interface Props {
   similar: MergeSuggestionSimilar[];
   collapsed: boolean;
   pendingCandidates: Set<string>;
+  refCardExpanded: boolean;
+  expandedCandidateId: string | null;
+  onOpenCard: OpenCardHandler;
 }
 
 export const MergeSuggestionRow = React.memo(function MergeSuggestionRow({
@@ -19,9 +22,13 @@ export const MergeSuggestionRow = React.memo(function MergeSuggestionRow({
   similar,
   collapsed,
   pendingCandidates,
+  refCardExpanded,
+  expandedCandidateId,
+  onOpenCard,
 }: Props) {
   const toggleRowCollapse = useMergeSuggestionsStore((s) => s.toggleRowCollapse);
   const toggleMergeCandidate = useMergeSuggestionsStore((s) => s.toggleMergeCandidate);
+  const rangeSelectInRow = useMergeSuggestionsStore((s) => s.rangeSelectInRow);
   const selectAllInRow = useMergeSuggestionsStore((s) => s.selectAllInRow);
   const deselectAllInRow = useMergeSuggestionsStore((s) => s.deselectAllInRow);
 
@@ -42,9 +49,7 @@ export const MergeSuggestionRow = React.memo(function MergeSuggestionRow({
           <span className="merge-row-best-distance">best: {bestDistance.toFixed(3)}</span>
         )}
         {someSelected && (
-          <span className="merge-row-pending">
-            {pendingCandidates.size} selected
-          </span>
+          <span className="merge-row-pending">{pendingCandidates.size} selected</span>
         )}
         <button
           className="btn btn-small merge-row-actions"
@@ -64,6 +69,9 @@ export const MergeSuggestionRow = React.memo(function MergeSuggestionRow({
             images={refGroupImages}
             imageCount={refGroupImages.length}
             isRef
+            refGroupId={refGroupId}
+            isExpanded={refCardExpanded}
+            onOpenCard={onOpenCard}
           />
           <div className="merge-row-arrow">{"\u2192"}</div>
           <div className="merge-row-candidates">
@@ -75,9 +83,12 @@ export const MergeSuggestionRow = React.memo(function MergeSuggestionRow({
                 imageCount={s.groupImages.length}
                 distance={s.distance}
                 isSelected={pendingCandidates.has(s.groupId)}
+                isExpanded={expandedCandidateId === s.groupId}
                 refGroupId={refGroupId}
                 candidateId={s.groupId}
                 onToggleSelect={toggleMergeCandidate}
+                onRangeSelect={rangeSelectInRow}
+                onOpenCard={onOpenCard}
               />
             ))}
           </div>

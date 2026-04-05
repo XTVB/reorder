@@ -2,6 +2,41 @@ import type React from "react";
 import type { ImageGroup, ImageInfo } from "../types.ts";
 import { ExpandedGroupItem } from "./ExpandedGroupItem.tsx";
 
+interface FloatingPopoverContentProps {
+  displayName: string;
+  imageCount: number;
+  actions: React.ReactNode;
+  children: React.ReactNode;
+  /** Forwarded to the outer .group-popover div (e.g., for DnD data attributes). */
+  rootProps?: React.HTMLAttributes<HTMLDivElement>;
+}
+
+/**
+ * Generic shell for the group floating popover: header (name + count + actions)
+ * and a children slot for the image grid. Reused by the reorder-page group
+ * popover and the merge-suggestions portal popover.
+ */
+export function FloatingPopoverContent({
+  displayName,
+  imageCount,
+  actions,
+  children,
+  rootProps,
+}: FloatingPopoverContentProps) {
+  return (
+    <div className="group-popover" {...rootProps} onClick={(e) => e.stopPropagation()}>
+      <div className="group-popover-header">
+        <span className="group-popover-name">{displayName}</span>
+        <span className="group-popover-count">
+          {imageCount} image{imageCount !== 1 ? "s" : ""}
+        </span>
+        <div className="group-popover-actions">{actions}</div>
+      </div>
+      <div className="group-popover-grid">{children}</div>
+    </div>
+  );
+}
+
 interface PopoverShellProps {
   id: string;
   dataAttr: string;
@@ -29,33 +64,28 @@ export function PopoverShell({
   onRemove,
   onCardClick,
 }: PopoverShellProps) {
-  const dataProps = { [dataAttr]: id };
   return (
-    <div className="group-popover" {...dataProps} onClick={(e) => e.stopPropagation()}>
-      <div className="group-popover-header">
-        <span className="group-popover-name">{displayName}</span>
-        <span className="group-popover-count">
-          {images.length} image{images.length !== 1 ? "s" : ""}
-        </span>
-        <div className="group-popover-actions">{actions}</div>
-      </div>
-      <div className="group-popover-grid">
-        {images.map((fn) => {
-          const img = imageMap.get(fn);
-          if (!img) return null;
-          return (
-            <ExpandedGroupItem
-              key={fn}
-              image={img}
-              isSelected={selectedIds.has(fn)}
-              isGhost={isMultiDragging && selectedIds.has(fn) && fn !== activeId}
-              onRemove={() => onRemove(fn)}
-              onCardClick={onCardClick}
-            />
-          );
-        })}
-      </div>
-    </div>
+    <FloatingPopoverContent
+      displayName={displayName}
+      imageCount={images.length}
+      actions={actions}
+      rootProps={{ [dataAttr]: id } as React.HTMLAttributes<HTMLDivElement>}
+    >
+      {images.map((fn) => {
+        const img = imageMap.get(fn);
+        if (!img) return null;
+        return (
+          <ExpandedGroupItem
+            key={fn}
+            image={img}
+            isSelected={selectedIds.has(fn)}
+            isGhost={isMultiDragging && selectedIds.has(fn) && fn !== activeId}
+            onRemove={() => onRemove(fn)}
+            onCardClick={onCardClick}
+          />
+        );
+      })}
+    </FloatingPopoverContent>
   );
 }
 

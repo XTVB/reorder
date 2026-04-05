@@ -1,9 +1,5 @@
 import { create } from "zustand";
-import type {
-  ImageGroup,
-  MergeSuggestionRow,
-  MergeSuggestionsResponse,
-} from "../types.ts";
+import type { ImageGroup, MergeSuggestionRow, MergeSuggestionsResponse } from "../types.ts";
 import { postJson } from "../utils/helpers.ts";
 import { useGroupStore } from "./groupStore.ts";
 
@@ -19,6 +15,7 @@ interface MergeSuggestionsState {
 
   collapsedRows: Set<string>;
   pendingMerges: Map<string, Set<string>>; // refGroupId → candidate groupIds
+  selectionAnchors: Map<string, string>; // refGroupId → last-toggled candidateId (range-select anchor)
   undoStack: ImageGroup[][];
 
   setThreshold: (t: number) => void;
@@ -27,6 +24,7 @@ interface MergeSuggestionsState {
   collapseAllRows: () => void;
   expandAllRows: () => void;
   toggleMergeCandidate: (refId: string, candidateId: string) => void;
+  rangeSelectInRow: (refId: string, candidateId: string) => void;
   selectAllInRow: (refId: string) => void;
   deselectAllInRow: (refId: string) => void;
   clearPendingMerges: () => void;
@@ -35,157 +33,181 @@ interface MergeSuggestionsState {
   pendingMergeCount: () => number;
 }
 
-export const useMergeSuggestionsStore = create<MergeSuggestionsState>(
-  (set, get) => ({
-    suggestions: null,
-    loading: false,
-    error: null,
-    computeTimeMs: null,
+export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get) => ({
+  suggestions: null,
+  loading: false,
+  error: null,
+  computeTimeMs: null,
 
-    threshold: 0.65,
+  threshold: 0.65,
 
-    collapsedRows: new Set(),
-    pendingMerges: new Map(),
-    undoStack: [],
+  collapsedRows: new Set(),
+  pendingMerges: new Map(),
+  selectionAnchors: new Map(),
+  undoStack: [],
 
-    setThreshold: (t) => set({ threshold: t }),
+  setThreshold: (t) => set({ threshold: t }),
 
-    fetchSuggestions: async () => {
-      const { threshold } = get();
-      set({ loading: true, error: null });
-      try {
-        const resp = await postJson("/api/merge-suggestions", {
-          threshold,
-          maxPerGroup: MAX_PER_GROUP,
-        });
-        if (!resp.ok) {
-          const err = await resp.json();
-          throw new Error(err.error || "Failed to fetch suggestions");
-        }
-        const data: MergeSuggestionsResponse = await resp.json();
-        set({
-          suggestions: data.suggestions,
-          computeTimeMs: data.computeTimeMs,
-          loading: false,
-          pendingMerges: new Map(),
-        });
-      } catch (err) {
-        set({
-          loading: false,
-          error: err instanceof Error ? err.message : "Unknown error",
-        });
+  fetchSuggestions: async () => {
+    const { threshold } = get();
+    set({ loading: true, error: null });
+    try {
+      const resp = await postJson("/api/merge-suggestions", {
+        threshold,
+        maxPerGroup: MAX_PER_GROUP,
+      });
+      if (!resp.ok) {
+        const err = await resp.json();
+        throw new Error(err.error || "Failed to fetch suggestions");
       }
-    },
-
-    toggleRowCollapse: (groupId) => {
-      set((s) => {
-        const next = new Set(s.collapsedRows);
-        if (next.has(groupId)) next.delete(groupId);
-        else next.add(groupId);
-        return { collapsedRows: next };
+      const data: MergeSuggestionsResponse = await resp.json();
+      set({
+        suggestions: data.suggestions,
+        computeTimeMs: data.computeTimeMs,
+        loading: false,
+        pendingMerges: new Map(),
       });
-    },
-
-    collapseAllRows: () => {
-      const { suggestions } = get();
-      if (!suggestions) return;
-      set({ collapsedRows: new Set(suggestions.map((s) => s.refGroupId)) });
-    },
-
-    expandAllRows: () => set({ collapsedRows: new Set() }),
-
-    toggleMergeCandidate: (refId, candidateId) => {
-      set((s) => {
-        const next = new Map(s.pendingMerges);
-        const existing = next.get(refId) ?? new Set();
-        const updated = new Set(existing);
-        if (updated.has(candidateId)) updated.delete(candidateId);
-        else updated.add(candidateId);
-        if (updated.size === 0) next.delete(refId);
-        else next.set(refId, updated);
-        return { pendingMerges: next };
+    } catch (err) {
+      set({
+        loading: false,
+        error: err instanceof Error ? err.message : "Unknown error",
       });
-    },
+    }
+  },
 
-    selectAllInRow: (refId) => {
-      const { suggestions } = get();
-      if (!suggestions) return;
-      const row = suggestions.find((s) => s.refGroupId === refId);
-      if (!row) return;
-      set((s) => {
-        const next = new Map(s.pendingMerges);
-        next.set(refId, new Set(row.similar.map((c) => c.groupId)));
-        return { pendingMerges: next };
-      });
-    },
+  toggleRowCollapse: (groupId) => {
+    set((s) => {
+      const next = new Set(s.collapsedRows);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return { collapsedRows: next };
+    });
+  },
 
-    deselectAllInRow: (refId) => {
-      set((s) => {
-        const next = new Map(s.pendingMerges);
-        next.delete(refId);
-        return { pendingMerges: next };
-      });
-    },
+  collapseAllRows: () => {
+    const { suggestions } = get();
+    if (!suggestions) return;
+    set({ collapsedRows: new Set(suggestions.map((s) => s.refGroupId)) });
+  },
 
-    clearPendingMerges: () => set({ pendingMerges: new Map() }),
+  expandAllRows: () => set({ collapsedRows: new Set() }),
 
-    applyMerges: async () => {
-      const { pendingMerges, undoStack } = get();
-      if (pendingMerges.size === 0) return;
+  toggleMergeCandidate: (refId, candidateId) => {
+    set((s) => {
+      const next = new Map(s.pendingMerges);
+      const existing = next.get(refId) ?? new Set();
+      const updated = new Set(existing);
+      if (updated.has(candidateId)) updated.delete(candidateId);
+      else updated.add(candidateId);
+      if (updated.size === 0) next.delete(refId);
+      else next.set(refId, updated);
+      const anchors = new Map(s.selectionAnchors);
+      anchors.set(refId, candidateId);
+      return { pendingMerges: next, selectionAnchors: anchors };
+    });
+  },
 
-      const groupStore = useGroupStore.getState();
-      const currentGroups = [...groupStore.groups.map((g) => ({ ...g, images: [...g.images] }))];
+  rangeSelectInRow: (refId, candidateId) => {
+    const { suggestions, selectionAnchors } = get();
+    const row = suggestions?.find((s) => s.refGroupId === refId);
+    if (!row) return;
+    const anchor = selectionAnchors.get(refId);
+    const endIdx = row.similar.findIndex((c) => c.groupId === candidateId);
+    if (endIdx === -1) return;
+    const anchorIdx = anchor ? row.similar.findIndex((c) => c.groupId === anchor) : -1;
+    const [lo, hi] =
+      anchorIdx === -1
+        ? [endIdx, endIdx]
+        : [Math.min(anchorIdx, endIdx), Math.max(anchorIdx, endIdx)];
+    set((s) => {
+      const next = new Map(s.pendingMerges);
+      const updated = new Set(next.get(refId) ?? new Set());
+      for (let i = lo; i <= hi; i++) updated.add(row.similar[i]!.groupId);
+      next.set(refId, updated);
+      const anchors = new Map(s.selectionAnchors);
+      anchors.set(refId, candidateId);
+      return { pendingMerges: next, selectionAnchors: anchors };
+    });
+  },
 
-      const newUndoStack = [...undoStack, currentGroups].slice(-10);
+  selectAllInRow: (refId) => {
+    const { suggestions } = get();
+    if (!suggestions) return;
+    const row = suggestions.find((s) => s.refGroupId === refId);
+    if (!row) return;
+    set((s) => {
+      const next = new Map(s.pendingMerges);
+      next.set(refId, new Set(row.similar.map((c) => c.groupId)));
+      return { pendingMerges: next };
+    });
+  },
 
-      groupStore.updateGroups((prev) => {
-        const groups = prev.map((g) => ({ ...g, images: [...g.images] }));
-        const byId = new Map(groups.map((g) => [g.id, g]));
-        const toRemove = new Set<string>();
+  deselectAllInRow: (refId) => {
+    set((s) => {
+      const next = new Map(s.pendingMerges);
+      next.delete(refId);
+      return { pendingMerges: next };
+    });
+  },
 
-        for (const [refId, candidateIds] of pendingMerges) {
-          const ref = byId.get(refId);
-          if (!ref) continue;
-          const existing = new Set(ref.images);
-          for (const candId of candidateIds) {
-            const cand = byId.get(candId);
-            if (!cand) continue;
-            for (const img of cand.images) {
-              if (!existing.has(img)) {
-                ref.images.push(img);
-                existing.add(img);
-              }
+  clearPendingMerges: () => set({ pendingMerges: new Map() }),
+
+  applyMerges: async () => {
+    const { pendingMerges, undoStack } = get();
+    if (pendingMerges.size === 0) return;
+
+    const groupStore = useGroupStore.getState();
+    const currentGroups = [...groupStore.groups.map((g) => ({ ...g, images: [...g.images] }))];
+
+    const newUndoStack = [...undoStack, currentGroups].slice(-10);
+
+    groupStore.updateGroups((prev) => {
+      const groups = prev.map((g) => ({ ...g, images: [...g.images] }));
+      const byId = new Map(groups.map((g) => [g.id, g]));
+      const toRemove = new Set<string>();
+
+      for (const [refId, candidateIds] of pendingMerges) {
+        const ref = byId.get(refId);
+        if (!ref) continue;
+        const existing = new Set(ref.images);
+        for (const candId of candidateIds) {
+          const cand = byId.get(candId);
+          if (!cand) continue;
+          for (const img of cand.images) {
+            if (!existing.has(img)) {
+              ref.images.push(img);
+              existing.add(img);
             }
-            toRemove.add(candId);
           }
+          toRemove.add(candId);
         }
+      }
 
-        return groups.filter((g) => !toRemove.has(g.id));
-      });
+      return groups.filter((g) => !toRemove.has(g.id));
+    });
 
-      set({ undoStack: newUndoStack, pendingMerges: new Map() });
-      await get().fetchSuggestions();
-    },
+    set({ undoStack: newUndoStack, pendingMerges: new Map() });
+    await get().fetchSuggestions();
+  },
 
-    undo: async () => {
-      const { undoStack } = get();
-      if (undoStack.length === 0) return;
+  undo: async () => {
+    const { undoStack } = get();
+    if (undoStack.length === 0) return;
 
-      const previousGroups = undoStack[undoStack.length - 1]!;
-      const newStack = undoStack.slice(0, -1);
+    const previousGroups = undoStack[undoStack.length - 1]!;
+    const newStack = undoStack.slice(0, -1);
 
-      const groupStore = useGroupStore.getState();
-      groupStore.updateGroups(() => previousGroups);
+    const groupStore = useGroupStore.getState();
+    groupStore.updateGroups(() => previousGroups);
 
-      set({ undoStack: newStack, pendingMerges: new Map() });
-      await get().fetchSuggestions();
-    },
+    set({ undoStack: newStack, pendingMerges: new Map() });
+    await get().fetchSuggestions();
+  },
 
-    pendingMergeCount: () => {
-      const { pendingMerges } = get();
-      let count = 0;
-      for (const candidates of pendingMerges.values()) count += candidates.size;
-      return count;
-    },
-  }),
-);
+  pendingMergeCount: () => {
+    const { pendingMerges } = get();
+    let count = 0;
+    for (const candidates of pendingMerges.values()) count += candidates.size;
+    return count;
+  },
+}));

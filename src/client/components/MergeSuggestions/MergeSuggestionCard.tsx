@@ -1,5 +1,15 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import { imageUrl, pickThumbSamples } from "../../utils/helpers.ts";
+
+export interface OpenCardArgs {
+  anchorEl: HTMLElement;
+  displayName: string;
+  images: string[];
+  refGroupId: string;
+  /** null when opening the ref card itself */
+  candidateId: string | null;
+}
+export type OpenCardHandler = (args: OpenCardArgs) => void;
 
 interface Props {
   groupName: string;
@@ -8,9 +18,12 @@ interface Props {
   distance?: number;
   isRef?: boolean;
   isSelected?: boolean;
-  refGroupId?: string;
+  isExpanded?: boolean;
+  refGroupId: string;
   candidateId?: string;
   onToggleSelect?: (refGroupId: string, candidateId: string) => void;
+  onRangeSelect?: (refGroupId: string, candidateId: string) => void;
+  onOpenCard: OpenCardHandler;
 }
 
 export const MergeSuggestionCard = React.memo(function MergeSuggestionCard({
@@ -20,27 +33,45 @@ export const MergeSuggestionCard = React.memo(function MergeSuggestionCard({
   distance,
   isRef,
   isSelected,
+  isExpanded,
   refGroupId,
   candidateId,
   onToggleSelect,
+  onRangeSelect,
+  onOpenCard,
 }: Props) {
-  const [expanded, setExpanded] = useState(false);
-
   const thumbs = useMemo(() => pickThumbSamples(images), [images]);
 
-  const distanceColor = distance != null
-    ? distance < 0.15 ? "merge-dist-low" : distance < 0.3 ? "merge-dist-mid" : "merge-dist-high"
-    : "";
+  const distanceColor =
+    distance != null
+      ? distance < 0.15
+        ? "merge-dist-low"
+        : distance < 0.3
+          ? "merge-dist-mid"
+          : "merge-dist-high"
+      : "";
 
   return (
     <div
-      className={`merge-card ${isRef ? "merge-card-ref" : "merge-card-candidate"} ${isSelected ? "merge-card-selected" : ""}`}
-      onClick={() => {
-        if (isRef) {
-          setExpanded(!expanded);
-        } else if (onToggleSelect && refGroupId && candidateId) {
-          onToggleSelect(refGroupId, candidateId);
+      className={`merge-card ${isRef ? "merge-card-ref" : "merge-card-candidate"} ${isSelected ? "merge-card-selected" : ""} ${isExpanded ? "merge-card-active" : ""}`}
+      onClick={(e) => {
+        if (!isRef && candidateId) {
+          if (e.shiftKey) {
+            onRangeSelect?.(refGroupId, candidateId);
+            return;
+          }
+          if (e.metaKey || e.ctrlKey) {
+            onToggleSelect?.(refGroupId, candidateId);
+            return;
+          }
         }
+        onOpenCard({
+          anchorEl: e.currentTarget as HTMLElement,
+          displayName: groupName,
+          images,
+          refGroupId,
+          candidateId: isRef ? null : (candidateId ?? null),
+        });
       }}
     >
       <div className="merge-card-thumbs">
@@ -55,28 +86,31 @@ export const MergeSuggestionCard = React.memo(function MergeSuggestionCard({
         ))}
       </div>
       <div className="merge-card-info">
-        <span className="merge-card-name" title={groupName}>{groupName}</span>
+        <span className="merge-card-name" title={groupName}>
+          {groupName}
+        </span>
         <span className="merge-card-count">{imageCount} imgs</span>
         {distance != null && (
-          <span className={`merge-card-distance ${distanceColor}`} title={`Ward distance: ${distance.toFixed(4)}`}>
+          <span
+            className={`merge-card-distance ${distanceColor}`}
+            title={`Ward distance: ${distance.toFixed(4)}`}
+          >
             {distance.toFixed(3)}
           </span>
         )}
       </div>
-      {!isRef && (
-        <div className={`merge-card-checkbox ${isSelected ? "merge-card-checkbox-checked" : ""}`}>
+      {!isRef && onToggleSelect && candidateId && (
+        <button
+          type="button"
+          className={`merge-card-checkbox ${isSelected ? "merge-card-checkbox-checked" : ""}`}
+          aria-label={isSelected ? "Deselect candidate" : "Select candidate for merge"}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSelect(refGroupId, candidateId);
+          }}
+        >
           {isSelected ? "\u2713" : ""}
-        </div>
-      )}
-      {expanded && (
-        <div className="merge-card-expanded">
-          {images.map((img) => (
-            <div key={img} className="merge-card-expanded-thumb">
-              <img src={imageUrl(img)} alt={img} loading="lazy" draggable={false} />
-              <span className="merge-card-expanded-name">{img}</span>
-            </div>
-          ))}
-        </div>
+        </button>
       )}
     </div>
   );

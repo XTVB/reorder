@@ -1,11 +1,29 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import React, { useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRemeasureVirtualRows } from "../../hooks/useRemeasureVirtualRows.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useMergeSuggestionsStore } from "../../stores/mergeSuggestionsStore.ts";
 import { useUIStore } from "../../stores/uiStore.ts";
 import type { MergeSuggestionRow as MergeSuggestionRowType } from "../../types.ts";
+import { Lightbox } from "../Lightbox.tsx";
+import { MergePopover } from "./MergePopover.tsx";
+import type { OpenCardHandler } from "./MergeSuggestionCard.tsx";
 import { MergeSuggestionRow } from "./MergeSuggestionRow.tsx";
 import { MergeSuggestionsToolbar } from "./MergeSuggestionsToolbar.tsx";
+
+interface ExpandedCard {
+  refGroupId: string;
+  /** null means the ref card itself is expanded */
+  candidateId: string | null;
+  anchorRect: DOMRect;
+  displayName: string;
+  images: string[];
+}
+
+interface LightboxState {
+  images: string[];
+  index: number;
+}
 
 const EMPTY_ROWS: MergeSuggestionRowType[] = [];
 
@@ -31,12 +49,39 @@ export function MergeSuggestions() {
   const fetchGroups = useGroupStore((s) => s.fetchGroups);
   const setHeaderSubtitle = useUIStore((s) => s.setHeaderSubtitle);
 
-  // Fetch groups on mount
+  const [expandedCard, setExpandedCard] = useState<ExpandedCard | null>(null);
+  const [lightbox, setLightbox] = useState<LightboxState | null>(null);
+
+  const handleOpenCard = useCallback<OpenCardHandler>(
+    ({ anchorEl, displayName, images, refGroupId, candidateId }) => {
+      setExpandedCard((prev) => {
+        if (prev && prev.refGroupId === refGroupId && prev.candidateId === candidateId) {
+          return null;
+        }
+        return {
+          refGroupId,
+          candidateId,
+          anchorRect: anchorEl.getBoundingClientRect(),
+          displayName,
+          images,
+        };
+      });
+    },
+    [],
+  );
+
+  const handleClosePopover = useCallback(() => setExpandedCard(null), []);
+  const handleCloseLightbox = useCallback(() => setLightbox(null), []);
+  const handleOpenLightbox = useCallback((images: string[], index: number) => {
+    setLightbox({ images, index });
+  }, []);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only — fetchGroups is a stable Zustand action
   useEffect(() => {
     fetchGroups();
   }, []);
 
-  // Update header subtitle
+  // biome-ignore lint/correctness/useExhaustiveDependencies: setHeaderSubtitle is a stable Zustand action
   useEffect(() => {
     if (suggestions) {
       setHeaderSubtitle(`${suggestions.length} groups with merge candidates`);
@@ -65,20 +110,7 @@ export function MergeSuggestions() {
     overscan: 3,
   });
 
-  // Re-measure row heights when suggestions or collapse state changes.
-  // measure() clears the virtualizer's size cache, but existing visible DOM elements
-  // won't re-fire their ref callbacks (React only fires refs on mount, not update),
-  // so we must manually re-measure all visible elements from the DOM.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: rows and collapsedRows are intentional triggers
-  useLayoutEffect(() => {
-    virtualizer.measure();
-    const container = scrollContainerRef.current;
-    if (container) {
-      for (const el of container.querySelectorAll<HTMLElement>("[data-index]")) {
-        virtualizer.measureElement(el);
-      }
-    }
-  }, [rows, collapsedRows]);
+  useRemeasureVirtualRows(virtualizer, scrollContainerRef, [rows, collapsedRows]);
 
   const count = pendingMergeCount();
 
@@ -119,6 +151,7 @@ export function MergeSuggestions() {
           {virtualizer.getVirtualItems().map((virtualRow) => {
             const row = rows[virtualRow.index]!;
             const pending = pendingMerges.get(row.refGroupId) ?? new Set();
+            const rowHasExpansion = expandedCard?.refGroupId === row.refGroupId;
             return (
               <div
                 key={virtualRow.key}
@@ -139,12 +172,33 @@ export function MergeSuggestions() {
                   similar={row.similar}
                   collapsed={collapsedRows.has(row.refGroupId)}
                   pendingCandidates={pending}
+                  refCardExpanded={rowHasExpansion && expandedCard!.candidateId === null}
+                  expandedCandidateId={rowHasExpansion ? expandedCard!.candidateId : null}
+                  onOpenCard={handleOpenCard}
                 />
               </div>
             );
           })}
         </div>
       </div>
+
+      {expandedCard && (
+        <MergePopover
+          anchorRect={expandedCard.anchorRect}
+          displayName={expandedCard.displayName}
+          images={expandedCard.images}
+          onOpenLightbox={handleOpenLightbox}
+          onClose={handleClosePopover}
+        />
+      )}
+
+      {lightbox && (
+        <Lightbox
+          images={lightbox.images.map((f) => ({ filename: f }))}
+          initialIndex={lightbox.index}
+          onClose={handleCloseLightbox}
+        />
+      )}
     </div>
   );
 }

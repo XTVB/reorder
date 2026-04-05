@@ -1,5 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import React, { useEffect, useLayoutEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
+import { useRemeasureVirtualRows } from "../../hooks/useRemeasureVirtualRows.ts";
 import { useClusterStore } from "../../stores/clusterStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useUIStore } from "../../stores/uiStore.ts";
@@ -94,27 +95,17 @@ export function ClusterView() {
       const containerWidth = scrollContainerRef.current?.clientWidth ?? 960;
       const cols = Math.max(1, Math.floor(containerWidth / 168)); // 160px min + 8px gap
       const thumbRows = Math.ceil(cluster.images.length / cols);
-      return 56 + thumbRows * 176 + 32;
+      // .cluster-thumbs has max-height: 520px, so cap the grid contribution.
+      const thumbGridHeight = Math.min(520, thumbRows * 176);
+      // +~70px when rendering both confirmed + suggested sections, else ~32px padding.
+      const sectionsOverhead = cluster.confirmedGroup ? 70 : 32;
+      return 56 + thumbGridHeight + sectionsOverhead;
     },
     measureElement: (el) => el.getBoundingClientRect().height,
     overscan: 3,
   });
 
-  // Re-measure row heights when cluster structure or collapse state changes.
-  // measure() clears the virtualizer's size cache, but existing visible DOM elements
-  // won't re-fire their ref callbacks (React only fires refs on mount, not update).
-  // So we must manually re-measure all visible elements from the DOM.
-  // useLayoutEffect ensures this happens before the browser paints (no flash).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: visibleClusters and collapsedClusters are the intentional triggers
-  useLayoutEffect(() => {
-    virtualizer.measure();
-    const container = scrollContainerRef.current;
-    if (container) {
-      for (const el of container.querySelectorAll<HTMLElement>("[data-index]")) {
-        virtualizer.measureElement(el);
-      }
-    }
-  }, [visibleClusters, collapsedClusters]);
+  useRemeasureVirtualRows(virtualizer, scrollContainerRef, [visibleClusters, collapsedClusters]);
 
   // Focus scrolling via virtualizer
   // biome-ignore lint/correctness/useExhaustiveDependencies: focusedClusterId is the intentional trigger; virtualizer/visibleClusters are stable between renders

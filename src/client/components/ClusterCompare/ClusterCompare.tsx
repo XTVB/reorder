@@ -1,5 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useRemeasureVirtualRows } from "../../hooks/useRemeasureVirtualRows.ts";
 import { useUIStore } from "../../stores/uiStore.ts";
 import type { ClusterData, ClusterResultData, WeightConfig } from "../../types.ts";
 import { cn, imageUrl, postJson } from "../../utils/helpers.ts";
@@ -247,14 +248,10 @@ export function ClusterCompare() {
     overscan: 3,
   });
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: clusters is the intentional trigger for re-measuring row heights
-  useEffect(() => {
-    virtualizer.measure();
-  }, [clusters]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: activeTabId is the intentional trigger for resetting scroll and re-measuring
+  useRemeasureVirtualRows(virtualizer, scrollRef, [clusters]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: activeTabId is the intentional trigger for resetting scroll
   useEffect(() => {
     scrollRef.current?.scrollTo(0, 0);
-    virtualizer.measure();
   }, [activeTabId]);
 
   const virtualItems = virtualizer.getVirtualItems();

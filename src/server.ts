@@ -15,6 +15,7 @@ import {
   runRecutByThreshold,
   setClusterJobRunning,
   subscribeProgress,
+  computeMergeSuggestions,
   type WeightConfig,
 } from "./cluster.ts";
 import { initLog, log, logData, logError } from "./log.ts";
@@ -35,6 +36,7 @@ import {
   withRenameLock,
 } from "./rename.ts";
 import { getThumbnail } from "./thumbnails.ts";
+import type { ImageGroup, MergeSuggestionSimilar } from "./client/types.ts";
 
 const GROUPS_FILE = ".reorder-groups.json";
 
@@ -392,15 +394,16 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
     // ---- Cluster routes ----
 
     if (path === "/api/cluster" && req.method === "POST") {
-      const body = (await req.json()) as { nClusters?: number; weights?: WeightConfig };
+      const body = (await req.json()) as { nClusters?: number; weights?: WeightConfig; usePatches?: boolean };
       const nClusters = body.nClusters ?? 200;
       const weights = body.weights;
+      const usePatches = body.usePatches ?? false;
 
       if (isClusterJobRunning()) {
         return json({ error: "Clustering already in progress" }, 409);
       }
       setClusterJobRunning(true);
-      log("cluster", `Full cluster request (SSE): n=${nClusters}`);
+      log("cluster", `Full cluster request (SSE): n=${nClusters} usePatches=${usePatches}`);
 
       const stream = new ReadableStream({
         async start(controller) {
@@ -431,6 +434,7 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
                 send("progress", JSON.stringify({ message: line }));
               },
               weights,
+              usePatches,
             );
             invalidateClusterCache();
             log("cluster", `Returned ${result.clusters.length} clusters`);
@@ -601,10 +605,10 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
     }
 
     if (path === "/api/cluster/test" && req.method === "POST") {
-      const body = (await req.json()) as { nClusters?: number; weights?: WeightConfig };
+      const body = (await req.json()) as { nClusters?: number; weights?: WeightConfig; usePatches?: boolean };
       const nClusters = body.nClusters ?? 200;
-      log("cluster", `Test linkage: n=${nClusters} weights=${JSON.stringify(body.weights)}`);
-      const result = await runLinkageOnly(targetDir, nClusters, body.weights);
+      log("cluster", `Test linkage: n=${nClusters} weights=${JSON.stringify(body.weights)} usePatches=${body.usePatches}`);
+      const result = await runLinkageOnly(targetDir, nClusters, body.weights, body.usePatches);
       return json(result);
     }
 
@@ -612,6 +616,65 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
       const body = (await req.json()) as { filenames: string[]; clusterName: string };
       const outPath = await generateContactSheet(targetDir, body.filenames, body.clusterName);
       return json({ path: outPath });
+    }
+
+    // ── Merge suggestions (DINOv3 patch matching) ─────────────────────
+    if (path === "/api/merge-suggestions" && req.method === "POST") {
+      const body = (await req.json()) as {
+        threshold?: number;
+        maxPerGroup?: number;
+      };
+      const threshold = body.threshold ?? 0.65;
+      const maxPerGroup = body.maxPerGroup ?? 8;
+
+      const startTime = performance.now();
+
+      const entries = await computeMergeSuggestions(targetDir, threshold);
+
+      const groups = (await readGroupsFile(targetDir)) as ImageGroup[];
+      const groupMap = new Map(groups.map((g) => [g.id, g]));
+
+      const rowMap = new Map<string, { refGroupId: string; similar: MergeSuggestionSimilar[] }>();
+
+      for (const d of entries) {
+        const gA = groupMap.get(d.group_a);
+        const gB = groupMap.get(d.group_b);
+        if (!gA || !gB) continue;
+
+        // 1 - patch_median so lower = more similar, matching the Ward-distance semantics used by other UI.
+        const displayDist = 1 - d.patch_median;
+
+        for (const [srcId, other] of [[d.group_a, gB], [d.group_b, gA]] as const) {
+          let row = rowMap.get(srcId);
+          if (!row) {
+            row = { refGroupId: srcId, similar: [] };
+            rowMap.set(srcId, row);
+          }
+          row.similar.push({
+            groupId: other.id,
+            groupName: other.name,
+            groupImages: other.images,
+            distance: displayDist,
+          });
+        }
+      }
+
+      const suggestions = Array.from(rowMap.values())
+        .map((row) => {
+          const g = groupMap.get(row.refGroupId)!;
+          row.similar.sort((a, b) => a.distance - b.distance);
+          row.similar = row.similar.slice(0, maxPerGroup);
+          return {
+            refGroupId: row.refGroupId,
+            refGroupName: g.name,
+            refGroupImages: g.images,
+            similar: row.similar,
+          };
+        })
+        .sort((a, b) => a.similar[0]!.distance - b.similar[0]!.distance);
+
+      const computeTimeMs = Math.round(performance.now() - startTime);
+      return json({ suggestions, computeTimeMs });
     }
 
     return json({ error: "Not found" }, 404);

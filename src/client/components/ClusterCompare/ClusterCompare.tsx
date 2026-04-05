@@ -15,12 +15,13 @@ type Weights = Required<WeightConfig>;
 const WEIGHT_KEYS: { key: keyof Weights; label: string; desc: string }[] = [
   { key: "clip", label: "CLIP", desc: "ViT-B/32 (512d, semantic)" },
   { key: "dino", label: "DINOv2", desc: "ViT-L/14 (1024d, visual)" },
+  { key: "dinov3", label: "DINOv3", desc: "ViT-B/16 (768d, instance)" },
   { key: "pecore_l", label: "PE-Core L", desc: "L-14-336 (1024d)" },
   { key: "pecore_g", label: "PE-Core G", desc: "bigG-14-448 (1280d)" },
   { key: "color", label: "Color", desc: "HSV+RGB (77d)" },
 ];
 
-const ZERO_WEIGHTS: Weights = { clip: 0, dino: 0, pecore_l: 0, pecore_g: 0, color: 0 };
+const ZERO_WEIGHTS: Weights = { clip: 0, dino: 0, dinov3: 0, pecore_l: 0, pecore_g: 0, color: 0 };
 
 const PRESETS: { label: string; weights: Weights }[] = [
   { label: "CLIP + color (old baseline)", weights: { ...ZERO_WEIGHTS, clip: 1.0, color: 0.5 } },
@@ -43,9 +44,15 @@ const PRESETS: { label: string; weights: Weights }[] = [
     weights: { ...ZERO_WEIGHTS, dino: 1.0, clip: 1.0, color: 0.5 },
   },
   { label: "PE-Core G + DINOv2", weights: { ...ZERO_WEIGHTS, pecore_g: 1.0, dino: 1.0 } },
+  { label: "DINOv3 only", weights: { ...ZERO_WEIGHTS, dinov3: 1.0 } },
+  { label: "DINOv3 + color", weights: { ...ZERO_WEIGHTS, dinov3: 1.0, color: 0.5 } },
+  {
+    label: "DINOv3 + PE-Core G + color",
+    weights: { ...ZERO_WEIGHTS, dinov3: 1.0, pecore_g: 1.0, color: 0.5 },
+  },
   {
     label: "All models equal",
-    weights: { clip: 1.0, dino: 1.0, pecore_l: 1.0, pecore_g: 1.0, color: 0.5 },
+    weights: { clip: 1.0, dino: 1.0, dinov3: 1.0, pecore_l: 1.0, pecore_g: 1.0, color: 0.5 },
   },
 ];
 
@@ -176,7 +183,7 @@ export function ClusterCompare() {
     }
   }
 
-  async function runTab(tabId: number) {
+  async function runTab(tabId: string) {
     const tab = tabs.find((t) => t.id === tabId);
     if (!tab) return;
     setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, loading: true, error: null } : t)));
@@ -215,7 +222,7 @@ export function ClusterCompare() {
     setCustomLabel("Custom");
   }
 
-  function removeTab(tabId: number) {
+  function removeTab(tabId: string) {
     setTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
       if (activeTabId === tabId && next.length > 0) setActiveTabId(next[0]!.id);

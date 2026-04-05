@@ -4,11 +4,18 @@ import { useSelectionStore } from "../stores/selectionStore.ts";
 import { useUIStore } from "../stores/uiStore.ts";
 import type { AppMode } from "../types.ts";
 
-const MODES: { key: AppMode; label: string; path: string }[] = [
-  { key: "reorder", label: "Reorder", path: "/reorder" },
-  { key: "cluster", label: "Cluster", path: "/cluster" },
-  { key: "cluster-compare", label: "Compare", path: "/cluster-compare" },
+export const MODES: { key: AppMode; label: string; title: string; path: string }[] = [
+  { key: "reorder", label: "Reorder", title: "Reorder Images", path: "/reorder" },
+  { key: "cluster", label: "Cluster", title: "Cluster", path: "/cluster" },
+  { key: "cluster-compare", label: "Compare", title: "Cluster", path: "/cluster-compare" },
+  { key: "merge-suggestions", label: "Merge", title: "Merge Suggestions", path: "/merge-suggestions" },
 ];
+
+export const DEFAULT_MODE: AppMode = "reorder";
+
+export function modeFromPath(pathname: string): AppMode {
+  return MODES.find((m) => m.path === pathname)?.key ?? DEFAULT_MODE;
+}
 
 export function AppShellHeader({
   mode,
@@ -45,7 +52,7 @@ export function AppShellHeader({
         </div>
       </div>
       <div className="app-header-center">
-        <div className="header-title">{mode === "reorder" ? "Reorder Images" : "Cluster"}</div>
+        <div className="header-title">{MODES.find((m) => m.key === mode)?.title}</div>
         {headerSubtitle && <div className="header-subtitle">{headerSubtitle}</div>}
       </div>
       <div className="app-header-right">{children}</div>

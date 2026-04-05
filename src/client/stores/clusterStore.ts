@@ -19,8 +19,10 @@ interface ClusterState {
   treeStale: boolean;
   focusedClusterId: string | null;
   weights: WeightConfig;
+  usePatches: boolean;
 
   setWeights: (w: WeightConfig) => void;
+  setUsePatches: (v: boolean) => void;
   fetchClusters: (nClusters?: number) => Promise<void>;
   recutClusters: (nClusters: number) => Promise<void>;
   recutByThreshold: (threshold: number) => Promise<void>;
@@ -86,17 +88,19 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
   treeStale: false,
   focusedClusterId: null,
   weights: { pecore_g: 1.0, color: 0.5 },
+  usePatches: false,
 
   setWeights: (w) => set({ weights: w, treeStale: true }),
+  setUsePatches: (v) => set({ usePatches: v, treeStale: true }),
 
   fetchClusters: async (nClusters = 200) => {
     set({ loading: true, progress: "Starting clustering..." });
     try {
-      const { weights } = get();
+      const { weights, usePatches } = get();
       const response = await fetch("/api/cluster", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nClusters, weights }),
+        body: JSON.stringify({ nClusters, weights, usePatches }),
       });
 
       if (response.status === 409) {

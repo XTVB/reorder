@@ -38,6 +38,10 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Rust build artifacts
 rust/cluster-tool/target
+rust/group-similarity/target
+
+# Downloaded model weights
+model.tar.gz
 
 # Python cache
 __pycache__

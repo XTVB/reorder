@@ -1,118 +1,93 @@
-Default to using Bun instead of Node.js.
+Default to Bun, not Node.
 
-- `bun run start.ts <directory>` to launch
-- `bun build src/client/index.tsx --outdir dist --minify` to test client compilation
-- `bun install` for dependencies, `bun test` for tests
-- Rust cluster tool: `cd rust/cluster-tool && cargo build --release`
+- `bun run start.ts <dir>` — launch (builds client, opens browser, pre-generates thumbnails)
+- `bun build src/client/index.tsx --outdir dist --minify` — test client compilation
+- `bun install`, `bun test`, `biome check .`
+- Rust: `cd rust/cluster-tool && cargo build --release` and `cd rust/group-similarity && cargo build --release`
 
 ## What This App Does
 
-A local macOS tool for reordering images in a directory via drag-and-drop. Opens a browser UI with two modes:
+Local macOS tool for organizing image directories. Browser UI with four modes:
 
-1. **Reorder mode**: drag-and-drop image cards, group them, rename files with sequential numbering, organize into subfolders
-2. **Cluster mode**: CLIP-based visual clustering to identify photoshoot sets, review/accept/split/merge clusters, convert to groups
+1. **Reorder** — drag-and-drop, group, rename to sequential numbering, organize into subfolders
+2. **Cluster** — CLIP/PE-Core/DINOv3 visual clustering to discover photoshoot sets
+3. **Cluster Compare** — side-by-side clustering runs for weight tuning
+4. **Merge Suggestions** — DINOv3 patch matching finds groups likely to belong together
 
-Designed for iterative workflow: cluster → accept groups → reorder/rename → re-cluster to find stragglers → repeat.
+Workflow is iterative: cluster → accept groups → reorder/rename → re-cluster.
 
 ## Architecture
 
 ### Server (`start.ts` → `src/server.ts`)
 - `Bun.serve()` with manual routing in `handleAPI()`. No framework.
-- `src/rename.ts` — filesystem operations (list, rename, undo, organize, folder save, crash recovery)
-- `src/thumbnails.ts` — Sharp WebP thumbnails with content-addressable cache (`inode-size.webp`)
-- `src/cluster.ts` — clustering orchestration: spawns Python/Rust, parses linkage tree, TF-IDF auto-naming, contact sheets
-- `src/log.ts` — file+console logging with `log()`, `logError()`, `logData()`, `logBlock()`. Writes to `.reorder-log` in target dir.
-- `start.ts` — entry point: validates dir, runs `Bun.build()`, copies CSS from `src/client/styles/`, starts server, opens browser, pre-generates thumbnails
+- `src/rename.ts` — filesystem ops (list, rename, undo, organize, folder save, crash recovery). Two-phase rename with write-ahead manifest in `.reorder-pending.json`. `withRenameLock` serializes all FS-mutating ops.
+- `src/thumbnails.ts` — Sharp WebP thumbnails, content-addressable cache keyed by `inode-size`
+- `src/cluster.ts` — orchestrates Python/Rust subprocesses, parses linkage tree, TF-IDF auto-naming, contact sheets, merge suggestions
+- `src/log.ts` — `log()`, `logError()`, `logData()`, `logBlock()` → `.reorder-log` (truncated to 50k lines on startup)
 
 ### Client (`src/client/`)
-- React 19 SPA, built with `Bun.build()` (no Vite/bundler config)
-- Routing: `useRouter` hook (`src/client/hooks/useRouter.ts`) — pushState-based, `/reorder` and `/cluster` paths
-- Shell: `AppShell` in `index.tsx` renders `AppShellHeader` + mode-specific content (`<App />` or `<ClusterView />`)
-- CSS: split into per-concern files in `src/client/styles/` (base, buttons, card, cluster, grid, group, header, lightbox, loading, modal, mode-toggle, search, toast). Copied to `dist/` at build time.
-- Drag-and-drop: `@dnd-kit/core` + `@dnd-kit/sortable`
-- Virtualization: `@tanstack/react-virtual` for 13k+ images in reorder mode
-- Debug: all stores exposed on `window.__stores` for console access
+- React 19 SPA, built with `Bun.build()` (no Vite)
+- Routing: `useRouter` hook (pushState-based). Paths: `/reorder`, `/cluster`, `/cluster-compare`, `/merge-suggestions`
+- Shell: `AppShell` in `index.tsx` → `AppShellHeader` + mode-specific view
+- CSS: per-concern files in `src/client/styles/`, copied to `dist/` at build time
+- DnD: `@dnd-kit/core` + `@dnd-kit/sortable`. Virtualization: `@tanstack/react-virtual`
+- Debug: all Zustand stores on `window.__stores`
 
 ### Zustand Stores (`src/client/stores/`)
+`imageStore`, `selectionStore`, `dndStore`, `groupStore`, `folderStore`, `uiStore`, `clusterStore`, `mergeSuggestionsStore`. Read the files for shape — they're the source of truth.
 
-| Store | Purpose |
-|-------|---------|
-| `imageStore` | Image list, original order, `hasChanges`, `imageVersion` for cache busting |
-| `selectionStore` | Multi-select with click/shift-range/select-all in reorder mode |
-| `dndStore` | Active drag state, drag-over-group tracking |
-| `groupStore` | Named image groups, debounced server persist, groups-enabled toggle |
-| `folderStore` | Folder mode: local folder/root state, disk snapshot, change detection, reorder/rename/dissolve/move ops |
-| `uiStore` | Lightbox, modals, saving state, toast, undo, target dir, header subtitle |
-| `clusterStore` | Cluster data, SSE loading, merge/split/accept, image selection, lightbox, stale tree detection |
-
-### Clustering Pipeline (three stages)
+### Clustering Pipeline
 
 ```
 Stage 1: Python (scripts/extract_features.py)
-  → CLIP ViT-B/32 + color histogram extraction on MPS GPU
-  → Cached by content hash (blake2b of first 16KB + filesize) — survives file renames
-  → Output: .reorder-cache/clip_embeddings.npz + .filenames.json
-  → Requires: /tmp/imgcluster-env/bin/python3 (venv with torch, open-clip-torch, pillow, numpy)
+  CLIP ViT-B/32, DINOv2, DINOv3, PE-Core L/G, color histograms — all on MPS GPU.
+  Per-model version keys (MODEL_VERSIONS dict): only changed models re-extract.
+  Content-hash cache (blake2b of first 16KB + filesize) survives renames.
+  --models forces re-extract; --required only extracts listed models if missing.
+  → .reorder-cache/{clip_embeddings.npz, clip_hash_cache.npz, *.filenames.json, dinov3_patches.npy}
 
-Stage 2: Rust (rust/cluster-tool/src/main.rs)
-  → Ward's linkage (NNC algorithm) matching scipy exactly
-  → Pre-seeds confirmed reorder groups as real clusters (true centroid/size/variance)
-  → Uses cosine distances + scipy's _ward update formula (square-sqrt)
-  → Parallel distance computation via rayon (~1.2s for 7000 images)
-  → Output: linkage tree binary + cluster assignments JSON
+Stage 2: Rust (rust/cluster-tool/)
+  Ward's linkage (NNC) matching scipy exactly. Parallel via rayon.
+  Pre-seeds confirmed reorder groups as real clusters (true centroid/size/variance).
+  Weighted blend of per-model cosine distances (--clip-weight, --dinov3-weight, etc.)
+  Optional: blend in precomputed patch distance matrix (--dist-matrix)
+  → .reorder-cache/linkage_tree.bin
+
+Stage 2b: Rust (rust/group-similarity/)
+  Two modes: "merge-suggestions" (pairwise group scoring for Merge mode)
+             "dist-matrix" (condensed matrix for patch-weighted clustering)
+  DINOv3 patch matching: for each image pair, max-pool 7x7 cosine sims
 
 Stage 3: Bun (src/cluster.ts)
-  → Re-cuts cached linkage tree at any N (instant, no subprocess)
-  → TF-IDF auto-naming: CLIP embeddings × 334-term vocabulary, z-score ranking
-  → Contact sheet generation via Sharp (4×3 grid, 400×400 thumbs)
+  Re-cuts cached linkage tree — three modes: fixed N, distance threshold, HDBSCAN-style adaptive
+  TF-IDF auto-naming: CLIP × 334-term vocabulary, z-score ranking
+  Contact sheets via Sharp (4×3 grid, 400px thumbs)
 ```
 
-### Clustering API Endpoints
+### Key Patterns
 
-All routes are in `handleAPI()` in `src/server.ts`. Reorder/folder routes are standard CRUD — read the file. Cluster-specific routes:
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/api/cluster` | Full pipeline (SSE progress stream). Body: `{nClusters?}` |
-| GET | `/api/cluster/status` | `{running: boolean}` — prevents double-triggering |
-| GET | `/api/cluster/cache-status` | `{cached: boolean}` — check if linkage tree exists |
-| POST | `/api/cluster/recut` | Re-cut cached tree. Body: `{nClusters}`. Instant. |
-| POST | `/api/cluster/contact-sheet` | Generate thumbnail grid. Body: `{filenames, clusterName}` |
-
-### Disk Files (in target image directory)
-
-| File | Purpose |
-|------|---------|
-| `.reorder-groups.json` | Persisted groups (shared between reorder and cluster modes) |
-| `.reorder-log` | Server operation log (truncated to 50k lines on startup) |
-| `.reorder-cache/clip_embeddings.npz` | CLIP+color feature arrays (filename-ordered, for Rust) |
-| `.reorder-cache/clip_hash_cache.npz` | Feature cache keyed by content hash (survives renames) |
-| `.reorder-cache/clip_embeddings.filenames.json` | Filename→row mapping for the npz |
-| `.reorder-cache/text_embeddings.json` | Precomputed CLIP text embeddings (334 terms) |
-| `.reorder-cache/linkage_tree.bin` | Binary linkage tree (header: n_images, n_pre_merges, n_steps; then merge step array) |
-| `.reorder-cache/contact_sheets/` | Generated contact sheet JPEGs for "Ask Claude" |
-
-## Key Patterns
-
-- **Content-hash cache**: `blake2b(first 16KB + filesize)` keys embeddings, so renaming files doesn't invalidate the ~5min extraction
-- **Pre-seeded groups**: Rust linkage starts with confirmed groups as properly-initialized clusters (real centroid/size/variance), not zero-distance hacks
-- **Sorted merge steps**: NNC produces merges in execution order (not distance order); they're sorted before tree-cutting to match scipy's behavior
-- **SSE streaming**: `/api/cluster` returns `text/event-stream` with `progress`, `result`, and `error` events
-- **Stale tree detection**: Client tracks `treeStale` flag after group changes; shows banner prompting re-run
-- **TF-IDF caching**: globalAvg/globalStd arrays cached in `_tfidfStatsCache`, invalidated only when embeddings change
-- **Rename safety**: two-phase rename with write-ahead manifest. `withRenameLock` serializes filesystem operations
-- **Group atomicity**: Server remaps groups in same lock as renames. Client reloads after save/undo
-- **Browser cache busting**: `imageVersion` counter + `?v=N` URL parameter
-- **Debounced group persist**: `groupStore` debounces server writes (300ms), with `flushGroupPersist()` for critical paths
-- **Folder mode change detection**: `folderStore` keeps a disk snapshot and computes `hasChanges` against local state
-- **Client-side routing**: pushState-based via `useRouter` hook — server returns `index.html` for all non-API/non-asset paths
+- **Content-hash cache** — renames don't invalidate the ~5min extraction
+- **Pre-seeded groups** — Rust linkage bootstraps confirmed groups as initialized clusters, not zero-distance hacks
+- **Sorted merge steps** — NNC emits in execution order; sorted before tree-cutting to match scipy
+- **Patch-dist cache** — `patch_dist_matrix.bin` reused if newer than patches + filenames
+- **SSE streaming** — `/api/cluster` and `/api/cluster/extract` return `text/event-stream` with `progress`/`result`/`error` events. Reconnect via `/api/cluster/progress`.
+- **Stale tree detection** — client tracks `treeStale` after group changes, prompts re-run
+- **TF-IDF caching** — globalAvg/globalStd invalidated only when embeddings change
+- **Rename safety** — two-phase with manifest; `recoverPendingRename` runs at startup inside the lock
+- **Group atomicity** — server remaps groups in the same lock as renames; client reloads after save/undo
+- **Debounced group persist** — 300ms; `flushGroupPersist()` for critical paths
+- **Folder mode change detection** — disk snapshot + computed `hasChanges` against local state
+- **Client-side routing** — server returns `index.html` for any non-API, non-asset path
 
 ## Python Environment
 
-The clustering Python scripts require a venv at `/tmp/imgcluster-env/` with:
-```
-torch torchvision open-clip-torch pillow numpy
-```
-Set `CLUSTER_PYTHON` env var to override the Python path (default: `/tmp/imgcluster-env/bin/python3`).
+Clustering requires a venv at `/tmp/imgcluster-env/` with `torch torchvision open-clip-torch pillow numpy transformers`.
+Override path via `CLUSTER_PYTHON` env var.
 
-Create with: `uv venv /tmp/imgcluster-env && source /tmp/imgcluster-env/bin/activate && uv pip install torch torchvision open-clip-torch pillow numpy`
+```sh
+uv venv /tmp/imgcluster-env
+source /tmp/imgcluster-env/bin/activate
+uv pip install torch torchvision open-clip-torch pillow numpy transformers
+```
+
+DINOv3 weights are loaded from `$DINOV3_WEIGHTS` (default `/tmp/dinov3-weights/facebook/dinov3-vitb16-pretrain-lvd1689m`).

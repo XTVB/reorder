@@ -1,0 +1,361 @@
+/* ── Merge suggestions page ──────────────────────────────────── */
+
+.merge-suggestions-page {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 56px);
+  overflow: hidden;
+}
+
+.merge-scroll-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+}
+
+.merge-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.merge-error {
+  padding: 8px 16px;
+  background: rgba(255, 80, 80, 0.15);
+  color: #ff6b6b;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255, 80, 80, 0.2);
+}
+
+/* ── Toolbar ────────────────────────────────────────────────── */
+
+.merge-toolbar {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.merge-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.merge-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.merge-threshold-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.merge-threshold-control input[type="range"] {
+  width: 120px;
+  accent-color: var(--accent);
+}
+
+.merge-threshold-value {
+  font-variant-numeric: tabular-nums;
+  min-width: 36px;
+  text-align: right;
+}
+
+.merge-compute-time {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.merge-suggestion-count {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.merge-method-toggle {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.merge-method-toggle .btn-active {
+  background: var(--accent);
+  color: white;
+}
+
+.merge-method-stale {
+  font-size: 10px;
+  color: var(--accent);
+  margin-left: 4px;
+  font-style: italic;
+}
+
+/* ── Row ────────────────────────────────────────────────────── */
+
+.merge-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.merge-row-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  min-height: 40px;
+}
+
+.merge-row-header:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.merge-row-chevron {
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.merge-row-chevron-open {
+  transform: rotate(90deg);
+}
+
+.merge-row-name {
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.merge-row-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.merge-row-suggestions {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.merge-row-best-distance {
+  font-size: 11px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.merge-row-pending {
+  font-size: 11px;
+  color: #4ade80;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.merge-row-actions {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.merge-row-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px 12px;
+  overflow-x: auto;
+}
+
+.merge-row-arrow {
+  font-size: 20px;
+  color: var(--text-muted);
+  align-self: center;
+  flex-shrink: 0;
+  padding: 0 4px;
+}
+
+.merge-row-candidates {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ── Card ───────────────────────────────────────────────────── */
+
+.merge-card {
+  width: 180px;
+  flex-shrink: 0;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  position: relative;
+  overflow: hidden;
+}
+
+.merge-card:hover {
+  border-color: var(--accent);
+}
+
+.merge-card-ref {
+  border-color: var(--accent);
+  opacity: 0.85;
+}
+
+.merge-card-selected {
+  border-color: #4ade80;
+  box-shadow: 0 0 0 1px #4ade80;
+}
+
+.merge-card-thumbs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 1px;
+  aspect-ratio: 1;
+  background: var(--border);
+}
+
+.merge-card-thumb-slot {
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.merge-card-thumb-slot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.merge-card-thumb-empty {
+  width: 100%;
+  height: 100%;
+  background: var(--surface);
+}
+
+.merge-card-info {
+  padding: 6px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.merge-card-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.merge-card-count {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.merge-card-distance {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: auto;
+}
+
+.merge-dist-low {
+  background: rgba(74, 222, 128, 0.2);
+  color: #4ade80;
+}
+
+.merge-dist-mid {
+  background: rgba(250, 204, 21, 0.2);
+  color: #facc15;
+}
+
+.merge-dist-high {
+  background: rgba(251, 146, 60, 0.2);
+  color: #fb923c;
+}
+
+.merge-card-checkbox {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: white;
+  pointer-events: none;
+}
+
+.merge-card-checkbox-checked {
+  background: #4ade80;
+  border-color: #4ade80;
+  color: #000;
+  font-weight: bold;
+}
+
+/* ── Expanded card (all images) ─────────────────────────────── */
+
+.merge-card-expanded {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 4px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.merge-card-expanded-thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.merge-card-expanded-thumb img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.merge-card-expanded-name {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80px;
+}

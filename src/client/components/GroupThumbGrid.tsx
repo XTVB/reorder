@@ -1,13 +1,8 @@
 import React, { useMemo } from "react";
-import { imageUrl } from "../utils/helpers.ts";
+import { imageUrl, pickThumbSamples } from "../utils/helpers.ts";
 
 export const GroupThumbGrid = React.memo(function GroupThumbGrid({ images }: { images: string[] }) {
-  const thumbs = useMemo(() => {
-    const n = images.length;
-    if (n === 0) return [];
-    if (n <= 4) return images.slice();
-    return [images[0], images[Math.floor(n / 3)], images[Math.floor((n * 2) / 3)], images[n - 1]];
-  }, [images]);
+  const thumbs = useMemo(() => pickThumbSamples(images), [images]);
 
   return (
     <div className="group-thumb-grid">

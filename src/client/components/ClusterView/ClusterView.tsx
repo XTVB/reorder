@@ -121,7 +121,7 @@ export function ClusterView() {
   useEffect(() => {
     if (focusedClusterId) {
       const idx = visibleClusters.findIndex((c) => c.id === focusedClusterId);
-      if (idx !== -1) virtualizer.scrollToIndex(idx, { align: "nearest" });
+      if (idx !== -1) virtualizer.scrollToIndex(idx, { align: "auto" });
     }
   }, [focusedClusterId]);
 

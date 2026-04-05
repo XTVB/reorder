@@ -35,10 +35,17 @@ MODEL_VERSIONS = {
     "pecore_l": "PE-Core-L-14-336-meta-v1",
     "pecore_g": "PE-Core-bigG-14-448-meta-v1",
     "color": "hsv-rgb-77d-v1",
+    "dinov3": "dinov3-vitb16-7x7pool-v2",
 }
 
 # All embedding arrays stored in the npz
 EMB_KEYS = list(MODEL_VERSIONS.keys())
+
+# DINOv3 local weights path (downloaded from Kaggle)
+DINOV3_WEIGHTS = os.environ.get(
+    "DINOV3_WEIGHTS",
+    "/tmp/dinov3-weights/facebook/dinov3-vitb16-pretrain-lvd1689m",
+)
 
 
 def content_hash(filepath: str) -> str:
@@ -304,8 +311,16 @@ def main():
 
     items_map = {k: _items_for(k) for k in EMB_KEYS}
 
+    # DINOv3 patches are stored as a single 3D array in filename order, not a
+    # hash-keyed cache, so we cannot incrementally merge in new rows. If we
+    # would run partial extraction, promote to a full re-extraction instead.
+    if items_map["dinov3"] and items_map["dinov3"] is not all_items:
+        print("  DINOv3 is incremental → promoting to full re-extraction (patches cache is not hash-keyed)", file=sys.stderr)
+        items_map["dinov3"] = all_items
+        models_to_extract.add("dinov3")
+
     # Only import heavy ML libraries if a neural model pass is actually needed.
-    _neural_keys = {"clip", "pecore_l", "pecore_g", "dino"}
+    _neural_keys = {"clip", "pecore_l", "pecore_g", "dino", "dinov3"}
     if any(items_map[k] for k in _neural_keys):
         import torch
         import open_clip
@@ -443,14 +458,14 @@ def main():
         _save_model_to_cache("color", new_color, color_items)
 
     # ── open_clip models (data-driven) ───────────────────────────────────────
-    # (key, model_name, pretrained, input_hw, batch_divisor, dim, label)
+    # (key, model_name, pretrained, input_hw, batch_mult, batch_div, dim, label)
     OPEN_CLIP_MODELS = [
-        ("clip",     "ViT-B-32",           "laion2b_s34b_b79k", 224, 1,   512, "CLIP"),
-        ("pecore_l", "PE-Core-L-14-336",   "meta",              336, 2,  1024, "PE-Core-L"),
-        ("pecore_g", "PE-Core-bigG-14-448","meta",              448, 8,  1280, "PE-Core-G"),
+        ("clip",     "ViT-B-32",           "laion2b_s34b_b79k", 224, 4, 1,  512, "CLIP"),
+        ("pecore_l", "PE-Core-L-14-336",   "meta",              336, 1, 2, 1024, "PE-Core-L"),
+        ("pecore_g", "PE-Core-bigG-14-448","meta",              448, 1, 8, 1280, "PE-Core-G"),
     ]
 
-    for key, model_name, pretrained, hw, batch_div, dim, label in OPEN_CLIP_MODELS:
+    for key, model_name, pretrained, hw, batch_mult, batch_div, dim, label in OPEN_CLIP_MODELS:
         model_items = items_map[key]
         if model_items:
             pass_num += 1
@@ -462,7 +477,7 @@ def main():
             )
             model.eval()
             embs, colors = _run_pass(
-                model_items, preprocess, hw, max(1, args.batch_size // batch_div),
+                model_items, preprocess, hw, max(1, args.batch_size * batch_mult // batch_div),
                 label, model.encode_image, extract_color=extract_color,
             )
             new_arrays[key] = embs
@@ -502,6 +517,74 @@ def main():
     else:
         new_dino = np.zeros((0, 1024), dtype=np.float32)
 
+    # ── DINOv3 ViT-B/16 (uses transformers, local weights) ─────────────────
+    # Extracts CLS token (768d) as the global embedding stored in the NPZ,
+    # and full patch tokens (196 × 768) stored in a separate .npy file for
+    # patch-level group similarity matching.
+    DINOV3_CLS_DIM = 768
+    DINOV3_PATCH_DIM = 768
+    DINOV3_N_PATCHES = 49  # 14x14 avg-pooled to 7x7
+    dinov3_items = items_map["dinov3"]
+    dinov3_patches_path = os.path.join(cache_dir, "dinov3_patches.npy")
+    if dinov3_items:
+        pass_num += 1
+        from torchvision import transforms as tv_transforms
+        from transformers import AutoModel, AutoImageProcessor
+        print(f"  [Pass {pass_num}/{total_passes}] DINOv3 ViT-B/16 ({len(dinov3_items)} images)", file=sys.stderr)
+
+        dinov3_model = AutoModel.from_pretrained(DINOV3_WEIGHTS)
+        dinov3_processor = AutoImageProcessor.from_pretrained(DINOV3_WEIGHTS)
+        dinov3_model = dinov3_model.to(device).eval()
+
+        # DINOv3 needs its own run loop because we extract both CLS and patches
+        n_dinov3 = len(dinov3_items)
+        dinov3_cls_results = []
+        dinov3_patch_results = []
+        t0 = time.time()
+        bs = max(1, args.batch_size // 4)  # smaller batches for patch memory
+
+        for batch_start in range(0, n_dinov3, bs):
+            batch_end = min(batch_start + bs, n_dinov3)
+            images = []
+            for i in range(batch_start, batch_end):
+                fname, h = dinov3_items[i]
+                path = os.path.join(image_dir, fname)
+                try:
+                    images.append(Image.open(path).convert("RGB"))
+                except Exception as e:
+                    print(f"  WARNING: skipping {fname}: {e}", file=sys.stderr)
+                    images.append(Image.new("RGB", (224, 224)))
+
+            inputs = dinov3_processor(images=images, return_tensors="pt").to(device)
+            with torch.no_grad():
+                outputs = dinov3_model(**inputs)
+                hidden = outputs.last_hidden_state  # [B, 1+4+196, 768]
+                cls_tokens = hidden[:, 0, :]  # [B, 768]
+                patch_tokens = hidden[:, 5:, :]  # [B, 196, 768] — skip CLS + 4 registers
+
+                # L2-normalize CLS
+                cls_tokens = cls_tokens / cls_tokens.norm(dim=-1, keepdim=True)
+
+                # Average-pool 14x14 patch grid to 7x7 for efficiency
+                B = patch_tokens.shape[0]
+                grid = patch_tokens.view(B, 14, 14, DINOV3_PATCH_DIM).permute(0, 3, 1, 2)
+                pooled = torch.nn.functional.avg_pool2d(grid, kernel_size=2, stride=2)
+                patch_tokens = pooled.permute(0, 2, 3, 1).reshape(B, DINOV3_N_PATCHES, DINOV3_PATCH_DIM)
+                # Re-normalize after averaging
+                patch_tokens = patch_tokens / patch_tokens.norm(dim=-1, keepdim=True)
+
+            dinov3_cls_results.append(cls_tokens.cpu().numpy().astype(np.float32))
+            dinov3_patch_results.append(patch_tokens.cpu().numpy().astype(np.float32))
+            _report_progress("DINOv3", batch_end, n_dinov3, t0)
+
+        new_dinov3 = np.vstack(dinov3_cls_results)
+        new_dinov3_patches = np.vstack(dinov3_patch_results)  # [N, 196, 768]
+        _save_model_to_cache("dinov3", new_dinov3, dinov3_items)
+        _free_model(dinov3_model, dinov3_processor)
+    else:
+        new_dinov3 = np.zeros((0, DINOV3_CLS_DIM), dtype=np.float32)
+        new_dinov3_patches = None
+
     # ── Merge with existing cache ────────────────────────────────────────────
     # For each model: if it was fully re-extracted, the new array IS the complete data.
     # If only new images were extracted, merge with existing cache.
@@ -510,7 +593,7 @@ def main():
     new_data_map = {
         "clip": new_clip, "dino": new_dino,
         "pecore_l": new_pecore_l, "pecore_g": new_pecore_g,
-        "color": new_color,
+        "color": new_color, "dinov3": new_dinov3,
     }
 
     # Build unified hash list (union of cached + any new hashes)
@@ -589,6 +672,22 @@ def main():
 
     print(f"  Saved Rust embeddings: {npz_path}", file=sys.stderr)
     print(f"  Saved filenames: {filenames_path}", file=sys.stderr)
+
+    # DINOv3 patches: saved separately (3D, ~1GB for 7k images) in filename order
+    # for the group-similarity Rust tool.
+    if new_dinov3_patches is not None:
+        dinov3_hash_to_row = {h: i for i, (_, h) in enumerate(dinov3_items)}
+        patches_ordered = np.zeros(
+            (len(image_files), DINOV3_N_PATCHES, DINOV3_PATCH_DIM), dtype=np.float32
+        )
+        for i, f in enumerate(image_files):
+            h = current_hashes[f]
+            if h in dinov3_hash_to_row:
+                patches_ordered[i] = new_dinov3_patches[dinov3_hash_to_row[h]]
+        del new_dinov3_patches  # free ~1GB before save+caller reads result
+        np.save(dinov3_patches_path, patches_ordered)
+        print(f"  Saved DINOv3 patches: {dinov3_patches_path} "
+              f"({patches_ordered.shape})", file=sys.stderr)
 
     json.dump({
         "total": len(image_files),

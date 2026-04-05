@@ -31,6 +31,14 @@ const RUST_BINARY = join(
   "release",
   "cluster-tool",
 );
+const GROUP_SIM_BINARY = join(
+  dirname(import.meta.dir),
+  "rust",
+  "group-similarity",
+  "target",
+  "release",
+  "group-similarity",
+);
 const PYTHON = process.env.CLUSTER_PYTHON || "/tmp/imgcluster-env/bin/python3";
 
 function cacheDir(targetDir: string) {
@@ -63,6 +71,28 @@ interface TextEmbeddings {
   terms: string[];
   flat: Float32Array; // flattened [n_terms * dim]
   dim: number;
+}
+
+// ── Rust subprocess helper ───────────────────────────────────────────────────
+// Drains stdout/stderr concurrently with awaiting exit to avoid pipe-buffer
+// deadlock if the child emits more than the pipe can hold before exiting.
+
+async function runRustBinary(
+  binary: string,
+  args: string[],
+  label: string,
+): Promise<string> {
+  const proc = Bun.spawn([binary, ...args], { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (stderr) log(label, stderr.trim());
+  if (exitCode !== 0) {
+    throw new Error(`${label} failed (exit ${exitCode}): ${stderr}`);
+  }
+  return stdout;
 }
 
 // ── Feature extraction (Python) ──────────────────────────────────────────────
@@ -144,11 +174,58 @@ export async function runLinkage(
   targetDir: string,
   nClusters: number,
   weights?: WeightConfig,
+  usePatches?: boolean,
 ): Promise<RustOutput> {
   const cache = cacheDir(targetDir);
   const embeddings = join(cache, "clip_embeddings.npz");
   const groupsFile = join(targetDir, ".reorder-groups.json");
   const treePath = join(cache, "linkage_tree.bin");
+  const distMatrixPath = join(cache, "patch_dist_matrix.bin");
+
+  if (usePatches) {
+    const patchesPath = join(cache, "dinov3_patches.npy");
+    if (!existsSync(patchesPath)) {
+      throw new Error(
+        "DINOv3 patches not found. Run feature extraction with --required dinov3 first.",
+      );
+    }
+    if (!existsSync(GROUP_SIM_BINARY)) {
+      throw new Error(
+        `group-similarity binary not found. Build with: cd rust/group-similarity && cargo build --release`,
+      );
+    }
+
+    const filenamesPath = join(cache, "clip_embeddings.filenames.json");
+
+    // Reuse cached distance matrix if it's newer than both inputs (O(N²) patches matching is expensive).
+    let cacheValid = false;
+    if (existsSync(distMatrixPath)) {
+      const matMtime = Bun.file(distMatrixPath).lastModified;
+      if (
+        matMtime > Bun.file(patchesPath).lastModified &&
+        matMtime > Bun.file(filenamesPath).lastModified
+      ) {
+        cacheValid = true;
+      }
+    }
+
+    if (cacheValid) {
+      log("cluster", "Using cached patch-based distance matrix");
+    } else {
+      log("cluster", "Precomputing patch-based distance matrix...");
+      await runRustBinary(
+        GROUP_SIM_BINARY,
+        [
+          "--patches", patchesPath,
+          "--filenames", filenamesPath,
+          "--groups", "",
+          "--mode", "dist-matrix",
+          "--output", distMatrixPath,
+        ],
+        "patch-dist-matrix",
+      );
+    }
+  }
 
   const args = [
     "--embeddings",
@@ -160,6 +237,13 @@ export async function runLinkage(
   ];
   if (existsSync(groupsFile)) {
     args.push("--groups", groupsFile);
+  }
+  if (usePatches) {
+    args.push("--dist-matrix", distMatrixPath);
+    const hasEmbWeights = weights && Object.values(weights).some((v) => (v ?? 0) > 0);
+    if (hasEmbWeights) {
+      args.push("--dist-matrix-weight", "0.5");
+    }
   }
   if (weights) {
     for (const [key, val] of Object.entries(weights)) {
@@ -174,18 +258,7 @@ export async function runLinkage(
   }
 
   log("cluster", `Running Rust linkage: ${RUST_BINARY} ${args.join(" ")}`);
-  const proc = Bun.spawn([RUST_BINARY, ...args], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) {
-    const err = await new Response(proc.stderr).text();
-    throw new Error(`Rust linkage failed (exit ${exitCode}): ${err}`);
-  }
-
-  const stdout = await new Response(proc.stdout).text();
+  const stdout = await runRustBinary(RUST_BINARY, args, "cluster-tool");
   return JSON.parse(stdout);
 }
 
@@ -291,14 +364,18 @@ function distanceProfileFromTree(tree: LinkageTree): DistanceProfile {
 export function recutTree(
   targetDir: string,
   nClusters: number,
-): { labels: number[]; distanceProfile: DistanceProfile } {
+): { labels: number[]; nClusters: number; distanceProfile: DistanceProfile } {
   const tree = loadTree(targetDir);
   const nAfterPremerge = tree.nImages - tree.nPreMerges;
   // Never go below nGroups clusters — confirmed groups must stay separate
   const minClusters = Math.max(nClusters, tree.nGroups);
   const mainMergesNeeded = Math.max(0, nAfterPremerge - minClusters);
   const labels = cutTree(tree, mainMergesNeeded);
-  return { labels, distanceProfile: distanceProfileFromTree(tree) };
+  return {
+    labels,
+    nClusters: nAfterPremerge - mainMergesNeeded,
+    distanceProfile: distanceProfileFromTree(tree),
+  };
 }
 
 export function recutTreeByThreshold(
@@ -480,7 +557,7 @@ export function recutTreeAdaptive(
   // When an orphan's cluster merges with one containing labeled images,
   // assign the orphan that label (nearest neighbor in the merge tree).
   const orphanSet = new Set<number>();
-  for (let i = 0; i < nImages; i++) if (labels[i] < 0) orphanSet.add(i);
+  for (let i = 0; i < nImages; i++) if (labels[i]! < 0) orphanSet.add(i);
 
   if (orphanSet.size > 0) {
     for (let i = 0; i < nImages; i++) { ufParent[i] = i; ufSize[i] = 1; }
@@ -496,19 +573,19 @@ export function recutTreeAdaptive(
 
       let labelA = -1, labelB = -1;
       for (let j = head[ra]!; j >= 0; j = next[j]!) {
-        if (labels[j] >= 0) { labelA = labels[j]!; break; }
+        if (labels[j]! >= 0) { labelA = labels[j]!; break; }
       }
       for (let j = head[rb]!; j >= 0; j = next[j]!) {
-        if (labels[j] >= 0) { labelB = labels[j]!; break; }
+        if (labels[j]! >= 0) { labelB = labels[j]!; break; }
       }
 
       if (labelA >= 0 && labelB < 0) {
         for (let j = head[rb]!; j >= 0; j = next[j]!) {
-          if (labels[j] < 0) { labels[j] = labelA; orphanSet.delete(j); }
+          if (labels[j]! < 0) { labels[j] = labelA; orphanSet.delete(j); }
         }
       } else if (labelB >= 0 && labelA < 0) {
         for (let j = head[ra]!; j >= 0; j = next[j]!) {
-          if (labels[j] < 0) { labels[j] = labelB; orphanSet.delete(j); }
+          if (labels[j]! < 0) { labels[j] = labelB; orphanSet.delete(j); }
         }
       }
 
@@ -521,9 +598,9 @@ export function recutTreeAdaptive(
     for (const i of orphanSet) {
       const root = find(i);
       for (let j = head[root]!; j >= 0; j = next[j]!) {
-        if (labels[j] >= 0) { labels[i] = labels[j]!; break; }
+        if (labels[j]! >= 0) { labels[i] = labels[j]!; break; }
       }
-      if (labels[i] < 0) labels[i] = nextLabel++;
+      if (labels[i]! < 0) labels[i] = nextLabel++;
     }
   }
 
@@ -835,15 +912,19 @@ export async function runFullCluster(
   nClusters: number,
   onProgress?: (line: string) => void,
   weights?: WeightConfig,
+  usePatches?: boolean,
 ): Promise<ClusterData> {
   const required = modelsForWeights(weights);
+  if (usePatches && required && !required.includes("dinov3")) {
+    required.push("dinov3");
+  }
   const [extraction] = await Promise.all([
     extractFeatures(targetDir, onProgress, required ? { required } : undefined),
     ensureTextEmbeddings(targetDir),
   ]);
   log("cluster", `Extraction: ${extraction.extracted} new, ${extraction.cached} cached`);
 
-  const rustOutput = await runLinkage(targetDir, nClusters, weights);
+  const rustOutput = await runLinkage(targetDir, nClusters, weights, usePatches);
   log("cluster", `Linkage complete: ${rustOutput.clusters.length} clusters`);
 
   const clusters = computeAutoNames(targetDir, rustOutput.clusters);
@@ -857,8 +938,9 @@ export async function runLinkageOnly(
   targetDir: string,
   nClusters: number,
   weights?: WeightConfig,
+  usePatches?: boolean,
 ): Promise<ClusterData> {
-  const rustOutput = await runLinkage(targetDir, nClusters, weights);
+  const rustOutput = await runLinkage(targetDir, nClusters, weights, usePatches);
   const clusters = computeAutoNames(targetDir, rustOutput.clusters);
   const nImages = clusters.reduce((n, c) => n + c.images.length, 0);
   return { clusters, suggestedCounts: computeSuggestedCounts(nImages), nClusters };
@@ -947,6 +1029,76 @@ export function isClusterJobRunning() {
 }
 export function setClusterJobRunning(v: boolean) {
   _clusterJobRunning = v;
+}
+
+// ── Merge suggestions: DINOv3 patch-based group similarity ──────────────────
+
+export interface GroupPairResult {
+  group_a: string;
+  group_b: string;
+  size_a: number;
+  size_b: number;
+  patch_median: number;
+  patch_p75: number;
+  patch_best: number;
+  closest_pair: [string, string];
+}
+
+export async function computeMergeSuggestions(
+  targetDir: string,
+  minScore = 0.55,
+): Promise<GroupPairResult[]> {
+  const cache = cacheDir(targetDir);
+  const patchesPath = join(cache, "dinov3_patches.npy");
+  const filenamesPath = join(cache, "clip_embeddings.filenames.json");
+  const groupsPath = join(targetDir, ".reorder-groups.json");
+  const resultCachePath = join(cache, "merge_suggestions.json");
+
+  if (!existsSync(patchesPath)) {
+    throw new Error(
+      "DINOv3 patches not found. Run feature extraction with --required dinov3 first.",
+    );
+  }
+  if (!existsSync(GROUP_SIM_BINARY)) {
+    throw new Error(
+      `group-similarity binary not found at ${GROUP_SIM_BINARY}. Build with: cd rust/group-similarity && cargo build --release`,
+    );
+  }
+
+  // Disk cache is valid if newer than both the groups file and patches file.
+  try {
+    const cacheFile = Bun.file(resultCachePath);
+    const cacheTime = cacheFile.lastModified;
+    if (
+      cacheTime > Bun.file(groupsPath).lastModified &&
+      cacheTime > Bun.file(patchesPath).lastModified
+    ) {
+      log("merge-suggestions", "Using cached results");
+      const cached: GroupPairResult[] = await cacheFile.json();
+      return minScore > 0
+        ? cached.filter((r) => r.patch_median >= minScore)
+        : cached;
+    }
+  } catch {}
+
+  const args = [
+    "--patches", patchesPath,
+    "--filenames", filenamesPath,
+    "--groups", groupsPath,
+    // Compute unfiltered so the cache can serve any threshold; TS re-filters on return.
+    "--min-score", "0",
+  ];
+
+  log("merge-suggestions", `Running group-similarity: ${args.join(" ")}`);
+  const stdout = await runRustBinary(GROUP_SIM_BINARY, args, "merge-suggestions");
+  const allResults: GroupPairResult[] = JSON.parse(stdout);
+
+  await Bun.write(resultCachePath, stdout);
+  log("merge-suggestions", `Cached ${allResults.length} results to ${resultCachePath}`);
+
+  return minScore > 0
+    ? allResults.filter((r) => r.patch_median >= minScore)
+    : allResults;
 }
 
 // Progress broadcasting — allows reconnecting to an in-progress job

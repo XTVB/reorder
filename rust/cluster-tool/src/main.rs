@@ -42,6 +42,10 @@ struct Cli {
     #[arg(long, default_value_t = 0.0)]
     dino_weight: f32,
 
+    /// DINOv3 CLS token weight
+    #[arg(long, default_value_t = 0.0)]
+    dinov3_weight: f32,
+
     /// PE-Core-L feature weight
     #[arg(long, default_value_t = 0.0)]
     pecore_l_weight: f32,
@@ -49,6 +53,15 @@ struct Cli {
     /// PE-Core-bigG feature weight
     #[arg(long, default_value_t = 0.0)]
     pecore_g_weight: f32,
+
+    /// Path to precomputed condensed distance matrix binary
+    #[arg(long, default_value = "")]
+    dist_matrix: String,
+
+    /// Weight for the precomputed distance matrix when blending with embedding distances.
+    /// 1.0 = patches only, 0.0 = embeddings only, 0.5 = equal blend.
+    #[arg(long, default_value_t = 1.0)]
+    dist_matrix_weight: f32,
 }
 
 // ── Data types ───────────────────────────────────────────────────────────────
@@ -95,34 +108,8 @@ struct MergeStep {
 fn main() {
     let cli = Cli::parse();
 
-    // Load embeddings
-    eprintln!("Loading embeddings from {:?}...", cli.embeddings);
-    let file = File::open(&cli.embeddings).expect("Failed to open embeddings file");
-    let mut npz = NpzReader::new(file).expect("Failed to read npz");
+    let use_dist_matrix = !cli.dist_matrix.is_empty();
 
-    // Only load embedding arrays with non-zero weight to save I/O and memory
-    let emb_specs: Vec<(&str, f32, bool)> = vec![
-        ("clip", cli.clip_weight, false),       // already L2-normalized
-        ("dino", cli.dino_weight, false),
-        ("pecore_l", cli.pecore_l_weight, false),
-        ("pecore_g", cli.pecore_g_weight, false),
-        ("color", cli.color_weight, true),       // needs per-row L2 normalization
-    ];
-    let loaded: Vec<(Array2<f32>, f32, bool)> = emb_specs
-        .iter()
-        .filter(|(_, w, _)| *w > 0.0)
-        .filter_map(|(name, w, norm)| {
-            match npz.by_name::<ndarray::OwnedRepr<f32>, ndarray::Ix2>(name) {
-                Ok(arr) => Some((arr, *w, *norm)),
-                Err(_) => {
-                    eprintln!("WARNING: '{}' array not found in embeddings (weight={:.1}), skipping", name, w);
-                    None
-                }
-            }
-        })
-        .collect();
-
-    // Filenames are stored in a separate JSON file (numpy can't round-trip strings reliably)
     let filenames_path = cli.embeddings.with_extension("filenames.json");
     let filenames: Vec<String> = {
         let content = std::fs::read_to_string(&filenames_path)
@@ -130,23 +117,8 @@ fn main() {
         serde_json::from_str(&content)
             .unwrap_or_else(|_| panic!("Invalid filenames JSON: {:?}", filenames_path))
     };
-
     let n_images = filenames.len();
-    let active_desc: Vec<String> = emb_specs
-        .iter()
-        .filter(|(_, w, _)| *w > 0.0)
-        .zip(loaded.iter())
-        .map(|((name, w, _), (arr, _, _))| format!("{}={}d×{}", name, arr.ncols(), w))
-        .collect();
-    eprintln!("Loaded {} images, active: {}", n_images, active_desc.join(", "));
 
-    // Build combined feature vectors as a flat row-major Vec<f32> for cache-efficient
-    // access in the parallel distance computation.
-    let emb_arrays: Vec<(&Array2<f32>, f32, bool)> = loaded.iter().map(|(a, w, n)| (a, *w, *n)).collect();
-    let (features_flat, feat_dim) = build_combined_features_flat(&emb_arrays, n_images);
-    eprintln!("Combined feature dim: {}", feat_dim);
-
-    // Build filename→index map
     let fname_to_idx: HashMap<&str, usize> = filenames
         .iter()
         .enumerate()
@@ -157,6 +129,56 @@ fn main() {
     let groups = load_groups(&cli.groups, &fname_to_idx);
     eprintln!("Loaded {} confirmed groups", groups.len());
 
+    // Load embeddings (skip if using precomputed distance matrix)
+    let features_flat: Vec<f32>;
+    let feat_dim: usize;
+
+    if use_dist_matrix {
+        eprintln!("Using precomputed distance matrix — skipping embedding loading");
+        features_flat = vec![];
+        feat_dim = 0;
+    } else {
+        eprintln!("Loading embeddings from {:?}...", cli.embeddings);
+        let file = File::open(&cli.embeddings).expect("Failed to open embeddings file");
+        let mut npz = NpzReader::new(file).expect("Failed to read npz");
+
+        let emb_specs: Vec<(&str, f32, bool)> = vec![
+            ("clip", cli.clip_weight, false),
+            ("dino", cli.dino_weight, false),
+            ("dinov3", cli.dinov3_weight, false),
+            ("pecore_l", cli.pecore_l_weight, false),
+            ("pecore_g", cli.pecore_g_weight, false),
+            ("color", cli.color_weight, true),
+        ];
+        let loaded: Vec<(Array2<f32>, f32, bool)> = emb_specs
+            .iter()
+            .filter(|(_, w, _)| *w > 0.0)
+            .filter_map(|(name, w, norm)| {
+                match npz.by_name::<ndarray::OwnedRepr<f32>, ndarray::Ix2>(name) {
+                    Ok(arr) => Some((arr, *w, *norm)),
+                    Err(_) => {
+                        eprintln!("WARNING: '{}' array not found in embeddings (weight={:.1}), skipping", name, w);
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        let active_desc: Vec<String> = emb_specs
+            .iter()
+            .filter(|(_, w, _)| *w > 0.0)
+            .zip(loaded.iter())
+            .map(|((name, w, _), (arr, _, _))| format!("{}={}d×{}", name, arr.ncols(), w))
+            .collect();
+        eprintln!("Loaded {} images, active: {}", n_images, active_desc.join(", "));
+
+        let emb_arrays: Vec<(&Array2<f32>, f32, bool)> = loaded.iter().map(|(a, w, n)| (a, *w, *n)).collect();
+        let (ff, fd) = build_combined_features_flat(&emb_arrays, n_images);
+        features_flat = ff;
+        feat_dim = fd;
+        eprintln!("Combined feature dim: {}", feat_dim);
+    }
+
     // Find which images are in any group
     let mut grouped_images: HashSet<usize> = HashSet::new();
     for g in &groups {
@@ -165,7 +187,6 @@ fn main() {
         }
     }
 
-    // Build initial cluster set: one per group + one per ungrouped image
     let n_groups = groups.len();
     let mut ungrouped_img_indices: Vec<usize> = Vec::new();
     for i in 0..n_images {
@@ -173,18 +194,39 @@ fn main() {
             ungrouped_img_indices.push(i);
         }
     }
-    let n_initial = n_groups + ungrouped_img_indices.len();
     eprintln!(
         "Initial clusters: {} ({} groups + {} ungrouped)",
-        n_initial,
+        n_groups + ungrouped_img_indices.len(),
         n_groups,
         ungrouped_img_indices.len()
     );
 
-    // Run Ward's linkage with cosine distances and pre-seeded groups
-    eprintln!("Running Ward's linkage (cosine + pre-seeded groups)...");
-    let merge_steps =
-        wards_linkage_cosine(&features_flat, feat_dim, n_images, &groups, &ungrouped_img_indices);
+    // Load precomputed distance matrix if provided
+    let precomputed_dist: Option<(Vec<f64>, f32)> = if use_dist_matrix {
+        eprintln!("Loading precomputed distance matrix from {}...", cli.dist_matrix);
+        let bytes = std::fs::read(&cli.dist_matrix).expect("read dist matrix");
+        let stored_n = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+        assert_eq!(stored_n, n_images,
+            "Distance matrix has {} images but embeddings has {}", stored_n, n_images);
+        let n_pairs = n_images * (n_images - 1) / 2;
+        let data_bytes = &bytes[8..];
+        assert_eq!(data_bytes.len(), n_pairs * 8, "Distance matrix data size mismatch");
+        let dist: Vec<f64> = unsafe {
+            std::slice::from_raw_parts(data_bytes.as_ptr() as *const f64, n_pairs)
+        }.to_vec();
+        let w = cli.dist_matrix_weight;
+        eprintln!("  Loaded {} distances (weight={})", n_pairs, w);
+        Some((dist, w))
+    } else {
+        None
+    };
+
+    // Run Ward's linkage
+    eprintln!("Running Ward's linkage...");
+    let merge_steps = wards_linkage_cosine(
+        &features_flat, feat_dim, n_images, &groups, &ungrouped_img_indices,
+        precomputed_dist,
+    );
     eprintln!("Linkage complete: {} merge steps", merge_steps.len());
 
     // Sort main steps by distance for the tree file (so Bun can cut correctly)
@@ -370,93 +412,84 @@ fn wards_linkage_cosine(
     n_images: usize,
     groups: &[LoadedGroup],
     ungrouped: &[usize],
+    precomputed_dist: Option<(Vec<f64>, f32)>, // (distances, weight)
 ) -> Vec<MergeStep> {
     let n_groups = groups.len();
     let n_ungrouped = ungrouped.len();
 
-    // ── Step 1: Compute pairwise cosine distances ─────────────────────────
-    //
-    // Key optimizations vs the original:
-    //
-    //   a) Single flat Vec<f64> — no second allocation, no Vec<Vec> copy.
-    //      Replaces both `img_dist` and `dist_row` from the original code.
-    //
-    //   b) Parallel outer loop via rayon across 14 cores.
-    //      Row i writes to dist[offset_i .. offset_i + (n-i-1)].
-    //      These slices are provably non-overlapping; we use a SendPtr wrapper
-    //      (a standard Rust pattern) to send the raw pointer across threads.
-    //
-    //   c) The dot-product inner loop operates on contiguous f32 slices.
-    //      LLVM auto-vectorizes this to NEON FMLA on M4 (8-wide f32 SIMD).
-    //
-    //   d) Norms are precomputed once per image, not per pair.
-
-    eprintln!("  Computing cosine distances for {} images...", n_images);
-
-    // Precompute L2 norms in f64
-    let norms: Vec<f64> = (0..n_images)
-        .map(|i| {
-            let row = &features[i * feat_dim..][..feat_dim];
-            row.iter()
-                .map(|&x| (x as f64) * (x as f64))
-                .sum::<f64>()
-                .sqrt()
-        })
-        .collect();
-
     let n_pairs = n_images * (n_images - 1) / 2;
-    // Single flat condensed distance matrix — used throughout the entire algorithm.
-    let mut dist: Vec<f64> = vec![0.0f64; n_pairs];
 
-    // Parallel write: split `dist` into variable-length row chunks (row i has
-    // n_images - i - 1 entries) and process each chunk on its own rayon worker.
-    //
-    // We use a recursive split-and-conquer via `par_bridge` + an iterator that
-    // yields (&mut [f64], row_index) pairs. A simpler equivalent is to collect
-    // split indices and use `split_at_mut` recursively — but the cleanest safe
-    // Rust idiom for variable-length chunks is to build the mutable sub-slices
-    // via a sequential split loop and then call `par_bridge` on the result.
-    //
-    // However, rayon requires the iterator items to be `Send`. `&mut [f64]` is
-    // `Send`, so we build a Vec of (row_index, &mut [f64]) pairs by splitting
-    // `dist` sequentially, then process them in parallel.
+    // ── Step 1: Get pairwise distances ───────────────────────────────────
+    let has_features = feat_dim > 0;
 
-    // Build (row_index, &mut slice) pairs by sequential split
-    let mut row_slices: Vec<(usize, &mut [f64])> = Vec::with_capacity(n_images - 1);
-    {
-        let mut remaining = dist.as_mut_slice();
-        for i in 0..n_images - 1 {
-            let count = n_images - i - 1;
-            let (chunk, rest) = remaining.split_at_mut(count);
-            row_slices.push((i, chunk));
-            remaining = rest;
+    let skip_cosine = match &precomputed_dist {
+        Some((_, w)) => !has_features || *w >= 1.0,
+        None => !has_features,
+    };
+
+    let mut dist: Vec<f64> = if skip_cosine {
+        let (precomp, _) = precomputed_dist.expect("skip_cosine implies precomputed");
+        eprintln!("  Using precomputed distance matrix only ({} pairs)", precomp.len());
+        precomp
+    } else {
+        eprintln!("  Computing cosine distances for {} images...", n_images);
+
+        let norms: Vec<f64> = (0..n_images)
+            .map(|i| {
+                features[i * feat_dim..][..feat_dim]
+                    .iter()
+                    .map(|&x| (x as f64) * (x as f64))
+                    .sum::<f64>()
+                    .sqrt()
+            })
+            .collect();
+
+        let mut dist: Vec<f64> = vec![0.0f64; n_pairs];
+        let mut row_slices: Vec<(usize, &mut [f64])> = Vec::with_capacity(n_images - 1);
+        {
+            let mut remaining = dist.as_mut_slice();
+            for i in 0..n_images - 1 {
+                let count = n_images - i - 1;
+                let (chunk, rest) = remaining.split_at_mut(count);
+                row_slices.push((i, chunk));
+                remaining = rest;
+            }
         }
-    }
 
-    row_slices.par_iter_mut().for_each(|(i, slice)| {
-        let i = *i;
-        let row_i = &features[i * feat_dim..][..feat_dim];
-        let ni = norms[i];
+        row_slices.par_iter_mut().for_each(|(i, slice)| {
+            let i = *i;
+            let row_i = &features[i * feat_dim..][..feat_dim];
+            let ni = norms[i];
 
-        for (k, slot) in slice.iter_mut().enumerate() {
-            let j = i + 1 + k;
-            let row_j = &features[j * feat_dim..][..feat_dim];
-            let nj = norms[j];
+            for (k, slot) in slice.iter_mut().enumerate() {
+                let j = i + 1 + k;
+                let row_j = &features[j * feat_dim..][..feat_dim];
+                let nj = norms[j];
 
-            // Contiguous f32 zip → LLVM NEON FMLA auto-vectorization
-            let dot: f64 = row_i
-                .iter()
-                .zip(row_j.iter())
-                .map(|(&a, &b)| (a as f64) * (b as f64))
-                .sum();
+                let dot: f64 = row_i
+                    .iter()
+                    .zip(row_j.iter())
+                    .map(|(&a, &b)| (a as f64) * (b as f64))
+                    .sum();
 
-            let denom = ni * nj;
-            let cos_sim = if denom > 1e-20 { dot / denom } else { 0.0 };
-            *slot = (1.0 - cos_sim).max(0.0);
+                let denom = ni * nj;
+                let cos_sim = if denom > 1e-20 { dot / denom } else { 0.0 };
+                *slot = (1.0 - cos_sim).max(0.0);
+            }
+        });
+
+        // Blend in precomputed distances if provided: dist = w*precomp + (1-w)*cos
+        if let Some((precomp, weight)) = precomputed_dist {
+            eprintln!("  Blending precomputed (weight={}) with cosine distances...", weight);
+            let w = weight as f64;
+            dist.par_iter_mut().zip(precomp.par_iter()).for_each(|(d, &p)| {
+                *d = w * p + (1.0 - w) * *d;
+            });
         }
-    });
 
-    eprintln!("  Cosine distances computed.");
+        eprintln!("  Distances computed.");
+        dist
+    };
 
     // ── Step 2: Pre-merge groups using Lance-Williams updates ─────────────
     //

@@ -14,6 +14,7 @@ const WEIGHT_PRESETS: { label: string; weights: WeightConfig }[] = [
 const WEIGHT_LABELS: { key: keyof Required<WeightConfig>; label: string }[] = [
   { key: "clip", label: "CLIP" },
   { key: "dino", label: "DINOv2" },
+  { key: "dinov3", label: "DINOv3" },
   { key: "pecore_l", label: "PE-L" },
   { key: "pecore_g", label: "PE-G" },
   { key: "color", label: "Color" },
@@ -40,11 +41,13 @@ interface Props {
   hasError: boolean;
   distanceProfile: DistanceProfile | null;
   weights: WeightConfig;
+  usePatches: boolean;
   onRun: (n?: number) => void;
   onRecut: (n: number) => void;
   onRecutByThreshold: (threshold: number) => void;
   onRecutAdaptive: (minClusterSize: number) => void;
   onWeightsChange: (w: WeightConfig) => void;
+  onUsePatchesChange: (v: boolean) => void;
   onExpandAll: () => void;
   onCollapseAll: () => void;
   onAcceptAll: (minSize: number) => void;
@@ -64,6 +67,8 @@ export function ClusterToolbar({
   onRecutByThreshold,
   onRecutAdaptive,
   onWeightsChange,
+  usePatches,
+  onUsePatchesChange,
   onExpandAll,
   onCollapseAll,
   onAcceptAll,
@@ -195,6 +200,15 @@ export function ClusterToolbar({
           </div>
         )}
       </div>
+
+      <label className="cluster-patches-toggle" title="Use DINOv3 patch-level distances instead of global embeddings (better for distinguishing specific outfits/locations, ~30s extra)">
+        <input
+          type="checkbox"
+          checked={usePatches}
+          onChange={(e) => onUsePatchesChange(e.target.checked)}
+        />
+        Patches
+      </label>
 
       {/* Threshold slider or N input */}
       {hasProfile ? (

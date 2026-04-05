@@ -65,3 +65,11 @@ export function postJson(url: string, body: unknown): Promise<Response> {
     body: JSON.stringify(body),
   });
 }
+
+/** Pick up to 4 evenly-spaced sample thumbnails from a group's images. */
+export function pickThumbSamples(images: string[]): string[] {
+  const n = images.length;
+  if (n === 0) return [];
+  if (n <= 4) return images.slice();
+  return [images[0]!, images[Math.floor(n / 3)]!, images[Math.floor((n * 2) / 3)]!, images[n - 1]!];
+}

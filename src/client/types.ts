@@ -58,7 +58,28 @@ export type GridItem =
   | { type: "folder"; folderName: string }
   | { type: "folder-image"; folderName: string; filename: string };
 
-export type AppMode = "reorder" | "cluster" | "cluster-compare";
+export type AppMode = "reorder" | "cluster" | "cluster-compare" | "merge-suggestions";
+
+// Merge suggestion types
+
+export interface MergeSuggestionSimilar {
+  groupId: string;
+  groupName: string;
+  groupImages: string[];
+  distance: number;
+}
+
+export interface MergeSuggestionRow {
+  refGroupId: string;
+  refGroupName: string;
+  refGroupImages: string[];
+  similar: MergeSuggestionSimilar[];
+}
+
+export interface MergeSuggestionsResponse {
+  suggestions: MergeSuggestionRow[];
+  computeTimeMs: number;
+}
 
 // Cluster types
 
@@ -66,6 +87,7 @@ export interface WeightConfig {
   clip?: number;
   color?: number;
   dino?: number;
+  dinov3?: number;
   pecore_l?: number;
   pecore_g?: number;
 }

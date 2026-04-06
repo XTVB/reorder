@@ -1,7 +1,9 @@
 import { create } from "zustand";
+
 import type { ImageGroup, MergeSuggestionRow, MergeSuggestionsResponse } from "../types.ts";
 import { postJson } from "../utils/helpers.ts";
-import { useGroupStore } from "./groupStore.ts";
+import { consumeSSE } from "../utils/sse.ts";
+import { flushGroupPersist, useGroupStore } from "./groupStore.ts";
 
 const MAX_PER_GROUP = 8;
 
@@ -10,8 +12,10 @@ interface MergeSuggestionsState {
   loading: boolean;
   error: string | null;
   computeTimeMs: number | null;
+  progress: string | null;
 
   threshold: number;
+  fullResolution: boolean;
 
   collapsedRows: Set<string>;
   pendingMerges: Map<string, Set<string>>; // refGroupId → candidate groupIds
@@ -19,6 +23,7 @@ interface MergeSuggestionsState {
   undoStack: ImageGroup[][];
 
   setThreshold: (t: number) => void;
+  setFullResolution: (v: boolean) => void;
   fetchSuggestions: () => Promise<void>;
   toggleRowCollapse: (groupId: string) => void;
   collapseAllRows: () => void;
@@ -38,8 +43,10 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
   loading: false,
   error: null,
   computeTimeMs: null,
+  progress: null,
 
   threshold: 0.65,
+  fullResolution: false,
 
   collapsedRows: new Set(),
   pendingMerges: new Map(),
@@ -47,29 +54,44 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
   undoStack: [],
 
   setThreshold: (t) => set({ threshold: t }),
+  setFullResolution: (v) => set({ fullResolution: v }),
 
   fetchSuggestions: async () => {
-    const { threshold } = get();
-    set({ loading: true, error: null });
+    const { threshold, fullResolution } = get();
+    set({ loading: true, error: null, progress: "Starting..." });
     try {
       const resp = await postJson("/api/merge-suggestions", {
         threshold,
         maxPerGroup: MAX_PER_GROUP,
+        fullResolution,
       });
       if (!resp.ok) {
         const err = await resp.json();
         throw new Error(err.error || "Failed to fetch suggestions");
       }
-      const data: MergeSuggestionsResponse = await resp.json();
-      set({
-        suggestions: data.suggestions,
-        computeTimeMs: data.computeTimeMs,
-        loading: false,
-        pendingMerges: new Map(),
+      await consumeSSE(resp, {
+        onProgress: (message) => set({ progress: message }),
+        onResult: (data) => {
+          const result = data as MergeSuggestionsResponse;
+          set({
+            suggestions: result.suggestions,
+            computeTimeMs: result.computeTimeMs,
+            loading: false,
+            progress: null,
+            pendingMerges: new Map(),
+          });
+        },
+        onError: (error) => {
+          set({ loading: false, error, progress: null });
+        },
       });
+      if (get().loading) {
+        set({ loading: false, progress: null, error: "Stream ended unexpectedly" });
+      }
     } catch (err) {
       set({
         loading: false,
+        progress: null,
         error: err instanceof Error ? err.message : "Unknown error",
       });
     }
@@ -187,6 +209,7 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
     });
 
     set({ undoStack: newUndoStack, pendingMerges: new Map() });
+    await flushGroupPersist();
     await get().fetchSuggestions();
   },
 
@@ -201,6 +224,7 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
     groupStore.updateGroups(() => previousGroups);
 
     set({ undoStack: newStack, pendingMerges: new Map() });
+    await flushGroupPersist();
     await get().fetchSuggestions();
   },
 

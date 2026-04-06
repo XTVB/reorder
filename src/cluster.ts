@@ -10,7 +10,12 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import sharp from "sharp";
-import { loadHashMapping, parseNpyFromNpz, reindexToFilenameOrder } from "./cache-utils.ts";
+import {
+  ensureHashOrderJson,
+  loadHashMapping,
+  parseNpyFromNpz,
+  reindexToFilenameOrder,
+} from "./cache-utils.ts";
 import type {
   ClusterData,
   ClusterResultData,
@@ -82,11 +87,46 @@ async function runRustBinary(
   binary: string,
   args: string[],
   label: string,
+  onProgress?: (line: string) => void,
 ): Promise<string> {
   const proc = Bun.spawn([binary, ...args], { stdout: "pipe", stderr: "pipe" });
+
+  let stderrPromise: Promise<string>;
+  if (onProgress) {
+    // Stream stderr line-by-line, forwarding "progress:" lines to the callback
+    const stderrLines: string[] = [];
+    stderrPromise = (async () => {
+      const reader = proc.stderr.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          stderrLines.push(line);
+          if (line.startsWith("progress:")) {
+            onProgress(line.slice(10).trim());
+          }
+        }
+      }
+      if (buf) {
+        stderrLines.push(buf);
+        if (buf.startsWith("progress:")) {
+          onProgress(buf.slice(10).trim());
+        }
+      }
+      return stderrLines.join("\n");
+    })();
+  } else {
+    stderrPromise = new Response(proc.stderr).text();
+  }
+
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
+    stderrPromise,
     proc.exited,
   ]);
   if (stderr) log(label, stderr.trim());
@@ -233,17 +273,26 @@ export async function runLinkage(
       await runRustBinary(
         GROUP_SIM_BINARY,
         [
-          "--patches-cache", patchesCachePath,
-          "--content-hashes", contentHashesPath,
-          "--patches-hashes", patchesHashesPath,
-          "--groups", "",
-          "--mode", "dist-matrix",
-          "--output", distMatrixPath,
+          "--patches-cache",
+          patchesCachePath,
+          "--content-hashes",
+          contentHashesPath,
+          "--patches-hashes",
+          patchesHashesPath,
+          "--groups",
+          "",
+          "--mode",
+          "dist-matrix",
+          "--output",
+          distMatrixPath,
         ],
         "patch-dist-matrix",
       );
     }
   }
+
+  // Ensure the JSON sidecar exists (regenerate from NPZ if needed)
+  ensureHashOrderJson(cache);
 
   const args = [
     "--hash-cache",
@@ -454,14 +503,21 @@ export function recutTreeAdaptive(
   const ufSize = new Int32Array(nImages).fill(1);
   for (let i = 0; i < nImages; i++) ufParent[i] = i;
   function find(x: number): number {
-    while (ufParent[x]! !== x) { ufParent[x] = ufParent[ufParent[x]!]!; x = ufParent[x]!; }
+    while (ufParent[x]! !== x) {
+      ufParent[x] = ufParent[ufParent[x]!]!;
+      x = ufParent[x]!;
+    }
     return x;
   }
 
   // ── Build condensed tree ──────────────────────────────────────────────
   interface CNode {
-    id: number; birthDist: number; deathDist: number; size: number;
-    children: number[]; parentId: number;
+    id: number;
+    birthDist: number;
+    deathDist: number;
+    size: number;
+    children: number[];
+    parentId: number;
   }
   const cnodes: CNode[] = [];
   let nextCid = 0;
@@ -470,28 +526,52 @@ export function recutTreeAdaptive(
 
   for (const s of steps) {
     if (s.distance >= 1e10) break;
-    const ra = find(s.clusterA), rb = find(s.clusterB);
+    const ra = find(s.clusterA),
+      rb = find(s.clusterB);
     if (ra === rb) continue;
-    const sA = ufSize[ra]!, sB = ufSize[rb]!;
-    const cA = repCnode.get(ra), cB = repCnode.get(rb);
+    const sA = ufSize[ra]!,
+      sB = ufSize[rb]!;
+    const cA = repCnode.get(ra),
+      cB = repCnode.get(rb);
 
     if (sA >= minClusterSize && sB >= minClusterSize) {
       if (cA !== undefined) cnodes[cA]!.deathDist = s.distance;
       if (cB !== undefined) cnodes[cB]!.deathDist = s.distance;
       const pid = nextCid++;
-      cnodes.push({ id: pid, birthDist: s.distance, deathDist: Infinity,
-        size: sA + sB, children: [], parentId: -1 });
-      if (cA !== undefined) { cnodes[pid]!.children.push(cA); cnodes[cA]!.parentId = pid; }
-      if (cB !== undefined) { cnodes[pid]!.children.push(cB); cnodes[cB]!.parentId = pid; }
-      ufParent[ra] = rb; ufSize[rb] = sA + sB;
-      repCnode.delete(ra); repCnode.set(rb, pid);
+      cnodes.push({
+        id: pid,
+        birthDist: s.distance,
+        deathDist: Infinity,
+        size: sA + sB,
+        children: [],
+        parentId: -1,
+      });
+      if (cA !== undefined) {
+        cnodes[pid]!.children.push(cA);
+        cnodes[cA]!.parentId = pid;
+      }
+      if (cB !== undefined) {
+        cnodes[pid]!.children.push(cB);
+        cnodes[cB]!.parentId = pid;
+      }
+      ufParent[ra] = rb;
+      ufSize[rb] = sA + sB;
+      repCnode.delete(ra);
+      repCnode.set(rb, pid);
     } else {
-      ufParent[ra] = rb; ufSize[rb] = sA + sB;
+      ufParent[ra] = rb;
+      ufSize[rb] = sA + sB;
       const ms = ufSize[rb]!;
       if (!repCnode.has(rb) && ms >= minClusterSize) {
         const id = nextCid++;
-        cnodes.push({ id, birthDist: s.distance, deathDist: Infinity,
-          size: ms, children: [], parentId: -1 });
+        cnodes.push({
+          id,
+          birthDist: s.distance,
+          deathDist: Infinity,
+          size: ms,
+          children: [],
+          parentId: -1,
+        });
         repCnode.set(rb, id);
         for (let j = 0; j < nImages; j++) {
           if (find(j) === rb && imgCnode[j] === -1) imgCnode[j] = id;
@@ -500,7 +580,8 @@ export function recutTreeAdaptive(
       if (cA !== undefined && repCnode.has(rb)) {
         const pc = repCnode.get(rb)!;
         cnodes[cA]!.deathDist = s.distance;
-        cnodes[pc]!.children.push(cA); cnodes[cA]!.parentId = pc;
+        cnodes[pc]!.children.push(cA);
+        cnodes[cA]!.parentId = pc;
       }
       repCnode.delete(ra);
     }
@@ -532,7 +613,8 @@ export function recutTreeAdaptive(
   const topoOrder: number[] = [];
   const vis = new Uint8Array(cnodes.length);
   function visit(id: number) {
-    if (vis[id]) return; vis[id] = 1;
+    if (vis[id]) return;
+    vis[id] = 1;
     for (const ch of cnodes[id]!.children) visit(ch);
     topoOrder.push(id);
   }
@@ -549,7 +631,8 @@ export function recutTreeAdaptive(
       cbest[i] = cstab[i]!;
       const stk = [...c.children];
       while (stk.length) {
-        const d = stk.pop()!; csel[d] = 0;
+        const d = stk.pop()!;
+        csel[d] = 0;
         stk.push(...cnodes[d]!.children);
       }
     } else {
@@ -582,36 +665,57 @@ export function recutTreeAdaptive(
   for (let i = 0; i < nImages; i++) if (labels[i]! < 0) orphanSet.add(i);
 
   if (orphanSet.size > 0) {
-    for (let i = 0; i < nImages; i++) { ufParent[i] = i; ufSize[i] = 1; }
+    for (let i = 0; i < nImages; i++) {
+      ufParent[i] = i;
+      ufSize[i] = 1;
+    }
     const next = new Int32Array(nImages).fill(-1);
     const head = new Int32Array(nImages);
     const tail = new Int32Array(nImages);
-    for (let i = 0; i < nImages; i++) { head[i] = i; tail[i] = i; }
+    for (let i = 0; i < nImages; i++) {
+      head[i] = i;
+      tail[i] = i;
+    }
 
     for (const s of steps) {
       if (s.distance >= 1e10 || orphanSet.size === 0) break;
-      const ra = find(s.clusterA), rb = find(s.clusterB);
+      const ra = find(s.clusterA),
+        rb = find(s.clusterB);
       if (ra === rb) continue;
 
-      let labelA = -1, labelB = -1;
+      let labelA = -1,
+        labelB = -1;
       for (let j = head[ra]!; j >= 0; j = next[j]!) {
-        if (labels[j]! >= 0) { labelA = labels[j]!; break; }
+        if (labels[j]! >= 0) {
+          labelA = labels[j]!;
+          break;
+        }
       }
       for (let j = head[rb]!; j >= 0; j = next[j]!) {
-        if (labels[j]! >= 0) { labelB = labels[j]!; break; }
+        if (labels[j]! >= 0) {
+          labelB = labels[j]!;
+          break;
+        }
       }
 
       if (labelA >= 0 && labelB < 0) {
         for (let j = head[rb]!; j >= 0; j = next[j]!) {
-          if (labels[j]! < 0) { labels[j] = labelA; orphanSet.delete(j); }
+          if (labels[j]! < 0) {
+            labels[j] = labelA;
+            orphanSet.delete(j);
+          }
         }
       } else if (labelB >= 0 && labelA < 0) {
         for (let j = head[ra]!; j >= 0; j = next[j]!) {
-          if (labels[j]! < 0) { labels[j] = labelB; orphanSet.delete(j); }
+          if (labels[j]! < 0) {
+            labels[j] = labelB;
+            orphanSet.delete(j);
+          }
         }
       }
 
-      ufParent[ra] = rb; ufSize[rb] = ufSize[ra]! + ufSize[rb]!;
+      ufParent[ra] = rb;
+      ufSize[rb] = ufSize[ra]! + ufSize[rb]!;
       next[tail[rb]!] = head[ra]!;
       tail[rb] = tail[ra]!;
     }
@@ -620,7 +724,10 @@ export function recutTreeAdaptive(
     for (const i of orphanSet) {
       const root = find(i);
       for (let j = head[root]!; j >= 0; j = next[j]!) {
-        if (labels[j]! >= 0) { labels[i] = labels[j]!; break; }
+        if (labels[j]! >= 0) {
+          labels[i] = labels[j]!;
+          break;
+        }
       }
       if (labels[i]! < 0) labels[i] = nextLabel++;
     }
@@ -876,7 +983,14 @@ function computeSuggestedCounts(nImages: number): number[] {
 function modelsForWeights(weights?: WeightConfig): string[] | undefined {
   if (!weights) return undefined; // no config → extract all (auto mode)
   // Rust defaults: clip=1.0, color=0.5, others=0.0
-  const defaults: Record<string, number> = { clip: 1.0, color: 0.5, dino: 0.0, pecore_l: 0.0, pecore_g: 0.0, dinov3: 0.0 };
+  const defaults: Record<string, number> = {
+    clip: 1.0,
+    color: 0.5,
+    dino: 0.0,
+    pecore_l: 0.0,
+    pecore_g: 0.0,
+    dinov3: 0.0,
+  };
   const needed: string[] = [];
   for (const [key, defaultVal] of Object.entries(defaults)) {
     const val = weights[key as keyof WeightConfig] ?? defaultVal;
@@ -940,7 +1054,10 @@ export async function runRecutByThreshold(
   return buildRecutResult(targetDir, labels, nClusters, distanceProfile);
 }
 
-export async function runRecutAdaptive(targetDir: string, minClusterSize: number): Promise<ClusterData> {
+export async function runRecutAdaptive(
+  targetDir: string,
+  minClusterSize: number,
+): Promise<ClusterData> {
   const { labels, nClusters, distanceProfile } = recutTreeAdaptive(targetDir, minClusterSize);
   return buildRecutResult(targetDir, labels, nClusters, distanceProfile);
 }
@@ -1037,17 +1154,27 @@ export interface GroupPairResult {
 export async function computeMergeSuggestions(
   targetDir: string,
   minScore = 0.55,
+  options?: { fullResolution?: boolean; onProgress?: (msg: string) => void },
 ): Promise<GroupPairResult[]> {
   const cache = cacheDir(targetDir);
-  const patchesCachePath = join(cache, "dinov3_patches_hash_cache.npy");
+  const fullRes = options?.fullResolution ?? false;
+  const patchesCachePath = join(
+    cache,
+    fullRes ? "dinov3_patches_full_hash_cache.npy" : "dinov3_patches_hash_cache.npy",
+  );
   const patchesHashesPath = join(cache, "dinov3_patches_hashes.json");
   const contentHashesPath = join(cache, "content_hashes.json");
   const groupsPath = join(targetDir, ".reorder-groups.json");
-  const resultCachePath = join(cache, "merge_suggestions.json");
+  const resultCachePath = join(
+    cache,
+    fullRes ? "merge_suggestions_full.json" : "merge_suggestions.json",
+  );
 
   if (!existsSync(patchesCachePath)) {
     throw new Error(
-      "DINOv3 patches cache not found. Run feature extraction with --required dinov3 first.",
+      fullRes
+        ? "Full-resolution DINOv3 patches cache not found. Re-run feature extraction with --required dinov3 to generate it."
+        : "DINOv3 patches cache not found. Run feature extraction with --required dinov3 first.",
     );
   }
   if (!existsSync(GROUP_SIM_BINARY)) {
@@ -1065,33 +1192,40 @@ export async function computeMergeSuggestions(
       cacheTime > Bun.file(patchesCachePath).lastModified &&
       cacheTime > Bun.file(contentHashesPath).lastModified
     ) {
-      log("merge-suggestions", "Using cached results");
+      log("merge-suggestions", `Using cached results (${fullRes ? "full-res" : "pooled"})`);
+      options?.onProgress?.("Using cached results");
       const cached: GroupPairResult[] = await cacheFile.json();
-      return minScore > 0
-        ? cached.filter((r) => r.patch_median >= minScore)
-        : cached;
+      return minScore > 0 ? cached.filter((r) => r.patch_median >= minScore) : cached;
     }
   } catch {}
 
   const args = [
-    "--patches-cache", patchesCachePath,
-    "--content-hashes", contentHashesPath,
-    "--patches-hashes", patchesHashesPath,
-    "--groups", groupsPath,
+    "--patches-cache",
+    patchesCachePath,
+    "--content-hashes",
+    contentHashesPath,
+    "--patches-hashes",
+    patchesHashesPath,
+    "--groups",
+    groupsPath,
     // Compute unfiltered so the cache can serve any threshold; TS re-filters on return.
-    "--min-score", "0",
+    "--min-score",
+    "0",
   ];
 
-  log("merge-suggestions", `Running group-similarity: ${args.join(" ")}`);
-  const stdout = await runRustBinary(GROUP_SIM_BINARY, args, "merge-suggestions");
+  const label = fullRes ? "merge-suggestions-full" : "merge-suggestions";
+  log(label, `Running group-similarity: ${args.join(" ")}`);
+  options?.onProgress?.(`Loading ${fullRes ? "14x14 full-res" : "7x7 pooled"} patches...`);
+
+  const stdout = await runRustBinary(GROUP_SIM_BINARY, args, label, (line) => {
+    options?.onProgress?.(line);
+  });
   const allResults: GroupPairResult[] = JSON.parse(stdout);
 
   await Bun.write(resultCachePath, stdout);
-  log("merge-suggestions", `Cached ${allResults.length} results to ${resultCachePath}`);
+  log(label, `Cached ${allResults.length} results to ${resultCachePath}`);
 
-  return minScore > 0
-    ? allResults.filter((r) => r.patch_median >= minScore)
-    : allResults;
+  return minScore > 0 ? allResults.filter((r) => r.patch_median >= minScore) : allResults;
 }
 
 // Progress broadcasting — allows reconnecting to an in-progress job

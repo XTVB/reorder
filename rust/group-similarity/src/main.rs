@@ -2,6 +2,7 @@ use clap::Parser;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
@@ -274,6 +275,10 @@ fn main() {
         static SIM_BUF: RefCell<Vec<f32>> = RefCell::new(Vec::new());
     }
 
+    let done_counter = AtomicUsize::new(0);
+    let t0 = std::time::Instant::now();
+    let progress_interval = (n_total_pairs / 50).max(1);
+
     let results: Vec<GroupPairResult> = pair_indices
         .par_iter()
         .filter_map(|&(gi, gj)| {
@@ -306,6 +311,15 @@ fn main() {
                     }
                 }
             });
+
+            let prev = done_counter.fetch_add(1, Ordering::Relaxed);
+            let done = prev + 1;
+            if done % progress_interval == 0 || done == n_total_pairs {
+                let pct = done as f64 / n_total_pairs as f64 * 100.0;
+                let elapsed = t0.elapsed().as_secs_f64();
+                let eta = if done > 0 { elapsed / done as f64 * (n_total_pairs - done) as f64 } else { 0.0 };
+                eprintln!("progress: {}/{} ({:.0}%) - ETA {:.0}s", done, n_total_pairs, pct, eta);
+            }
 
             scores.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
             let n = scores.len();

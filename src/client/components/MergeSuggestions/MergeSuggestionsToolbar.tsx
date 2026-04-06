@@ -1,13 +1,14 @@
-import React from "react";
-
 interface Props {
   threshold: number;
   loading: boolean;
   computeTimeMs: number | null;
+  progress: string | null;
   suggestionCount: number;
   pendingCount: number;
   canUndo: boolean;
+  fullResolution: boolean;
   onThresholdChange: (t: number) => void;
+  onFullResolutionChange: (v: boolean) => void;
   onCompute: () => void;
   onApply: () => void;
   onUndo: () => void;
@@ -20,10 +21,13 @@ export function MergeSuggestionsToolbar({
   threshold,
   loading,
   computeTimeMs,
+  progress,
   suggestionCount,
   pendingCount,
   canUndo,
+  fullResolution,
   onThresholdChange,
+  onFullResolutionChange,
   onCompute,
   onApply,
   onUndo,
@@ -37,6 +41,25 @@ export function MergeSuggestionsToolbar({
         <button className="btn btn-primary" onClick={onCompute} disabled={loading}>
           {loading ? "Computing..." : "Compute"}
         </button>
+
+        <div className="merge-method-toggle">
+          <button
+            className={`btn btn-small ${!fullResolution ? "btn-active" : ""}`}
+            onClick={() => onFullResolutionChange(false)}
+            disabled={loading}
+            title="7x7 averaged patches — fast (~20s)"
+          >
+            Fast
+          </button>
+          <button
+            className={`btn btn-small ${fullResolution ? "btn-active" : ""}`}
+            onClick={() => onFullResolutionChange(true)}
+            disabled={loading}
+            title="14x14 full-resolution patches — slower (~4 min) but slightly more accurate"
+          >
+            Full-res
+          </button>
+        </div>
 
         <label className="merge-threshold-control">
           <span className="merge-threshold-label">Min similarity</span>
@@ -67,6 +90,12 @@ export function MergeSuggestionsToolbar({
           Collapse All
         </button>
       </div>
+
+      {loading && progress && (
+        <div className="merge-progress">
+          <span className="merge-progress-text">{progress}</span>
+        </div>
+      )}
 
       {pendingCount > 0 && (
         <div className="merge-toolbar-actions">

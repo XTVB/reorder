@@ -668,58 +668,104 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
       const body = (await req.json()) as {
         threshold?: number;
         maxPerGroup?: number;
+        fullResolution?: boolean;
       };
       const threshold = body.threshold ?? 0.65;
       const maxPerGroup = body.maxPerGroup ?? 8;
+      const fullResolution = body.fullResolution ?? false;
 
-      const startTime = performance.now();
-
-      const entries = await computeMergeSuggestions(targetDir, threshold);
-
-      const groups = (await readGroupsFile(targetDir)) as ImageGroup[];
-      const groupMap = new Map(groups.map((g) => [g.id, g]));
-
-      const rowMap = new Map<string, { refGroupId: string; similar: MergeSuggestionSimilar[] }>();
-
-      for (const d of entries) {
-        const gA = groupMap.get(d.group_a);
-        const gB = groupMap.get(d.group_b);
-        if (!gA || !gB) continue;
-
-        // 1 - patch_median so lower = more similar, matching the Ward-distance semantics used by other UI.
-        const displayDist = 1 - d.patch_median;
-
-        for (const [srcId, other] of [[d.group_a, gB], [d.group_b, gA]] as const) {
-          let row = rowMap.get(srcId);
-          if (!row) {
-            row = { refGroupId: srcId, similar: [] };
-            rowMap.set(srcId, row);
-          }
-          row.similar.push({
-            groupId: other.id,
-            groupName: other.name,
-            groupImages: other.images,
-            distance: displayDist,
-          });
-        }
-      }
-
-      const suggestions = Array.from(rowMap.values())
-        .map((row) => {
-          const g = groupMap.get(row.refGroupId)!;
-          row.similar.sort((a, b) => a.distance - b.distance);
-          row.similar = row.similar.slice(0, maxPerGroup);
-          return {
-            refGroupId: row.refGroupId,
-            refGroupName: g.name,
-            refGroupImages: g.images,
-            similar: row.similar,
+      // SSE stream for progress + result (matches /api/cluster pattern)
+      const stream = new ReadableStream({
+        async start(controller) {
+          const enc = new TextEncoder();
+          let closed = false;
+          const send = (event: string, data: unknown) => {
+            if (closed) return;
+            try {
+              controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+            } catch {
+              closed = true;
+            }
           };
-        })
-        .sort((a, b) => a.similar[0]!.distance - b.similar[0]!.distance);
+          const keepalive = setInterval(() => {
+            if (closed) return;
+            try {
+              controller.enqueue(enc.encode(": keepalive\n\n"));
+            } catch {
+              closed = true;
+            }
+          }, 30_000);
+          try {
+            const startTime = performance.now();
 
-      const computeTimeMs = Math.round(performance.now() - startTime);
-      return json({ suggestions, computeTimeMs });
+            const entries = await computeMergeSuggestions(targetDir, threshold, {
+              fullResolution,
+              onProgress: (msg) => send("progress", { message: msg }),
+            });
+
+            const groups = (await readGroupsFile(targetDir)) as ImageGroup[];
+            const groupMap = new Map(groups.map((g) => [g.id, g]));
+
+            const rowMap = new Map<
+              string,
+              { refGroupId: string; similar: MergeSuggestionSimilar[] }
+            >();
+
+            for (const d of entries) {
+              const gA = groupMap.get(d.group_a);
+              const gB = groupMap.get(d.group_b);
+              if (!gA || !gB) continue;
+
+              // 1 - patch_median so lower = more similar, matching the Ward-distance semantics used by other UI.
+              const displayDist = 1 - d.patch_median;
+
+              for (const [srcId, other] of [[d.group_a, gB], [d.group_b, gA]] as const) {
+                let row = rowMap.get(srcId);
+                if (!row) {
+                  row = { refGroupId: srcId, similar: [] };
+                  rowMap.set(srcId, row);
+                }
+                row.similar.push({
+                  groupId: other.id,
+                  groupName: other.name,
+                  groupImages: other.images,
+                  distance: displayDist,
+                });
+              }
+            }
+
+            const suggestions = Array.from(rowMap.values())
+              .map((row) => {
+                const g = groupMap.get(row.refGroupId)!;
+                row.similar.sort((a, b) => a.distance - b.distance);
+                row.similar = row.similar.slice(0, maxPerGroup);
+                return {
+                  refGroupId: row.refGroupId,
+                  refGroupName: g.name,
+                  refGroupImages: g.images,
+                  similar: row.similar,
+                };
+              })
+              .sort((a, b) => a.similar[0]!.distance - b.similar[0]!.distance);
+
+            const computeTimeMs = Math.round(performance.now() - startTime);
+            send("result", { suggestions, computeTimeMs });
+          } catch (err) {
+            send("error", { error: err instanceof Error ? err.message : "Unknown error" });
+          } finally {
+            clearInterval(keepalive);
+            if (!closed) controller.close();
+          }
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        },
+      });
     }
 
     return json({ error: "Not found" }, 404);

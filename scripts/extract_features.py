@@ -45,6 +45,7 @@ EMB_KEYS = list(MODEL_VERSIONS.keys())
 DINOV3_CLS_DIM = 768
 DINOV3_PATCH_DIM = 768
 DINOV3_N_PATCHES = 49  # 14x14 avg-pooled to 7x7
+DINOV3_N_PATCHES_FULL = 196  # 14x14 full resolution
 
 # DINOv3 local weights path (downloaded from Kaggle)
 DINOV3_WEIGHTS = os.environ.get(
@@ -110,6 +111,7 @@ def main():
     content_hashes_path = os.path.join(cache_dir, "content_hashes.json")
     patches_cache_hashes_path = os.path.join(cache_dir, "dinov3_patches_hashes.json")
     patches_cache_data_path = os.path.join(cache_dir, "dinov3_patches_hash_cache.npy")
+    patches_full_cache_data_path = os.path.join(cache_dir, "dinov3_patches_full_hash_cache.npy")
 
     # Find image files
     exts = {".jpg", ".jpeg", ".png", ".webp"}
@@ -635,19 +637,30 @@ def main():
         except Exception:
             pass
 
-    def _save_patches_cache(new_patches, items_used):
-        """Save DINOv3 patches to hash-keyed cache, merging with existing."""
-        nonlocal pc_hashes, pc_arr
+    # Full-res patches cache (14x14 = 196 patches, same hash order as pooled)
+    pcf_arr = None  # shape (N, 196, 768) or None
+    if os.path.exists(patches_cache_hashes_path) and os.path.exists(patches_full_cache_data_path):
+        try:
+            pcf_arr = np.load(patches_full_cache_data_path)
+        except Exception:
+            pass
+
+    def _save_patches_cache(new_patches, new_patches_full, items_used):
+        """Save DINOv3 patches (pooled + full-res) to hash-keyed cache, merging with existing."""
+        nonlocal pc_hashes, pc_arr, pcf_arr
         new_h = [h for _, h in items_used]
         new_h_set = set(new_h)
 
-        # Fast path: if all new hashes already indexed, update in-place (no realloc)
-        if pc_arr is not None and new_h_set.issubset(pc_hashes.keys()):
+        # Fast path: if all new hashes already indexed and both caches exist, update in-place
+        if pc_arr is not None and pcf_arr is not None and new_h_set.issubset(pc_hashes.keys()):
             new_h2r = {hh: i for i, hh in enumerate(new_h)}
             dst = np.array([pc_hashes[hh] for hh in new_h2r], dtype=np.intp)
             src = np.array(list(new_h2r.values()), dtype=np.intp)
             pc_arr[dst] = new_patches[src]
             np.save(patches_cache_data_path, pc_arr)
+            if pcf_arr is not None:
+                pcf_arr[dst] = new_patches_full[src]
+                np.save(patches_full_cache_data_path, pcf_arr)
             return
 
         # Hash set grew — full reindex needed
@@ -657,19 +670,25 @@ def main():
         h2i = {hh: i for i, hh in enumerate(all_h_list)}
         n = len(all_h_list)
         out = np.zeros((n, DINOV3_N_PATCHES, DINOV3_PATCH_DIM), dtype=np.float32)
+        out_full = np.zeros((n, DINOV3_N_PATCHES_FULL, DINOV3_PATCH_DIM), dtype=np.float32)
         if pc_arr is not None:
             dst = np.array([h2i[hh] for hh in pc_hashes if hh in h2i], dtype=np.intp)
             src = np.array([pc_hashes[hh] for hh in pc_hashes if hh in h2i], dtype=np.intp)
             out[dst] = pc_arr[src]
+            if pcf_arr is not None:
+                out_full[dst] = pcf_arr[src]
         new_h2r = {hh: i for i, hh in enumerate(new_h)}
         dst = np.array([h2i[hh] for hh in new_h2r if hh in h2i], dtype=np.intp)
         src = np.array([new_h2r[hh] for hh in new_h2r if hh in h2i], dtype=np.intp)
         out[dst] = new_patches[src]
+        out_full[dst] = new_patches_full[src]
         np.save(patches_cache_data_path, out)
+        np.save(patches_full_cache_data_path, out_full)
         with open(patches_cache_hashes_path, "w") as f:
             json.dump(all_h_list, f)
         pc_hashes = h2i
         pc_arr = out
+        pcf_arr = out_full
 
     if dinov3_items and not _interrupted:
         pass_num += 1
@@ -685,6 +704,7 @@ def main():
         n_dinov3 = len(dinov3_items)
         dinov3_cls_results = []
         dinov3_patch_results = []
+        dinov3_patch_full_results = []
         t0 = time.time()
         bs = max(1, args.batch_size // 4)  # smaller batches for patch memory
 
@@ -710,6 +730,9 @@ def main():
                 # L2-normalize CLS
                 cls_tokens = cls_tokens / cls_tokens.norm(dim=-1, keepdim=True)
 
+                # Full-res patches: L2-normalize the raw 14x14 grid
+                patch_tokens_full = patch_tokens / patch_tokens.norm(dim=-1, keepdim=True)
+
                 # Average-pool 14x14 patch grid to 7x7 for efficiency
                 B = patch_tokens.shape[0]
                 grid = patch_tokens.view(B, 14, 14, DINOV3_PATCH_DIM).permute(0, 3, 1, 2)
@@ -720,15 +743,17 @@ def main():
 
             dinov3_cls_results.append(cls_tokens.cpu().numpy().astype(np.float32))
             dinov3_patch_results.append(patch_tokens.cpu().numpy().astype(np.float32))
+            dinov3_patch_full_results.append(patch_tokens_full.cpu().numpy().astype(np.float32))
             _report_progress("DINOv3", batch_end, n_dinov3, t0)
 
             # Periodic checkpoint — save both CLS and patches incrementally
             if _should_checkpoint():
                 partial_cls = np.vstack(dinov3_cls_results)
                 partial_patches = np.vstack(dinov3_patch_results)
+                partial_patches_full = np.vstack(dinov3_patch_full_results)
                 items_done = dinov3_items[:batch_end]
                 _save_model_to_cache("dinov3", partial_cls, items_done)
-                _save_patches_cache(partial_patches, items_done)
+                _save_patches_cache(partial_patches, partial_patches_full, items_done)
                 print(f"  Checkpoint saved: {batch_end}/{n_dinov3}", file=sys.stderr)
 
             if _interrupted:
@@ -739,7 +764,7 @@ def main():
         items_done = dinov3_items[:n_done]
         _save_model_to_cache("dinov3", new_dinov3, items_done)
         if dinov3_patch_results:
-            _save_patches_cache(np.vstack(dinov3_patch_results), items_done)
+            _save_patches_cache(np.vstack(dinov3_patch_results), np.vstack(dinov3_patch_full_results), items_done)
         _free_model(dinov3_model, dinov3_processor)
     else:
         new_dinov3 = np.zeros((0, DINOV3_CLS_DIM), dtype=np.float32)

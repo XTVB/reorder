@@ -32,12 +32,15 @@ export function MergeSuggestions() {
   const loading = useMergeSuggestionsStore((s) => s.loading);
   const error = useMergeSuggestionsStore((s) => s.error);
   const computeTimeMs = useMergeSuggestionsStore((s) => s.computeTimeMs);
+  const progress = useMergeSuggestionsStore((s) => s.progress);
   const threshold = useMergeSuggestionsStore((s) => s.threshold);
+  const fullResolution = useMergeSuggestionsStore((s) => s.fullResolution);
   const collapsedRows = useMergeSuggestionsStore((s) => s.collapsedRows);
   const pendingMerges = useMergeSuggestionsStore((s) => s.pendingMerges);
   const undoStack = useMergeSuggestionsStore((s) => s.undoStack);
 
   const setThreshold = useMergeSuggestionsStore((s) => s.setThreshold);
+  const setFullResolution = useMergeSuggestionsStore((s) => s.setFullResolution);
   const fetchSuggestions = useMergeSuggestionsStore((s) => s.fetchSuggestions);
   const clearPendingMerges = useMergeSuggestionsStore((s) => s.clearPendingMerges);
   const applyMerges = useMergeSuggestionsStore((s) => s.applyMerges);
@@ -120,10 +123,13 @@ export function MergeSuggestions() {
         threshold={threshold}
         loading={loading}
         computeTimeMs={computeTimeMs}
+        progress={progress}
         suggestionCount={rows.length}
         pendingCount={count}
         canUndo={undoStack.length > 0}
+        fullResolution={fullResolution}
         onThresholdChange={setThreshold}
+        onFullResolutionChange={setFullResolution}
         onCompute={fetchSuggestions}
         onApply={applyMerges}
         onUndo={undo}

@@ -2,9 +2,12 @@ import { stat } from "node:fs/promises";
 import { extname, join } from "node:path";
 import {
   broadcastProgress,
+  cancelClusterJob,
+  computeMergeSuggestions,
   ensureTextEmbeddings,
   extractFeatures,
   generateContactSheet,
+  getClusterAbortSignal,
   getLastProgress,
   invalidateClusterCache,
   isClusterJobRunning,
@@ -15,7 +18,6 @@ import {
   runRecutByThreshold,
   setClusterJobRunning,
   subscribeProgress,
-  computeMergeSuggestions,
   type WeightConfig,
 } from "./cluster.ts";
 import { initLog, log, logData, logError } from "./log.ts";
@@ -84,6 +86,24 @@ async function remapGroups(
  * Remap groups after a rename operation, collecting non-fatal warnings.
  * Called identically from /api/save and /api/undo.
  */
+async function remapContentHashes(
+  targetDir: string,
+  renames: RenameMapping[],
+) {
+  const hashesPath = join(targetDir, ".reorder-cache", "content_hashes.json");
+  try {
+    const hashes: Record<string, string> = await Bun.file(hashesPath).json();
+    const renameMap = new Map(renames.map((r) => [r.from, r.to]));
+    const updated: Record<string, string> = {};
+    for (const [filename, hash] of Object.entries(hashes)) {
+      updated[renameMap.get(filename) ?? filename] = hash;
+    }
+    await Bun.write(hashesPath, JSON.stringify(updated));
+  } catch {
+    // content_hashes.json doesn't exist yet — extraction hasn't run
+  }
+}
+
 async function remapAfterRename(
   targetDir: string,
   renames: RenameMapping[],
@@ -103,6 +123,15 @@ async function remapAfterRename(
     logError(label, "remapGroups failed", err);
     warnings.push(`Group remapping failed: ${msg}`);
   }
+  try {
+    await remapContentHashes(targetDir, renames);
+    log(label, "Remapped content_hashes.json");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(label, "remapContentHashes failed", err);
+    warnings.push(`Content hashes remapping failed: ${msg}`);
+  }
+  invalidateClusterCache();
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -431,6 +460,7 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
               nClusters,
               (line) => {
                 log("cluster", line);
+                broadcastProgress(line);
                 send("progress", JSON.stringify({ message: line }));
               },
               weights,
@@ -438,9 +468,11 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
             );
             invalidateClusterCache();
             log("cluster", `Returned ${result.clusters.length} clusters`);
+            broadcastProgress("");
             send("result", JSON.stringify(result));
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
+            broadcastProgress("");
             send("error", JSON.stringify({ error: msg }));
           } finally {
             clearInterval(keepalive);
@@ -463,45 +495,57 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
       return json({ running: isClusterJobRunning(), progress: getLastProgress() });
     }
 
+    if (path === "/api/cluster/cancel" && req.method === "POST") {
+      if (!isClusterJobRunning()) {
+        return json({ ok: false, error: "No cluster job running" }, 409);
+      }
+      cancelClusterJob();
+      return json({ ok: true });
+    }
+
     if (path === "/api/cluster/progress" && req.method === "GET") {
       if (!isClusterJobRunning()) {
         return json({ running: false });
       }
+      let cleanupProgressSSE: (() => void) | null = null;
       const stream = new ReadableStream({
         start(controller) {
           const enc = new TextEncoder();
           let closed = false;
+          const cleanup = () => {
+            if (closed) return;
+            closed = true;
+            unsub();
+            clearInterval(keepalive);
+          };
+          cleanupProgressSSE = cleanup;
           const write = (s: string) => {
             if (closed) return;
             try {
               controller.enqueue(enc.encode(s));
             } catch {
-              closed = true;
+              cleanup();
             }
           };
           // Send current progress immediately
           const last = getLastProgress();
           if (last) write(`event: progress\ndata: ${JSON.stringify({ message: last })}\n\n`);
-          // Subscribe to future updates
           // Keepalive
           const keepalive = setInterval(() => {
-            if (closed) {
-              clearInterval(keepalive);
-              return;
-            }
             write(": keepalive\n\n");
           }, 30_000);
           const unsub = subscribeProgress((msg) => {
             if (!msg) {
               write(`event: result\ndata: {}\n\n`);
-              unsub();
-              clearInterval(keepalive);
-              if (!closed) controller.close();
-              closed = true;
+              cleanup();
+              try { controller.close(); } catch {}
             } else {
               write(`event: progress\ndata: ${JSON.stringify({ message: msg })}\n\n`);
             }
           });
+        },
+        cancel() {
+          cleanupProgressSSE?.();
         },
       });
       return new Response(stream, {
@@ -516,7 +560,7 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
 
     if (path === "/api/cluster/embeddings-status" && req.method === "GET") {
       const npzExists = await Bun.file(
-        join(targetDir, ".reorder-cache", "clip_embeddings.npz"),
+        join(targetDir, ".reorder-cache", "content_hashes.json"),
       ).exists();
       return json({ ready: npzExists });
     }
@@ -555,13 +599,14 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
             }
           }, 30_000);
           try {
+            const signal = getClusterAbortSignal();
             const result = await extractFeatures(
               targetDir,
               (line) => {
                 broadcastProgress(line);
                 send("progress", JSON.stringify({ message: line }));
               },
-              models ? { force: models } : undefined,
+              models ? { force: models, signal } : { signal },
             );
             invalidateClusterCache();
             await ensureTextEmbeddings(targetDir);

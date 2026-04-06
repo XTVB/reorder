@@ -7,46 +7,17 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { loadHashMapping, parseNpyFromNpz, reindexToFilenameOrder } from "../src/cache-utils.ts";
 
 const targetDir = process.argv[2]!;
-const cacheDir = join(targetDir, ".reorder-cache");
-const npzPath = join(cacheDir, "clip_embeddings.npz");
-const fnPath = join(cacheDir, "clip_embeddings.filenames.json");
+const cacheDirPath = join(targetDir, ".reorder-cache");
+const npzPath = join(cacheDirPath, "clip_hash_cache.npz");
 const groupsPath = join(targetDir, ".reorder-groups.json");
-
-// ── NPZ parser (copied from cluster.ts) ─────────────────────────────────────
-function parseNpyFromNpz(npzBuf: Buffer, entryName: string): Float32Array {
-  let offset = 0;
-  while (offset < npzBuf.length - 4) {
-    const sig = npzBuf.readUInt32LE(offset);
-    if (sig !== 0x04034b50) break;
-    const compMethod = npzBuf.readUInt16LE(offset + 8);
-    const compSize = npzBuf.readUInt32LE(offset + 18);
-    const uncompSize = npzBuf.readUInt32LE(offset + 22);
-    const fnLen = npzBuf.readUInt16LE(offset + 26);
-    const extraLen = npzBuf.readUInt16LE(offset + 28);
-    const fn = npzBuf.subarray(offset + 30, offset + 30 + fnLen).toString("utf-8");
-    const dataStart = offset + 30 + fnLen + extraLen;
-    if (fn === entryName) {
-      let data: Buffer;
-      if (compMethod === 0) {
-        data = npzBuf.subarray(dataStart, dataStart + uncompSize);
-      } else {
-        data = Buffer.from(Bun.inflateSync(npzBuf.subarray(dataStart, dataStart + compSize) as Uint8Array<ArrayBuffer>));
-      }
-      const headerLen = data.readUInt16LE(8);
-      const arrayData = data.subarray(10 + headerLen);
-      return new Float32Array(arrayData.buffer, arrayData.byteOffset, arrayData.byteLength / 4);
-    }
-    offset = dataStart + compSize;
-  }
-  throw new Error(`Entry ${entryName} not found in npz`);
-}
 
 // ── Load data ────────────────────────────────────────────────────────────────
 console.log("Loading data...");
-const filenames: string[] = JSON.parse(readFileSync(fnPath, "utf-8"));
-const nImages = filenames.length;
+const mapping = loadHashMapping(cacheDirPath);
+const { contentHashes, filenames, nImages } = mapping;
 const fnToIdx = new Map(filenames.map((f, i) => [f, i]));
 const groups: { id: string; name: string; images: string[] }[] = JSON.parse(readFileSync(groupsPath, "utf-8"));
 const groupMap = new Map(groups.map(g => [g.id, g]));
@@ -57,8 +28,9 @@ const npzBuf = readFileSync(npzPath);
 const embTypes: { key: string; dim: number; data: Float32Array; needsNorm: boolean }[] = [];
 for (const key of ["clip", "dino", "pecore_l", "pecore_g", "color"]) {
   try {
-    const arr = parseNpyFromNpz(npzBuf, `${key}.npy`);
-    const dim = arr.length / nImages;
+    const hashArr = parseNpyFromNpz(npzBuf, `${key}.npy`);
+    const dim = hashArr.length / mapping.hashOrder.length;
+    const arr = reindexToFilenameOrder(hashArr, dim, mapping);
     embTypes.push({ key, dim, data: arr, needsNorm: key === "color" });
     console.log(`  ${key}: ${dim}d`);
   } catch {

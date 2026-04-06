@@ -14,9 +14,17 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(about = "Ward's linkage clustering with pre-seeded groups")]
 struct Cli {
-    /// Path to .npz file with 'clip' and 'color' arrays + 'filenames'
+    /// Path to hash-keyed cache .npz (clip_hash_cache.npz)
     #[arg(long)]
-    embeddings: PathBuf,
+    hash_cache: PathBuf,
+
+    /// Path to content_hashes.json (filename → content hash)
+    #[arg(long)]
+    content_hashes: String,
+
+    /// Path to hash_cache_order.json (hash list in NPZ row order)
+    #[arg(long)]
+    hash_order: String,
 
     /// Path to .reorder-groups.json
     #[arg(long, default_value = "")]
@@ -110,19 +118,44 @@ fn main() {
 
     let use_dist_matrix = !cli.dist_matrix.is_empty();
 
-    let filenames_path = cli.embeddings.with_extension("filenames.json");
-    let filenames: Vec<String> = {
-        let content = std::fs::read_to_string(&filenames_path)
-            .unwrap_or_else(|_| panic!("Missing filenames file: {:?}", filenames_path));
+    // Load content_hashes.json → sorted filenames + hash lookup
+    let content_hashes: HashMap<String, String> = {
+        let content = std::fs::read_to_string(&cli.content_hashes)
+            .unwrap_or_else(|_| panic!("Missing content_hashes.json: {}", cli.content_hashes));
         serde_json::from_str(&content)
-            .unwrap_or_else(|_| panic!("Invalid filenames JSON: {:?}", filenames_path))
+            .unwrap_or_else(|_| panic!("Invalid content_hashes.json: {}", cli.content_hashes))
     };
+    let mut filenames: Vec<String> = content_hashes.keys().cloned().collect();
+    filenames.sort();
     let n_images = filenames.len();
 
     let fname_to_idx: HashMap<&str, usize> = filenames
         .iter()
         .enumerate()
         .map(|(i, f)| (f.as_str(), i))
+        .collect();
+
+    // Load hash_cache_order.json → NPZ row mapping
+    let hash_order: Vec<String> = {
+        let content = std::fs::read_to_string(&cli.hash_order)
+            .unwrap_or_else(|_| panic!("Missing hash_cache_order.json: {}", cli.hash_order));
+        serde_json::from_str(&content)
+            .unwrap_or_else(|_| panic!("Invalid hash_cache_order.json: {}", cli.hash_order))
+    };
+    let hash_to_cache_row: HashMap<&str, usize> = hash_order
+        .iter()
+        .enumerate()
+        .map(|(i, h)| (h.as_str(), i))
+        .collect();
+
+    // Build filename → NPZ cache row mapping
+    let fname_to_cache_row: Vec<usize> = filenames
+        .iter()
+        .map(|f| {
+            let hash = content_hashes.get(f).unwrap_or_else(|| panic!("No hash for {}", f));
+            *hash_to_cache_row.get(hash.as_str())
+                .unwrap_or_else(|| panic!("Hash {} (file {}) not found in cache — re-run extraction", hash, f))
+        })
         .collect();
 
     // Load groups
@@ -138,8 +171,8 @@ fn main() {
         features_flat = vec![];
         feat_dim = 0;
     } else {
-        eprintln!("Loading embeddings from {:?}...", cli.embeddings);
-        let file = File::open(&cli.embeddings).expect("Failed to open embeddings file");
+        eprintln!("Loading embeddings from {:?}...", cli.hash_cache);
+        let file = File::open(&cli.hash_cache).expect("Failed to open hash cache file");
         let mut npz = NpzReader::new(file).expect("Failed to read npz");
 
         let emb_specs: Vec<(&str, f32, bool)> = vec![
@@ -155,9 +188,17 @@ fn main() {
             .filter(|(_, w, _)| *w > 0.0)
             .filter_map(|(name, w, norm)| {
                 match npz.by_name::<ndarray::OwnedRepr<f32>, ndarray::Ix2>(name) {
-                    Ok(arr) => Some((arr, *w, *norm)),
+                    Ok(hash_ordered_arr) => {
+                        // Reindex from hash/cache order to filename order
+                        let dim = hash_ordered_arr.ncols();
+                        let mut arr = Array2::<f32>::zeros((n_images, dim));
+                        for (i, &cache_row) in fname_to_cache_row.iter().enumerate() {
+                            arr.row_mut(i).assign(&hash_ordered_arr.row(cache_row));
+                        }
+                        Some((arr, *w, *norm))
+                    }
                     Err(_) => {
-                        eprintln!("WARNING: '{}' array not found in embeddings (weight={:.1}), skipping", name, w);
+                        eprintln!("WARNING: '{}' array not found in hash cache (weight={:.1}), skipping", name, w);
                         None
                     }
                 }

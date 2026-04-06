@@ -10,6 +10,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import sharp from "sharp";
+import { loadHashMapping, parseNpyFromNpz, reindexToFilenameOrder } from "./cache-utils.ts";
 import type {
   ClusterData,
   ClusterResultData,
@@ -100,7 +101,7 @@ async function runRustBinary(
 export async function extractFeatures(
   targetDir: string,
   onProgress?: (line: string) => void,
-  opts?: { force?: string[]; required?: string[] },
+  opts?: { force?: string[]; required?: string[]; signal?: AbortSignal },
 ): Promise<{ total: number; cached: number; extracted: number }> {
   const script = join(SCRIPTS_DIR, "extract_features.py");
   const cache = cacheDir(targetDir);
@@ -125,6 +126,13 @@ export async function extractFeatures(
     stderr: "pipe",
   });
 
+  // Allow callers to abort the extraction (sends SIGINT so Python saves checkpoint)
+  const onAbort = () => {
+    log("cluster", "Sending SIGINT to extraction subprocess for graceful shutdown...");
+    proc.kill("SIGINT");
+  };
+  opts?.signal?.addEventListener("abort", onAbort, { once: true });
+
   const stderrReader = proc.stderr.getReader();
   const decoder = new TextDecoder();
   let stderrText = "";
@@ -143,12 +151,20 @@ export async function extractFeatures(
   })();
 
   const exitCode = await proc.exited;
+  opts?.signal?.removeEventListener("abort", onAbort);
+
   if (exitCode !== 0) {
     throw new Error(`Feature extraction failed (exit ${exitCode}): ${stderrText}`);
   }
 
   const stdout = await new Response(proc.stdout).text();
-  return JSON.parse(stdout);
+  const result = JSON.parse(stdout);
+  if (result.interrupted) {
+    throw new Error(
+      "Feature extraction was interrupted. Partial results were saved — re-run to continue from where it left off.",
+    );
+  }
+  return result;
 }
 
 // ── Ensure text embeddings exist ─────────────────────────────────────────────
@@ -177,16 +193,19 @@ export async function runLinkage(
   usePatches?: boolean,
 ): Promise<RustOutput> {
   const cache = cacheDir(targetDir);
-  const embeddings = join(cache, "clip_embeddings.npz");
+  const hashCachePath = join(cache, "clip_hash_cache.npz");
+  const contentHashesPath = join(cache, "content_hashes.json");
+  const hashOrderPath = join(cache, "hash_cache_order.json");
   const groupsFile = join(targetDir, ".reorder-groups.json");
   const treePath = join(cache, "linkage_tree.bin");
   const distMatrixPath = join(cache, "patch_dist_matrix.bin");
 
   if (usePatches) {
-    const patchesPath = join(cache, "dinov3_patches.npy");
-    if (!existsSync(patchesPath)) {
+    const patchesCachePath = join(cache, "dinov3_patches_hash_cache.npy");
+    const patchesHashesPath = join(cache, "dinov3_patches_hashes.json");
+    if (!existsSync(patchesCachePath)) {
       throw new Error(
-        "DINOv3 patches not found. Run feature extraction with --required dinov3 first.",
+        "DINOv3 patches cache not found. Run feature extraction with --required dinov3 first.",
       );
     }
     if (!existsSync(GROUP_SIM_BINARY)) {
@@ -195,15 +214,13 @@ export async function runLinkage(
       );
     }
 
-    const filenamesPath = join(cache, "clip_embeddings.filenames.json");
-
     // Reuse cached distance matrix if it's newer than both inputs (O(N²) patches matching is expensive).
     let cacheValid = false;
     if (existsSync(distMatrixPath)) {
       const matMtime = Bun.file(distMatrixPath).lastModified;
       if (
-        matMtime > Bun.file(patchesPath).lastModified &&
-        matMtime > Bun.file(filenamesPath).lastModified
+        matMtime > Bun.file(patchesCachePath).lastModified &&
+        matMtime > Bun.file(contentHashesPath).lastModified
       ) {
         cacheValid = true;
       }
@@ -216,8 +233,9 @@ export async function runLinkage(
       await runRustBinary(
         GROUP_SIM_BINARY,
         [
-          "--patches", patchesPath,
-          "--filenames", filenamesPath,
+          "--patches-cache", patchesCachePath,
+          "--content-hashes", contentHashesPath,
+          "--patches-hashes", patchesHashesPath,
           "--groups", "",
           "--mode", "dist-matrix",
           "--output", distMatrixPath,
@@ -228,8 +246,12 @@ export async function runLinkage(
   }
 
   const args = [
-    "--embeddings",
-    embeddings,
+    "--hash-cache",
+    hashCachePath,
+    "--content-hashes",
+    contentHashesPath,
+    "--hash-order",
+    hashOrderPath,
     "--n-clusters",
     String(nClusters),
     "--output-tree",
@@ -649,57 +671,15 @@ function loadTextEmbeddings(targetDir: string): TextEmbeddings {
 function loadClipEmbeddings(targetDir: string) {
   if (_clipEmbCache) return _clipEmbCache;
 
-  // Read filenames
-  const fnPath = join(cacheDir(targetDir), "clip_embeddings.filenames.json");
-  const filenames: string[] = JSON.parse(readFileSync(fnPath, "utf-8"));
+  const cache = cacheDir(targetDir);
+  const mapping = loadHashMapping(cache);
+  const npzBuf = readFileSync(join(cache, "clip_hash_cache.npz"));
+  const clipHashOrdered = parseNpyFromNpz(npzBuf, "clip.npy");
+  const dim = clipHashOrdered.length / mapping.hashOrder.length;
+  const clip = reindexToFilenameOrder(clipHashOrdered, dim, mapping);
 
-  // Read npz — we only need the clip array (512-dim, float32)
-  // npz is a zip of .npy files. Use a simple parser.
-  const npzBuf = readFileSync(join(cacheDir(targetDir), "clip_embeddings.npz"));
-  const clip = parseNpyFromNpz(npzBuf, "clip.npy");
-  const nImages = filenames.length;
-  const dim = clip.length / nImages;
-
-  _clipEmbCache = { filenames, clip, nImages, dim };
+  _clipEmbCache = { filenames: mapping.filenames, clip, nImages: mapping.nImages, dim };
   return _clipEmbCache;
-}
-
-function parseNpyFromNpz(npzBuf: Buffer, entryName: string): Float32Array {
-  // npz is a ZIP file. Find the entry by scanning local file headers.
-  let offset = 0;
-  while (offset < npzBuf.length - 4) {
-    const sig = npzBuf.readUInt32LE(offset);
-    if (sig !== 0x04034b50) break; // PK\x03\x04
-    const compMethod = npzBuf.readUInt16LE(offset + 8);
-    const compSize = npzBuf.readUInt32LE(offset + 18);
-    const uncompSize = npzBuf.readUInt32LE(offset + 22);
-    const fnLen = npzBuf.readUInt16LE(offset + 26);
-    const extraLen = npzBuf.readUInt16LE(offset + 28);
-    const fn = npzBuf.subarray(offset + 30, offset + 30 + fnLen).toString("utf-8");
-    const dataStart = offset + 30 + fnLen + extraLen;
-
-    if (fn === entryName) {
-      let data: Buffer;
-      if (compMethod === 0) {
-        data = npzBuf.subarray(dataStart, dataStart + uncompSize);
-      } else {
-        // Deflate
-        data = Buffer.from(
-          Bun.inflateSync(
-            npzBuf.subarray(dataStart, dataStart + compSize) as Uint8Array<ArrayBuffer>,
-          ),
-        );
-      }
-      // Parse .npy header
-      // Magic: \x93NUMPY, version, header_len, then header string, then data
-      const headerLen = data.readUInt16LE(8);
-      const arrayData = data.subarray(10 + headerLen);
-      return new Float32Array(arrayData.buffer, arrayData.byteOffset, arrayData.byteLength / 4);
-    }
-
-    offset = dataStart + compSize;
-  }
-  throw new Error(`Entry ${entryName} not found in npz`);
 }
 
 export function computeAutoNames(
@@ -896,7 +876,7 @@ function computeSuggestedCounts(nImages: number): number[] {
 function modelsForWeights(weights?: WeightConfig): string[] | undefined {
   if (!weights) return undefined; // no config → extract all (auto mode)
   // Rust defaults: clip=1.0, color=0.5, others=0.0
-  const defaults: Record<string, number> = { clip: 1.0, color: 0.5, dino: 0.0, pecore_l: 0.0, pecore_g: 0.0 };
+  const defaults: Record<string, number> = { clip: 1.0, color: 0.5, dino: 0.0, pecore_l: 0.0, pecore_g: 0.0, dinov3: 0.0 };
   const needed: string[] = [];
   for (const [key, defaultVal] of Object.entries(defaults)) {
     const val = weights[key as keyof WeightConfig] ?? defaultVal;
@@ -918,8 +898,9 @@ export async function runFullCluster(
   if (usePatches && required && !required.includes("dinov3")) {
     required.push("dinov3");
   }
+  const signal = getClusterAbortSignal();
   const [extraction] = await Promise.all([
-    extractFeatures(targetDir, onProgress, required ? { required } : undefined),
+    extractFeatures(targetDir, onProgress, required ? { required, signal } : { signal }),
     ensureTextEmbeddings(targetDir),
   ]);
   log("cluster", `Extraction: ${extraction.extracted} new, ${extraction.cached} cached`);
@@ -1023,12 +1004,21 @@ export function invalidateClusterCache() {
 
 // ── Job guard ───────────────────────────────────────────────────────────────
 
-let _clusterJobRunning = false;
+let _clusterAbort: AbortController | null = null;
 export function isClusterJobRunning() {
-  return _clusterJobRunning;
+  return _clusterAbort !== null;
 }
 export function setClusterJobRunning(v: boolean) {
-  _clusterJobRunning = v;
+  _clusterAbort = v ? new AbortController() : null;
+}
+export function getClusterAbortSignal(): AbortSignal | undefined {
+  return _clusterAbort?.signal;
+}
+export function cancelClusterJob() {
+  if (_clusterAbort) {
+    _clusterAbort.abort();
+    log("cluster", "Cluster job cancellation requested");
+  }
 }
 
 // ── Merge suggestions: DINOv3 patch-based group similarity ──────────────────
@@ -1049,14 +1039,15 @@ export async function computeMergeSuggestions(
   minScore = 0.55,
 ): Promise<GroupPairResult[]> {
   const cache = cacheDir(targetDir);
-  const patchesPath = join(cache, "dinov3_patches.npy");
-  const filenamesPath = join(cache, "clip_embeddings.filenames.json");
+  const patchesCachePath = join(cache, "dinov3_patches_hash_cache.npy");
+  const patchesHashesPath = join(cache, "dinov3_patches_hashes.json");
+  const contentHashesPath = join(cache, "content_hashes.json");
   const groupsPath = join(targetDir, ".reorder-groups.json");
   const resultCachePath = join(cache, "merge_suggestions.json");
 
-  if (!existsSync(patchesPath)) {
+  if (!existsSync(patchesCachePath)) {
     throw new Error(
-      "DINOv3 patches not found. Run feature extraction with --required dinov3 first.",
+      "DINOv3 patches cache not found. Run feature extraction with --required dinov3 first.",
     );
   }
   if (!existsSync(GROUP_SIM_BINARY)) {
@@ -1065,13 +1056,14 @@ export async function computeMergeSuggestions(
     );
   }
 
-  // Disk cache is valid if newer than both the groups file and patches file.
+  // Disk cache is valid if newer than both the groups file and patches cache.
   try {
     const cacheFile = Bun.file(resultCachePath);
     const cacheTime = cacheFile.lastModified;
     if (
       cacheTime > Bun.file(groupsPath).lastModified &&
-      cacheTime > Bun.file(patchesPath).lastModified
+      cacheTime > Bun.file(patchesCachePath).lastModified &&
+      cacheTime > Bun.file(contentHashesPath).lastModified
     ) {
       log("merge-suggestions", "Using cached results");
       const cached: GroupPairResult[] = await cacheFile.json();
@@ -1082,8 +1074,9 @@ export async function computeMergeSuggestions(
   } catch {}
 
   const args = [
-    "--patches", patchesPath,
-    "--filenames", filenamesPath,
+    "--patches-cache", patchesCachePath,
+    "--content-hashes", contentHashesPath,
+    "--patches-hashes", patchesHashesPath,
     "--groups", groupsPath,
     // Compute unfiltered so the cache can serve any threshold; TS re-filters on return.
     "--min-score", "0",

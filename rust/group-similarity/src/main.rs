@@ -8,13 +8,17 @@ use std::collections::HashMap;
 #[derive(Parser)]
 #[command(about = "Compute pairwise group similarity using DINOv3 patch matching")]
 struct Cli {
-    /// Path to dinov3_patches.npy (shape: [N_images, 196, 768])
+    /// Path to hash-keyed patches cache .npy (dinov3_patches_hash_cache.npy)
     #[arg(long)]
-    patches: String,
+    patches_cache: String,
 
-    /// Path to clip_embeddings.filenames.json
+    /// Path to content_hashes.json (filename → content hash)
     #[arg(long)]
-    filenames: String,
+    content_hashes: String,
+
+    /// Path to dinov3_patches_hashes.json (hash list in patches cache row order)
+    #[arg(long)]
+    patches_hashes: String,
 
     /// Path to .reorder-groups.json
     #[arg(long)]
@@ -69,20 +73,42 @@ struct GroupPairResult {
 fn main() {
     let cli = Cli::parse();
 
-    // ── Load filenames ───────────────────────────────────────────────────
-    let filenames: Vec<String> = {
-        let content = std::fs::read_to_string(&cli.filenames).expect("read filenames");
-        serde_json::from_str(&content).expect("parse filenames")
+    // ── Load content_hashes.json → sorted filenames + hash lookup ──────
+    let content_hashes: HashMap<String, String> = {
+        let content = std::fs::read_to_string(&cli.content_hashes).expect("read content_hashes.json");
+        serde_json::from_str(&content).expect("parse content_hashes.json")
     };
+    let mut filenames: Vec<String> = content_hashes.keys().cloned().collect();
+    filenames.sort();
     let n_images = filenames.len();
     let fname_to_idx: HashMap<&str, usize> =
         filenames.iter().enumerate().map(|(i, f)| (f.as_str(), i)).collect();
 
+    // ── Load patches hash order → cache row mapping ─────────────────────
+    let patches_hash_order: Vec<String> = {
+        let content = std::fs::read_to_string(&cli.patches_hashes).expect("read patches_hashes.json");
+        serde_json::from_str(&content).expect("parse patches_hashes.json")
+    };
+    let patch_hash_to_row: HashMap<&str, usize> = patches_hash_order
+        .iter()
+        .enumerate()
+        .map(|(i, h)| (h.as_str(), i))
+        .collect();
+
+    // Build filename → patches cache row mapping
+    let fname_to_patch_row: Vec<usize> = filenames
+        .iter()
+        .map(|f| {
+            let hash = content_hashes.get(f).unwrap_or_else(|| panic!("No hash for {}", f));
+            *patch_hash_to_row.get(hash.as_str())
+                .unwrap_or_else(|| panic!("Hash {} (file {}) not in patches cache — re-run extraction with --required dinov3", hash, f))
+        })
+        .collect();
+
     // ── Load DINOv3 patch tokens ─────────────────────────────────────────
-    // Shape: [N_images, 196, 768], dtype: float32, L2-normalized per patch
-    // .npy format: 6-byte magic (\x93NUMPY) + 1 major + 1 minor + 2 header_len + header + data
-    eprintln!("Loading DINOv3 patches from {}...", cli.patches);
-    let npy_bytes = std::fs::read(&cli.patches).expect("read patches file");
+    // Shape: [N_cache, N_patches, patch_dim], dtype: float32, L2-normalized per patch
+    eprintln!("Loading DINOv3 patches from {}...", cli.patches_cache);
+    let npy_bytes = std::fs::read(&cli.patches_cache).expect("read patches cache file");
 
     // Parse .npy header
     assert!(npy_bytes.len() > 10, "npy file too small");
@@ -93,7 +119,7 @@ fn main() {
         .expect("header not utf8")
         .trim();
 
-    // Parse shape from header (e.g. "'shape': (5195, 196, 768)")
+    // Parse shape from header (e.g. "'shape': (5195, 49, 768)")
     let shape_start = header_str.find("'shape': (").expect("no shape in header") + 10;
     let shape_end = header_str[shape_start..].find(')').expect("no shape close") + shape_start;
     let shape_str = &header_str[shape_start..shape_end];
@@ -103,24 +129,34 @@ fn main() {
         .map(|s| s.trim().parse().expect("bad shape dim"))
         .collect();
     assert_eq!(shape_dims.len(), 3, "Expected 3D array");
+    let n_cache_entries = shape_dims[0];
     let n_patches = shape_dims[1];
     let patch_dim = shape_dims[2];
-    assert!(shape_dims[0] >= n_images,
-        "Patches file has {} images but filenames has {} — re-run extraction with --required dinov3",
-        shape_dims[0], n_images);
+    assert!(n_cache_entries >= patches_hash_order.len(),
+        "Patches cache has {} entries but hash order has {}",
+        n_cache_entries, patches_hash_order.len());
 
-    // Reinterpret data bytes as f32 slice (zero-copy)
-    let data_bytes = &npy_bytes[data_start..];
-    let n_floats = data_bytes.len() / 4;
-    assert!(n_floats >= n_images * n_patches * patch_dim, "Patches file too small for {} images", n_images);
-    let patches_flat: &[f32] = unsafe {
-        std::slice::from_raw_parts(data_bytes.as_ptr() as *const f32, n_floats)
-    };
+    // Reinterpret data bytes as f32 slice, reindex to filename order, then drop the original
     let stride_image = n_patches * patch_dim;
+    let mut patches_reindexed: Vec<f32> = vec![0.0; n_images * stride_image];
+    {
+        let data_bytes = &npy_bytes[data_start..];
+        let n_floats = data_bytes.len() / 4;
+        let cache_flat: &[f32] = unsafe {
+            std::slice::from_raw_parts(data_bytes.as_ptr() as *const f32, n_floats)
+        };
+        for (i, &cache_row) in fname_to_patch_row.iter().enumerate() {
+            let src = &cache_flat[cache_row * stride_image..(cache_row + 1) * stride_image];
+            patches_reindexed[i * stride_image..(i + 1) * stride_image].copy_from_slice(src);
+        }
+    }
+    drop(npy_bytes); // free ~1GB original buffer now that reindexing is done
+    let patches_flat: &[f32] = &patches_reindexed;
     eprintln!(
-        "Loaded {} images × {} patches × {}d = {:.1} GB",
+        "Loaded {} images × {} patches × {}d = {:.1} GB (reindexed from {} cache entries)",
         n_images, n_patches, patch_dim,
-        patches_flat.len() as f64 * 4.0 / 1e9
+        (n_images * stride_image) as f64 * 4.0 / 1e9,
+        n_cache_entries,
     );
 
     // ── dist-matrix mode: compute full pairwise distance matrix ────────

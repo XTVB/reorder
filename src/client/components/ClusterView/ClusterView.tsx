@@ -5,7 +5,6 @@ import { useClusterStore } from "../../stores/clusterStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useUIStore } from "../../stores/uiStore.ts";
 import type { ClusterResultData } from "../../types.ts";
-import { postJson } from "../../utils/helpers.ts";
 import { Lightbox } from "../Lightbox.tsx";
 import { ClusterCard } from "./ClusterCard.tsx";
 import { MergeBar } from "./MergeBar.tsx";
@@ -40,7 +39,6 @@ export function ClusterView() {
 
   const groups = useGroupStore((s) => s.groups);
   const fetchGroups = useGroupStore((s) => s.fetchGroups);
-  const showToast = useUIStore((s) => s.showToast);
   const setHeaderSubtitle = useUIStore((s) => s.setHeaderSubtitle);
 
   const unsortedClusters = clusterData?.clusters ?? EMPTY_CLUSTERS;
@@ -177,22 +175,6 @@ export function ClusterView() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [mergeSelection.size, selectedImages.size, focusedClusterId, visibleClusters]);
 
-  async function handleAskClaude(clusterId: string, images: string[], autoName: string) {
-    try {
-      const res = await postJson("/api/cluster/contact-sheet", {
-        filenames: images,
-        clusterName: autoName || clusterId,
-      });
-      const result: { path?: string } = await res.json();
-      if (result.path) {
-        await navigator.clipboard.writeText(result.path);
-        showToast(`Contact sheet saved — path copied to clipboard`, "success");
-      }
-    } catch (err) {
-      showToast(`Failed to generate contact sheet: ${err}`, "error");
-    }
-  }
-
   function renderLightbox() {
     if (!lightbox) return null;
     const cluster = clusterData?.clusters.find((c) => c.id === lightbox.clusterId);
@@ -261,9 +243,6 @@ export function ClusterView() {
                     onImageRangeSelect={(index) => rangeSelectImages(cluster.id, index)}
                     onAccept={() => acceptCluster(cluster)}
                     onAddToGroup={() => addToGroup(cluster)}
-                    onAskClaude={() =>
-                      handleAskClaude(cluster.id, cluster.images, cluster.autoName)
-                    }
                     onDismiss={() => dismissCluster(cluster.id)}
                     onSplit={splitSelected}
                     onOpenLightbox={(index) => openLightbox(cluster.id, index)}

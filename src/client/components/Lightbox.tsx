@@ -1,5 +1,5 @@
 import type React from "react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ImageInfo } from "../types.ts";
 import { fullImageUrl } from "../utils/helpers.ts";
 
@@ -16,6 +16,7 @@ export function Lightbox({
   const [scale, setScale] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
+  const [dimensions, setDimensions] = useState<{ w: number; h: number } | null>(null);
   const panStart = useRef({ x: 0, y: 0 });
   const translateStart = useRef({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
@@ -23,9 +24,15 @@ export function Lightbox({
   const image = images[index]!;
   const isZoomed = scale > 1;
 
+  const handleImageLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    setDimensions({ w: img.naturalWidth, h: img.naturalHeight });
+  }, []);
+
   function resetView() {
     setScale(1);
     setTranslate({ x: 0, y: 0 });
+    setDimensions(null);
   }
 
   const indexRef = useRef(index);
@@ -153,12 +160,20 @@ export function Lightbox({
           src={fullImageUrl(image.filename)}
           alt={image.filename}
           draggable={false}
+          onLoad={handleImageLoad}
           style={{ transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})` }}
         />
       </div>
 
       <div className="lightbox-bar">
-        <span className="lightbox-filename">{image.filename}</span>
+        <span className="lightbox-filename">
+          {image.filename}
+          {dimensions && (
+            <span className="lightbox-dimensions">
+              {dimensions.w} &times; {dimensions.h}
+            </span>
+          )}
+        </span>
         <span className="lightbox-counter">
           {index + 1} / {images.length}
         </span>

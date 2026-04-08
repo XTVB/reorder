@@ -1,5 +1,6 @@
 import type React from "react";
 import type { ImageGroup, ImageInfo } from "../types.ts";
+import { AskClaudeButton } from "./AskClaudeButton.tsx";
 import { ExpandedGroupItem } from "./ExpandedGroupItem.tsx";
 
 interface FloatingPopoverContentProps {
@@ -126,6 +127,7 @@ export function GroupPopover({
       activeId={activeId}
       actions={
         <>
+          <AskClaudeButton images={group.images} name={group.name} />
           <button className="btn btn-small btn-secondary" onClick={() => onRename(group.id)}>
             Rename
           </button>

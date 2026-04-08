@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useClusterStore } from "../../stores/clusterStore.ts";
 import type { ClusterResultData } from "../../types.ts";
 import { cn, imageUrl } from "../../utils/helpers.ts";
+import { AskClaudeButton } from "../AskClaudeButton.tsx";
 
 interface Props {
   cluster: ClusterResultData;
@@ -16,7 +17,6 @@ interface Props {
   onImageRangeSelect: (index: number) => void;
   onAccept: () => void;
   onAddToGroup: () => void;
-  onAskClaude: () => void;
   onDismiss: () => void;
   onSplit: () => void;
   onOpenLightbox: (index: number) => void;
@@ -34,7 +34,6 @@ export function ClusterCard({
   onImageRangeSelect,
   onAccept,
   onAddToGroup,
-  onAskClaude,
   onDismiss,
   onSplit,
   onOpenLightbox,
@@ -122,13 +121,7 @@ export function ClusterCard({
               Add {suggestedImages.length} to Group
             </button>
           )}
-          <button
-            className="btn btn-small"
-            onClick={onAskClaude}
-            title="Generate contact sheet for Claude"
-          >
-            Ask Claude
-          </button>
+          <AskClaudeButton images={cluster.images} name={cluster.autoName || cluster.id} />
           <button className="btn btn-small btn-dismiss" onClick={onDismiss}>
             ×
           </button>

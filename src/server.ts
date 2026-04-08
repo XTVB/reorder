@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { basename, extname, join } from "node:path";
 import {
   broadcastProgress,
   cancelClusterJob,
@@ -660,7 +660,14 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
     if (path === "/api/cluster/contact-sheet" && req.method === "POST") {
       const body = (await req.json()) as { filenames: string[]; clusterName: string };
       const outPath = await generateContactSheet(targetDir, body.filenames, body.clusterName);
-      return json({ path: outPath });
+      return json({ path: outPath, filename: basename(outPath) });
+    }
+
+    if (path.startsWith("/api/contact-sheet/") && req.method === "GET") {
+      const name = decodeURIComponent(path.slice("/api/contact-sheet/".length));
+      if (name.includes("/") || name.includes("..")) return json({ error: "Invalid name" }, 400);
+      const filePath = join(targetDir, ".reorder-cache", "contact_sheets", name);
+      return serveFileWithCache(req, filePath, "no-cache");
     }
 
     // ── Merge suggestions (DINOv3 patch matching) ─────────────────────

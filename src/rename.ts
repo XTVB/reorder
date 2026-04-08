@@ -1,4 +1,4 @@
-import { access, constants, mkdir, readdir, rename, rmdir, stat, unlink } from "node:fs/promises";
+import { access, constants, mkdir, readdir, rename, rmdir, unlink } from "node:fs/promises";
 import { extname, join } from "node:path";
 
 const IMAGE_EXTENSIONS = new Set([

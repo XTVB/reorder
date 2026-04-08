@@ -307,8 +307,8 @@ export function ClusterCompare() {
           <div className="compare-add-section">
             <div className="compare-add-heading">Presets</div>
             <div className="compare-preset-grid">
-              {PRESETS.map((p, i) => (
-                <button key={i} className="btn btn-small" onClick={() => addPreset(p)}>
+              {PRESETS.map((p) => (
+                <button key={p.label} className="btn btn-small" onClick={() => addPreset(p)}>
                   {p.label}
                 </button>
               ))}

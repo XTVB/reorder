@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import { useEffect } from "react";
 import { useGroupOperations } from "../hooks/useGroupOperations.ts";
 import { useFolderStore } from "../stores/folderStore.ts";
 import { flushGroupPersist, useGroupStore } from "../stores/groupStore.ts";
@@ -169,8 +169,14 @@ export function Toolbar() {
 
     const imageIndex = new Map(images.map((img, i) => [img.filename, i]));
     const sortedGroups = [...groups].sort((a, b) => {
-      const aIdx = a.images.reduce((min, fn) => Math.min(min, imageIndex.get(fn) ?? Infinity), Infinity);
-      const bIdx = b.images.reduce((min, fn) => Math.min(min, imageIndex.get(fn) ?? Infinity), Infinity);
+      const aIdx = a.images.reduce(
+        (min, fn) => Math.min(min, imageIndex.get(fn) ?? Infinity),
+        Infinity,
+      );
+      const bIdx = b.images.reduce(
+        (min, fn) => Math.min(min, imageIndex.get(fn) ?? Infinity),
+        Infinity,
+      );
       return aIdx - bIdx;
     });
 

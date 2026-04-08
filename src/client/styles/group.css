@@ -99,11 +99,11 @@
   background: var(--border);
 }
 
-.group-drop-target {
-  border-color: var(--accent) !important;
+.group-card.group-drop-target {
+  border-color: var(--accent);
   box-shadow:
     0 0 0 3px rgba(79, 140, 255, 0.5),
-    0 0 24px rgba(79, 140, 255, 0.3) !important;
+    0 0 24px rgba(79, 140, 255, 0.3);
   z-index: 10;
 }
 

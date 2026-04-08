@@ -13,7 +13,7 @@ export async function initLog(targetDir: string): Promise<void> {
     const raw = await readFile(logFilePath, "utf8");
     const lines = raw.split("\n").filter((l) => l.length > 0);
     if (lines.length > MAX_LINES) {
-      const trimmed = lines.slice(lines.length - MAX_LINES).join("\n") + "\n";
+      const trimmed = `${lines.slice(lines.length - MAX_LINES).join("\n")}\n`;
       await writeFile(logFilePath, trimmed, "utf8");
     }
   } catch {
@@ -51,8 +51,7 @@ export function logError(tag: string, message: string, err?: unknown): void {
  * flood the terminal but are essential for post-mortem.
  */
 export function logData(tag: string, label: string, data: string): void {
-  const header = `[${ts()}] [${tag}] ${label}:\n`;
-  const block = header + data + "\n";
+  const block = `[${ts()}] [${tag}] ${label}:\n${data}\n`;
   writeLine(block);
 }
 
@@ -61,8 +60,7 @@ export function logData(tag: string, label: string, data: string): void {
  * Use sparingly — for critical data you always want visible.
  */
 export function logBlock(tag: string, label: string, data: string): void {
-  const header = `[${ts()}] [${tag}] ${label}:\n`;
-  const block = header + data + "\n";
+  const block = `[${ts()}] [${tag}] ${label}:\n${data}\n`;
   process.stdout.write(block);
   writeLine(block);
 }

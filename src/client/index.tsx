@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
-import { AppShellHeader, MODES, DEFAULT_MODE, modeFromPath } from "./components/AppShellHeader.tsx";
+import { AppShellHeader, DEFAULT_MODE, MODES, modeFromPath } from "./components/AppShellHeader.tsx";
 import { ClusterCompare } from "./components/ClusterCompare/ClusterCompare.tsx";
 import { ClusterToolbar } from "./components/ClusterView/ClusterToolbar.tsx";
 import { ClusterView } from "./components/ClusterView/ClusterView.tsx";
@@ -18,7 +18,7 @@ import { useSelectionStore } from "./stores/selectionStore.ts";
 import { useUIStore } from "./stores/uiStore.ts";
 
 // Expose all stores on window for console access / debugging
-(window as any).__stores = {
+(window as unknown as Record<string, unknown>).__stores = {
   images: useImageStore,
   groups: useGroupStore,
   selection: useSelectionStore,
@@ -42,7 +42,11 @@ function AppShell() {
   return (
     <>
       <AppShellHeader mode={mode} navigate={navigate}>
-        {mode === "cluster" ? <ClusterActions /> : mode === "cluster-compare" || mode === "merge-suggestions" ? null : <Toolbar />}
+        {mode === "cluster" ? (
+          <ClusterActions />
+        ) : mode === "cluster-compare" || mode === "merge-suggestions" ? null : (
+          <Toolbar />
+        )}
       </AppShellHeader>
       {mode === "cluster" ? (
         <ClusterView />
@@ -81,7 +85,6 @@ function ClusterActions() {
       loading={loading}
       progress={progress}
       nClusters={clusterData?.nClusters ?? 200}
-      suggestedCounts={clusterData?.suggestedCounts ?? []}
       totalClusters={visibleCount}
       hasError={hasError}
       distanceProfile={clusterData?.distanceProfile ?? null}

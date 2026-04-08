@@ -2,7 +2,7 @@ Default to Bun, not Node.
 
 - `bun run start.ts <dir>` — launch (builds client, opens browser, pre-generates thumbnails)
 - `bun build src/client/index.tsx --outdir dist --minify` — test client compilation
-- `bun install`, `bun test`, `biome check .`
+- `bun install`, `bun run typecheck`, `bun run lint` (`bun run lint:fix` to auto-fix)
 - Rust: `cd rust/cluster-tool && cargo build --release` and `cd rust/group-similarity && cargo build --release`
 
 ## What This App Does

@@ -94,13 +94,6 @@
   color: white;
 }
 
-.merge-method-stale {
-  font-size: 10px;
-  color: var(--accent);
-  margin-left: 4px;
-  font-style: italic;
-}
-
 .merge-progress {
   display: flex;
   align-items: center;

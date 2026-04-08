@@ -1,4 +1,3 @@
-import React from "react";
 import { useUIStore } from "../stores/uiStore.ts";
 
 export function Toast() {

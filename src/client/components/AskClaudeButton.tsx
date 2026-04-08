@@ -1,5 +1,5 @@
-import { postJson } from "../utils/helpers.ts";
 import { useUIStore } from "../stores/uiStore.ts";
+import { postJson } from "../utils/helpers.ts";
 
 const DEFAULT_PROMPT = "Give me a descriptive sexy title for this photoset, 4-6 words";
 

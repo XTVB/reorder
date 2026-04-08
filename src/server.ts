@@ -1,5 +1,7 @@
 import { stat } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import { basename, extname, join } from "node:path";
+import type { ClusterData, ImageGroup, MergeSuggestionSimilar } from "./client/types.ts";
 import {
   broadcastProgress,
   cancelClusterJob,
@@ -38,11 +40,10 @@ import {
   withRenameLock,
 } from "./rename.ts";
 import { getThumbnail } from "./thumbnails.ts";
-import type { ImageGroup, MergeSuggestionSimilar } from "./client/types.ts";
 
 const GROUPS_FILE = ".reorder-groups.json";
 
-async function readGroupsFile(targetDir: string): Promise<unknown[]> {
+async function readGroupsFile(targetDir: string): Promise<ImageGroup[]> {
   try {
     const file = Bun.file(join(targetDir, GROUPS_FILE));
     if (await file.exists()) {
@@ -53,7 +54,7 @@ async function readGroupsFile(targetDir: string): Promise<unknown[]> {
   return [];
 }
 
-async function writeGroupsFile(targetDir: string, groups: unknown[]) {
+async function writeGroupsFile(targetDir: string, groups: ImageGroup[]) {
   const mainPath = join(targetDir, GROUPS_FILE);
   const backupPath = join(targetDir, ".reorder-groups.bak.json");
   try {
@@ -68,15 +69,13 @@ async function writeGroupsFile(targetDir: string, groups: unknown[]) {
 async function remapGroups(
   targetDir: string,
   renames: RenameMapping[],
-): Promise<{ before: unknown[]; after: unknown[] }> {
+): Promise<{ before: ImageGroup[]; after: ImageGroup[] }> {
   const groups = await readGroupsFile(targetDir);
   if (groups.length === 0) return { before: [], after: [] };
   const renameMap = new Map(renames.map((r) => [r.from, r.to]));
-  const remapped = groups.map((g: any) => ({
+  const remapped = groups.map((g) => ({
     ...g,
-    images: Array.isArray(g.images)
-      ? g.images.map((fn: string) => renameMap.get(fn) ?? fn)
-      : g.images,
+    images: g.images.map((fn) => renameMap.get(fn) ?? fn),
   }));
   await writeGroupsFile(targetDir, remapped);
   return { before: groups, after: remapped };
@@ -86,10 +85,7 @@ async function remapGroups(
  * Remap groups after a rename operation, collecting non-fatal warnings.
  * Called identically from /api/save and /api/undo.
  */
-async function remapContentHashes(
-  targetDir: string,
-  renames: RenameMapping[],
-) {
+async function remapContentHashes(targetDir: string, renames: RenameMapping[]) {
   const hashesPath = join(targetDir, ".reorder-cache", "content_hashes.json");
   try {
     const hashes: Record<string, string> = await Bun.file(hashesPath).json();
@@ -116,7 +112,7 @@ async function remapAfterRename(
     logData(
       label,
       `Groups (post-${label})`,
-      after.map((g: any) => `  ${g.name}: [${g.images?.join(", ")}]`).join("\n"),
+      after.map((g) => `  ${g.name}: [${g.images.join(", ")}]`).join("\n"),
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -171,7 +167,7 @@ async function serveFileWithCache(
   filePath: string,
   cacheControl: string,
 ): Promise<Response> {
-  let s;
+  let s: Stats;
   try {
     s = await stat(filePath);
   } catch {
@@ -280,7 +276,7 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
     }
 
     if (path === "/api/save" && req.method === "POST") {
-      const body = (await req.json()) as { order: string[]; groups?: unknown[] };
+      const body = (await req.json()) as { order: string[]; groups?: ImageGroup[] };
       return withRenameLock(async () => {
         const t0 = Date.now();
         log("save", `Received save request: ${body.order.length} files in order`);
@@ -288,10 +284,10 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
         const warnings: string[] = [];
 
         if (body.groups) {
-          const groupSummary = (body.groups as any[])
-            .map((g: any) => `  ${g.name}: [${g.images?.join(", ")}]`)
+          const groupSummary = body.groups
+            .map((g) => `  ${g.name}: [${g.images.join(", ")}]`)
             .join("\n");
-          log("save", `Writing ${(body.groups as unknown[]).length} groups to disk before rename`);
+          log("save", `Writing ${body.groups.length} groups to disk before rename`);
           logData("save", "Groups (pre-rename)", groupSummary);
           await writeGroupsFile(targetDir, body.groups);
         }
@@ -365,15 +361,13 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
     }
 
     if (path === "/api/groups" && req.method === "POST") {
-      const groups = (await req.json()) as unknown[];
+      const groups = (await req.json()) as ImageGroup[];
       return withRenameLock(async () => {
         log("groups", `Persisting ${groups.length} groups`);
         logData(
           "groups",
           "Groups snapshot",
-          (groups as any[])
-            .map((g: any) => `  ${g.name}: [${(g.images ?? []).join(", ")}]`)
-            .join("\n"),
+          groups.map((g) => `  ${g.name}: [${g.images.join(", ")}]`).join("\n"),
         );
         await writeGroupsFile(targetDir, groups);
         return json({ success: true });
@@ -423,7 +417,11 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
     // ---- Cluster routes ----
 
     if (path === "/api/cluster" && req.method === "POST") {
-      const body = (await req.json()) as { nClusters?: number; weights?: WeightConfig; usePatches?: boolean };
+      const body = (await req.json()) as {
+        nClusters?: number;
+        weights?: WeightConfig;
+        usePatches?: boolean;
+      };
       const nClusters = body.nClusters ?? 200;
       const weights = body.weights;
       const usePatches = body.usePatches ?? false;
@@ -538,7 +536,9 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
             if (!msg) {
               write(`event: result\ndata: {}\n\n`);
               cleanup();
-              try { controller.close(); } catch {}
+              try {
+                controller.close();
+              } catch {}
             } else {
               write(`event: progress\ndata: ${JSON.stringify({ message: msg })}\n\n`);
             }
@@ -634,7 +634,7 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
         threshold?: number;
         minClusterSize?: number;
       };
-      let result;
+      let result: ClusterData;
       if (body.minClusterSize != null) {
         log("cluster", `Re-cut request: adaptive minClusterSize=${body.minClusterSize}`);
         result = await runRecutAdaptive(targetDir, body.minClusterSize);
@@ -650,9 +650,16 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
     }
 
     if (path === "/api/cluster/test" && req.method === "POST") {
-      const body = (await req.json()) as { nClusters?: number; weights?: WeightConfig; usePatches?: boolean };
+      const body = (await req.json()) as {
+        nClusters?: number;
+        weights?: WeightConfig;
+        usePatches?: boolean;
+      };
       const nClusters = body.nClusters ?? 200;
-      log("cluster", `Test linkage: n=${nClusters} weights=${JSON.stringify(body.weights)} usePatches=${body.usePatches}`);
+      log(
+        "cluster",
+        `Test linkage: n=${nClusters} weights=${JSON.stringify(body.weights)} usePatches=${body.usePatches}`,
+      );
       const result = await runLinkageOnly(targetDir, nClusters, body.weights, body.usePatches);
       return json(result);
     }
@@ -726,7 +733,10 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
               // 1 - patch_median so lower = more similar, matching the Ward-distance semantics used by other UI.
               const displayDist = 1 - d.patch_median;
 
-              for (const [srcId, other] of [[d.group_a, gB], [d.group_b, gA]] as const) {
+              for (const [srcId, other] of [
+                [d.group_a, gB],
+                [d.group_b, gA],
+              ] as const) {
                 let row = rowMap.get(srcId);
                 if (!row) {
                   row = { refGroupId: srcId, similar: [] };

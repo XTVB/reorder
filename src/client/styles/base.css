@@ -35,11 +35,6 @@ body {
 
 /* Responsive */
 @media (max-width: 500px) {
-  .header {
-    padding: 12px 16px;
-    flex-wrap: wrap;
-  }
-
   .grid-scroll-container {
     padding: 16px;
   }

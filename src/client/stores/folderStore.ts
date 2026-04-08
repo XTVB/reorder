@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import type { FolderData, FolderGroup, ImageInfo } from "../types.ts";
-import { postJson, stripFolderNumber } from "../utils/helpers.ts";
 import { useImageStore } from "./imageStore.ts";
 
 const FOLDER_MODE_KEY = "reorder-folder-mode";

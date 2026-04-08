@@ -83,13 +83,13 @@
 }
 
 /* Search match highlight */
-.card-search-match {
-  border-color: var(--highlight) !important;
+.card.card-search-match {
+  border-color: var(--highlight);
   box-shadow: 0 0 0 2px var(--highlight);
 }
 
-.card-search-current {
-  border-color: var(--highlight) !important;
+.card.card-search-current {
+  border-color: var(--highlight);
   box-shadow:
     0 0 0 3px var(--highlight),
     0 0 20px rgba(255, 204, 0, 0.6);

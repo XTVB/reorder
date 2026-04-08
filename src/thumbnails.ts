@@ -1,4 +1,5 @@
 import { mkdir, readdir, rm, stat, unlink } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import { join } from "node:path";
 import sharp from "sharp";
 
@@ -34,7 +35,7 @@ export async function getThumbnail(targetDir: string, filename: string): Promise
   const cacheDir = await ensureCacheDir(targetDir);
   const sourcePath = join(targetDir, filename);
 
-  let s;
+  let s: Stats;
   try {
     s = await stat(sourcePath);
   } catch {

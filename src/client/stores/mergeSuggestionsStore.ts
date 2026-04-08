@@ -143,7 +143,7 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
         : [Math.min(anchorIdx, endIdx), Math.max(anchorIdx, endIdx)];
     set((s) => {
       const next = new Map(s.pendingMerges);
-      const updated = new Set(next.get(refId) ?? new Set());
+      const updated = new Set<string>(next.get(refId) ?? []);
       for (let i = lo; i <= hi; i++) updated.add(row.similar[i]!.groupId);
       next.set(refId, updated);
       const anchors = new Map(s.selectionAnchors);

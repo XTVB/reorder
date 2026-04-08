@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { DistanceProfile, WeightConfig } from "../../types.ts";
 
 const DEFAULT_N_CLUSTERS = 200;
@@ -36,7 +36,6 @@ interface Props {
   loading: boolean;
   progress: string;
   nClusters: number;
-  suggestedCounts: number[];
   totalClusters: number;
   hasError: boolean;
   distanceProfile: DistanceProfile | null;
@@ -57,7 +56,6 @@ export function ClusterToolbar({
   loading,
   progress,
   nClusters,
-  suggestedCounts,
   totalClusters,
   hasError,
   distanceProfile,
@@ -148,7 +146,7 @@ export function ClusterToolbar({
     <>
       <button
         className="btn btn-primary"
-        onClick={() => onRun(parseInt(customN) || DEFAULT_N_CLUSTERS)}
+        onClick={() => onRun(parseInt(customN, 10) || DEFAULT_N_CLUSTERS)}
         disabled={loading}
       >
         {loading ? "Clustering..." : "Run Clustering"}
@@ -166,9 +164,9 @@ export function ClusterToolbar({
         {showWeights && (
           <div className="cluster-weights-dropdown">
             <div className="cluster-weights-presets">
-              {WEIGHT_PRESETS.map((p, i) => (
+              {WEIGHT_PRESETS.map((p) => (
                 <button
-                  key={i}
+                  key={p.label}
                   className="btn btn-small"
                   onClick={() => {
                     onWeightsChange(p.weights);
@@ -201,7 +199,10 @@ export function ClusterToolbar({
         )}
       </div>
 
-      <label className="cluster-patches-toggle" title="Use DINOv3 patch-level distances instead of global embeddings (better for distinguishing specific outfits/locations, ~30s extra)">
+      <label
+        className="cluster-patches-toggle"
+        title="Use DINOv3 patch-level distances instead of global embeddings (better for distinguishing specific outfits/locations, ~30s extra)"
+      >
         <input
           type="checkbox"
           checked={usePatches}
@@ -220,9 +221,13 @@ export function ClusterToolbar({
             min={0}
             max={1000}
             value={sliderPos}
-            onChange={(e) => handleSliderInput(parseInt(e.target.value))}
-            onMouseUp={(e) => handleSliderCommit(parseInt((e.target as HTMLInputElement).value))}
-            onTouchEnd={(e) => handleSliderCommit(parseInt((e.target as HTMLInputElement).value))}
+            onChange={(e) => handleSliderInput(parseInt(e.target.value, 10))}
+            onMouseUp={(e) =>
+              handleSliderCommit(parseInt((e.target as HTMLInputElement).value, 10))
+            }
+            onTouchEnd={(e) =>
+              handleSliderCommit(parseInt((e.target as HTMLInputElement).value, 10))
+            }
             disabled={loading}
           />
           <span className="cluster-threshold-label">Fine</span>
@@ -241,7 +246,7 @@ export function ClusterToolbar({
             value={customN}
             onChange={(e) => setCustomN(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") onRecut(parseInt(customN) || DEFAULT_N_CLUSTERS);
+              if (e.key === "Enter") onRecut(parseInt(customN, 10) || DEFAULT_N_CLUSTERS);
             }}
             className="cluster-n-input"
             min={2}
@@ -249,7 +254,7 @@ export function ClusterToolbar({
           />
           <button
             className="btn btn-small"
-            onClick={() => onRecut(parseInt(customN) || DEFAULT_N_CLUSTERS)}
+            onClick={() => onRecut(parseInt(customN, 10) || DEFAULT_N_CLUSTERS)}
             disabled={loading || !totalClusters}
           >
             Re-cut
@@ -267,9 +272,9 @@ export function ClusterToolbar({
             min={2}
             max={30}
             value={minClusterSize}
-            onChange={(e) => setMinClusterSize(parseInt(e.target.value))}
-            onMouseUp={(e) => onRecutAdaptive(parseInt((e.target as HTMLInputElement).value))}
-            onTouchEnd={(e) => onRecutAdaptive(parseInt((e.target as HTMLInputElement).value))}
+            onChange={(e) => setMinClusterSize(parseInt(e.target.value, 10))}
+            onMouseUp={(e) => onRecutAdaptive(parseInt((e.target as HTMLInputElement).value, 10))}
+            onTouchEnd={(e) => onRecutAdaptive(parseInt((e.target as HTMLInputElement).value, 10))}
             disabled={loading}
           />
           <span
@@ -293,7 +298,11 @@ export function ClusterToolbar({
       <button className="btn btn-small" onClick={onCollapseAll} disabled={!totalClusters}>
         Collapse All
       </button>
-      <button className="btn btn-success" onClick={() => onAcceptAll(minClusterSize)} disabled={!totalClusters}>
+      <button
+        className="btn btn-success"
+        onClick={() => onAcceptAll(minClusterSize)}
+        disabled={!totalClusters}
+      >
         Accept All
       </button>
     </>

@@ -1,4 +1,3 @@
-import React from "react";
 import type { OrganizeMapping } from "../types.ts";
 import { Modal } from "./Modal.tsx";
 

@@ -244,7 +244,6 @@ export function ClusterView() {
                     onAccept={() => acceptCluster(cluster)}
                     onAddToGroup={() => addToGroup(cluster)}
                     onDismiss={() => dismissCluster(cluster.id)}
-                    onSplit={splitSelected}
                     onOpenLightbox={(index) => openLightbox(cluster.id, index)}
                   />
                 </div>

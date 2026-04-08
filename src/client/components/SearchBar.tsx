@@ -52,7 +52,7 @@ export function useSearchState() {
 }
 
 export function SearchBar({ gridItems, onScrollToRow, columnCount }: SearchBarProps) {
-  const { isOpen, query, setQuery, matchIds, setMatchIds, setCurrentMatchId, open, close } =
+  const { isOpen, query, setQuery, setMatchIds, setCurrentMatchId, open, close } =
     useSearchContext()!;
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -82,7 +82,7 @@ export function SearchBar({ gridItems, onScrollToRow, columnCount }: SearchBarPr
         }
       } else if (item.type === "group") {
         const group = groupMap.get(item.groupId);
-        if (group && group.name.toLowerCase().includes(q)) {
+        if (group?.name.toLowerCase().includes(q)) {
           const id = gridItemId(item);
           gridIndices.push(i);
           orderedIds.push(id);

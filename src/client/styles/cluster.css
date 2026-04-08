@@ -333,9 +333,9 @@
 .cluster-thumb.suggested {
   border: 1px dashed var(--cluster-suggested);
 }
-.cluster-thumb.selected {
-  border-color: var(--danger) !important;
-  border-style: solid !important;
+.cluster-thumb.selected.selected {
+  border-color: var(--danger);
+  border-style: solid;
   box-shadow: 0 0 0 2px var(--danger);
 }
 .cluster-thumb img {

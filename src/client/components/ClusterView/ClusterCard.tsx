@@ -18,7 +18,6 @@ interface Props {
   onAccept: () => void;
   onAddToGroup: () => void;
   onDismiss: () => void;
-  onSplit: () => void;
   onOpenLightbox: (index: number) => void;
 }
 
@@ -35,7 +34,6 @@ export function ClusterCard({
   onAccept,
   onAddToGroup,
   onDismiss,
-  onSplit,
   onOpenLightbox,
 }: Props) {
   const hasGroup = !!cluster.confirmedGroup;

@@ -497,7 +497,7 @@ export function recutTreeAdaptive(
   minClusterSize: number,
 ): { labels: number[]; nClusters: number; distanceProfile: DistanceProfile } {
   const tree = loadTree(targetDir);
-  const { nImages, nPreMerges, steps } = tree;
+  const { nImages, steps } = tree;
 
   const ufParent = new Int32Array(nImages);
   const ufSize = new Int32Array(nImages).fill(1);
@@ -824,7 +824,7 @@ export function computeAutoNames(
   }
   const { globalAvg, globalStd } = _tfidfStatsCache;
 
-  return clusters.map((c, ci) => {
+  return clusters.map((c) => {
     // If this cluster has a confirmed group, use its name
     if (c.confirmed_group && c.images.length === c.confirmed_group.images.length) {
       return {
@@ -1091,7 +1091,7 @@ async function buildRecutResult(
 
   const rawClusters = [...clusterMembers.entries()]
     .sort((a, b) => b[1].length - a[1].length)
-    .map(([label, images], ci) => {
+    .map(([, images], ci) => {
       const confirmed = images.find((f) => imgToGroup.has(f));
       const group = confirmed ? (imgToGroup.get(confirmed) ?? null) : null;
       return {

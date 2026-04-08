@@ -32,7 +32,6 @@ export function Lightbox({
   function resetView() {
     setScale(1);
     setTranslate({ x: 0, y: 0 });
-    setDimensions(null);
   }
 
   const indexRef = useRef(index);

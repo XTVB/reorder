@@ -81,13 +81,13 @@ Stage 3: Bun (src/cluster.ts)
 
 ## Python Environment
 
-Clustering requires a venv at `/tmp/imgcluster-env/` with `torch torchvision open-clip-torch pillow numpy transformers`.
-Override path via `CLUSTER_PYTHON` env var.
+Clustering requires a venv at `~/.venvs/imgcluster-env/` with `torch torchvision open-clip-torch pillow numpy transformers`.
+Override path via `CLUSTER_PYTHON` env var. (Note: `/tmp` is avoided because macOS clears old files from it, wiping the venv.)
 
 ```sh
-uv venv /tmp/imgcluster-env
-source /tmp/imgcluster-env/bin/activate
+uv venv ~/.venvs/imgcluster-env
+source ~/.venvs/imgcluster-env/bin/activate
 uv pip install torch torchvision open-clip-torch pillow numpy transformers
 ```
 
-DINOv3 weights are loaded from `$DINOV3_WEIGHTS` (default `/tmp/dinov3-weights/facebook/dinov3-vitb16-pretrain-lvd1689m`).
+DINOv3 weights are loaded from `$DINOV3_WEIGHTS` (default `~/.cache/dinov3-weights/facebook/dinov3-vitb16-pretrain-lvd1689m`). Avoid `/tmp` — macOS purges it and wipes the config files out from under the safetensors blob.

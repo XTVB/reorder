@@ -1,5 +1,5 @@
-import { stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
+import { stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import type { ClusterData, ImageGroup, MergeSuggestionSimilar } from "./client/types.ts";
 import {

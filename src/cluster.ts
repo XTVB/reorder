@@ -45,7 +45,8 @@ const GROUP_SIM_BINARY = join(
   "release",
   "group-similarity",
 );
-const PYTHON = process.env.CLUSTER_PYTHON || "/tmp/imgcluster-env/bin/python3";
+const PYTHON =
+  process.env.CLUSTER_PYTHON || `${process.env.HOME}/.venvs/imgcluster-env/bin/python3`;
 
 function cacheDir(targetDir: string) {
   return join(targetDir, ".reorder-cache");
@@ -148,7 +149,7 @@ export async function extractFeatures(
 
   if (!existsSync(PYTHON)) {
     throw new Error(
-      `Python not found at ${PYTHON}. Create venv with: uv venv /tmp/imgcluster-env && source /tmp/imgcluster-env/bin/activate && uv pip install torch torchvision open-clip-torch pillow numpy`,
+      `Python not found at ${PYTHON}. Create venv with: uv venv ~/.venvs/imgcluster-env && source ~/.venvs/imgcluster-env/bin/activate && uv pip install torch torchvision open-clip-torch pillow numpy transformers`,
     );
   }
 
@@ -789,6 +790,17 @@ function loadClipEmbeddings(targetDir: string) {
   return _clipEmbCache;
 }
 
+/** Fallback when CLIP embeddings aren't available — uses confirmed group names or generic labels. */
+function clustersWithoutAutoNames(clusters: RustOutput["clusters"]): ClusterResultData[] {
+  return clusters.map((c, i) => ({
+    id: c.id,
+    autoName: c.confirmed_group?.name ?? `Cluster ${i + 1}`,
+    autoTags: [],
+    images: c.images,
+    confirmedGroup: c.confirmed_group,
+  }));
+}
+
 export function computeAutoNames(
   targetDir: string,
   clusters: RustOutput["clusters"],
@@ -996,8 +1008,6 @@ function modelsForWeights(weights?: WeightConfig): string[] | undefined {
     const val = weights[key as keyof WeightConfig] ?? defaultVal;
     if (val > 0) needed.push(key);
   }
-  // CLIP is always needed for TF-IDF auto-naming
-  if (!needed.includes("clip")) needed.push("clip");
   return needed;
 }
 
@@ -1013,16 +1023,23 @@ export async function runFullCluster(
     required.push("dinov3");
   }
   const signal = getClusterAbortSignal();
-  const [extraction] = await Promise.all([
+  const hasClip = !required || required.includes("clip");
+  const extractionPromises: Promise<unknown>[] = [
     extractFeatures(targetDir, onProgress, required ? { required, signal } : { signal }),
-    ensureTextEmbeddings(targetDir),
-  ]);
+  ];
+  if (hasClip) extractionPromises.push(ensureTextEmbeddings(targetDir));
+  const [extraction] = (await Promise.all(extractionPromises)) as [
+    Awaited<ReturnType<typeof extractFeatures>>,
+    ...unknown[],
+  ];
   log("cluster", `Extraction: ${extraction.extracted} new, ${extraction.cached} cached`);
 
   const rustOutput = await runLinkage(targetDir, nClusters, weights, usePatches);
   log("cluster", `Linkage complete: ${rustOutput.clusters.length} clusters`);
 
-  const clusters = computeAutoNames(targetDir, rustOutput.clusters);
+  const clusters = hasClip
+    ? computeAutoNames(targetDir, rustOutput.clusters)
+    : clustersWithoutAutoNames(rustOutput.clusters);
 
   const nImages = clusters.reduce((n, c) => n + c.images.length, 0);
   const distanceProfile = getDistanceProfile(targetDir);

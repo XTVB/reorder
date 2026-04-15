@@ -1,4 +1,5 @@
 import { useImageStore } from "../stores/imageStore.ts";
+import type { ImageGroup, ImageInfo } from "../types.ts";
 export const GROUP_PREFIX = "group:";
 export const FOLDER_PREFIX = "folder:";
 
@@ -64,6 +65,31 @@ export function postJson(url: string, body: unknown): Promise<Response> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+/**
+ * Rebuild a flat images array by placing grouped images (in the given group order)
+ * before ungrouped images (preserving their original relative order). The save flow
+ * reads image order from imageStore.images, so this is what drives the rename.
+ */
+export function reorderImagesByGroups(
+  images: ImageInfo[],
+  imageMap: Map<string, ImageInfo>,
+  groups: ImageGroup[],
+): ImageInfo[] {
+  const grouped = new Set<string>();
+  const result: ImageInfo[] = [];
+  for (const g of groups) {
+    for (const fn of g.images) {
+      grouped.add(fn);
+      const img = imageMap.get(fn);
+      if (img) result.push(img);
+    }
+  }
+  for (const img of images) {
+    if (!grouped.has(img.filename)) result.push(img);
+  }
+  return result;
 }
 
 /** Pick up to 4 evenly-spaced sample thumbnails from a group's images. */

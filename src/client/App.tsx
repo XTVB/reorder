@@ -23,6 +23,7 @@ import { Lightbox } from "./components/Lightbox.tsx";
 import { OrganizeModal } from "./components/OrganizeModal.tsx";
 import { PathsModal } from "./components/PathsModal.tsx";
 import { PreviewModal } from "./components/PreviewModal.tsx";
+import { ReviewModal } from "./components/ReviewModal.tsx";
 import { SearchBar, SearchContext, useSearchState } from "./components/SearchBar.tsx";
 import { SortableCard } from "./components/SortableCard.tsx";
 import { SortableFolderCard } from "./components/SortableFolderCard.tsx";
@@ -91,6 +92,7 @@ export function App() {
   const showPreview = useUIStore((s) => s.showPreview);
   const showOrganize = useUIStore((s) => s.showOrganize);
   const showPaths = useUIStore((s) => s.showPaths);
+  const showReview = useUIStore((s) => s.showReview);
   const targetDir = useUIStore((s) => s.targetDir);
   const previewRenames = useUIStore((s) => s.previewRenames);
   const organizeMappings = useUIStore((s) => s.organizeMappings);
@@ -102,6 +104,7 @@ export function App() {
   const setShowPreview = useUIStore((s) => s.setShowPreview);
   const setShowOrganize = useUIStore((s) => s.setShowOrganize);
   const setShowPaths = useUIStore((s) => s.setShowPaths);
+  const setShowReview = useUIStore((s) => s.setShowReview);
   const checkUndo = useUIStore((s) => s.checkUndo);
   const fetchTargetDir = useUIStore((s) => s.fetchTargetDir);
 
@@ -619,18 +622,16 @@ export function App() {
       {showPaths &&
         targetDir &&
         (() => {
-          const pathsText = images
+          const paths = images
             .filter((i) => selectedIds.has(i.filename))
-            .map((i) => `@"${targetDir}/${i.filename}"`)
-            .join("\n");
+            .map((i) => `@"${targetDir}/${i.filename}"`);
           return (
             <PathsModal
-              pathsText={pathsText}
+              paths={paths}
               onClose={() => setShowPaths(false)}
-              onCopy={() => {
-                navigator.clipboard.writeText(pathsText);
-                setShowPaths(false);
-                showToast("Paths copied to clipboard", "success");
+              onCopyText={(text) => {
+                navigator.clipboard.writeText(text);
+                showToast("Copied to clipboard", "success");
               }}
             />
           );
@@ -643,6 +644,8 @@ export function App() {
           onConfirm={handleConfirmOrganize}
         />
       )}
+
+      {showReview && <ReviewModal onClose={() => setShowReview(false)} />}
     </SearchContext.Provider>
   );
 }

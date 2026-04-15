@@ -24,6 +24,7 @@ import json
 import os
 import sys
 import time
+from collections import deque
 
 import numpy as np
 
@@ -50,7 +51,7 @@ DINOV3_N_PATCHES_FULL = 196  # 14x14 full resolution
 # DINOv3 local weights path (downloaded from Kaggle)
 DINOV3_WEIGHTS = os.environ.get(
     "DINOV3_WEIGHTS",
-    "/tmp/dinov3-weights/facebook/dinov3-vitb16-pretrain-lvd1689m",
+    os.path.expanduser("~/.cache/dinov3-weights/facebook/dinov3-vitb16-pretrain-lvd1689m"),
 )
 
 
@@ -305,67 +306,65 @@ def main():
     # ── Prefetch helper ──────────────────────────────────────────────────────
 
     def _run_pass(items, transform, fallback_hw, batch_size, label, encode_fn,
-                  extract_color=False, on_checkpoint=None):
-        """Run batched inference with 1-batch-ahead prefetch. `items` is [(fname, hash)].
-        If on_checkpoint is provided, called periodically with (embs, items_done, colors_or_None).
+                  on_checkpoint=None):
+        """Run batched inference with multi-batch-ahead prefetch. `items` is [(fname, hash)].
+        If on_checkpoint is provided, called periodically with (embs, items_done).
         Respects _interrupted flag — breaks early, caller uses embs.shape[0] to get count."""
         n = len(items)
         if n == 0:
-            return np.zeros((0, 0), dtype=np.float32), []
+            return np.zeros((0, 0), dtype=np.float32)
 
         def _prepare_batch(indices):
             tensors = []
-            colors = []
             for i in indices:
-                fname, h = items[i]
+                fname, _ = items[i]
                 path = os.path.join(image_dir, fname)
                 try:
                     img = Image.open(path).convert("RGB")
                     tensors.append(transform(img))
-                    if extract_color:
-                        colors.append(extract_color_features(img))
                 except Exception as e:
                     print(f"  WARNING: skipping {fname}: {e}", file=sys.stderr)
                     tensors.append(torch.zeros(3, fallback_hw, fallback_hw))
-                    if extract_color:
-                        colors.append(np.zeros(77, dtype=np.float32))
-            return torch.stack(tensors), colors
+            return torch.stack(tensors)
 
         results = []
-        all_colors = []
         t0 = time.time()
+        prefetch_depth = 4
 
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            first_end = min(batch_size, n)
-            future = pool.submit(_prepare_batch, range(0, first_end))
+        with ThreadPoolExecutor(max_workers=prefetch_depth) as pool:
+            futures = deque()
+            batch_starts = list(range(0, n, batch_size))
+            for bs in batch_starts[:prefetch_depth]:
+                be = min(bs + batch_size, n)
+                futures.append(pool.submit(_prepare_batch, range(bs, be)))
 
-            for batch_start in range(0, n, batch_size):
+            submitted = min(prefetch_depth, len(batch_starts))
+
+            for batch_start in batch_starts:
                 batch_end = min(batch_start + batch_size, n)
-                batch_tensor, colors = future.result()
-                batch_tensor = batch_tensor.to(device)
+                batch_tensor = futures.popleft().result().to(device)
 
-                next_start = batch_start + batch_size
-                if next_start < n and not _interrupted:
-                    next_end = min(next_start + batch_size, n)
-                    future = pool.submit(_prepare_batch, range(next_start, next_end))
+                if submitted < len(batch_starts) and not _interrupted:
+                    bs = batch_starts[submitted]
+                    be = min(bs + batch_size, n)
+                    futures.append(pool.submit(_prepare_batch, range(bs, be)))
+                    submitted += 1
 
                 with torch.no_grad():
                     embs = encode_fn(batch_tensor)
                     embs = embs / embs.norm(dim=-1, keepdim=True)
                 results.append(embs.cpu().numpy().astype(np.float32))
-                all_colors.extend(colors)
                 _report_progress(label, batch_end, n, t0)
 
                 if on_checkpoint and _should_checkpoint():
                     partial = np.vstack(results)
-                    c = np.array(all_colors, dtype=np.float32) if all_colors else None
-                    on_checkpoint(partial, items[:batch_end], c)
+                    on_checkpoint(partial, items[:batch_end])
                     print(f"  Checkpoint saved: {batch_end}/{n}", file=sys.stderr)
 
                 if _interrupted:
                     break
 
-        return np.vstack(results) if results else np.zeros((0, 0), dtype=np.float32), all_colors
+        return np.vstack(results) if results else np.zeros((0, 0), dtype=np.float32)
 
     # For each model, decide what to extract:
     # - Model in models_to_extract → run on ALL images (all_items) [version mismatch]
@@ -480,22 +479,14 @@ def main():
         _mem_arrays = save_arrays
         print(f"  Saved {key} to cache ({n} entries)", file=sys.stderr)
 
-    # ── Standalone color extraction (when needed without CLIP) ─────────────
-    # Color features are just HSV histograms + RGB moments — no model needed.
-    # Normally color piggybacks on the CLIP pass, but needs standalone extraction
-    # when CLIP isn't running (e.g. --models for a non-CLIP model, or zero-fill).
-    standalone_color = bool(items_map["color"]) and not items_map["clip"]
-
+    # Color is always its own pass — no piggybacking on CLIP.
     pass_num = 0
-    # Color doesn't have its own pass unless standalone
-    total_passes = sum(1 for k in EMB_KEYS if k != "color" and items_map[k])
-    if standalone_color:
-        total_passes += 1
+    total_passes = sum(1 for k in EMB_KEYS if items_map[k])
 
     new_arrays = {}
     new_color = np.zeros((0, 77), dtype=np.float32)
 
-    if standalone_color and not _interrupted:
+    if items_map["color"] and not _interrupted:
         color_items = items_map["color"]
         pass_num += 1
         print(f"  [Pass {pass_num}/{total_passes}] Color histograms ({len(color_items)} images)", file=sys.stderr)
@@ -530,32 +521,25 @@ def main():
         model_items = items_map[key]
         if model_items and not _interrupted:
             pass_num += 1
-            # Extract color during CLIP pass (unless already done standalone)
-            extract_color = (key == "clip") and not standalone_color
             print(f"  [Pass {pass_num}/{total_passes}] {label} ({len(model_items)} images)", file=sys.stderr)
             model, _, preprocess = open_clip.create_model_and_transforms(
                 model_name, pretrained=pretrained, device=device
             )
             model.eval()
 
-            def _make_ckpt(k, do_color):
-                def _fn(partial_embs, partial_items, partial_colors):
+            def _make_ckpt(k):
+                def _fn(partial_embs, partial_items):
                     _save_model_to_cache(k, partial_embs, partial_items)
-                    if do_color and partial_colors is not None:
-                        _save_model_to_cache("color", partial_colors, partial_items)
                 return _fn
 
-            embs, colors = _run_pass(
+            embs = _run_pass(
                 model_items, preprocess, hw, max(1, args.batch_size * batch_mult // batch_div),
-                label, model.encode_image, extract_color=extract_color,
-                on_checkpoint=_make_ckpt(key, extract_color),
+                label, model.encode_image,
+                on_checkpoint=_make_ckpt(key),
             )
             n_done = embs.shape[0]
             items_done = model_items[:n_done]
             new_arrays[key] = embs
-            if extract_color:
-                new_color = np.array(colors, dtype=np.float32)
-                _save_model_to_cache("color", new_color, items_done)
             _save_model_to_cache(key, embs, items_done)
             _free_model(model, preprocess)
         else:
@@ -564,30 +548,6 @@ def main():
     new_clip = new_arrays["clip"]
     new_pecore_l = new_arrays["pecore_l"]
     new_pecore_g = new_arrays["pecore_g"]
-
-    # ── Color extras (zero-fill items not covered by CLIP piggyback) ─────────
-    # When color has more items than CLIP (e.g. color zero-fill but CLIP is cached),
-    # the piggybacked color only covers CLIP's items. Extract remaining standalone.
-    if not _interrupted and not standalone_color and items_map["color"] and items_map["clip"]:
-        clip_hashes = set(h for _, h in items_map["clip"])
-        color_extra = [(f, h) for f, h in items_map["color"] if h not in clip_hashes]
-        if color_extra:
-            print(f"  Color: {len(color_extra)} extra items beyond CLIP piggyback", file=sys.stderr)
-            extra_colors = []
-            for fname, h in color_extra:
-                path = os.path.join(image_dir, fname)
-                try:
-                    img = Image.open(path).convert("RGB")
-                    extra_colors.append(extract_color_features(img))
-                except Exception as e:
-                    print(f"  WARNING: skipping {fname}: {e}", file=sys.stderr)
-                    extra_colors.append(np.zeros(77, dtype=np.float32))
-            extra_arr = np.array(extra_colors, dtype=np.float32)
-            # Concatenate with piggybacked color results and update items_map
-            # so new_hashes_map["color"] matches new_color's row order.
-            new_color = np.vstack([new_color, extra_arr]) if new_color.shape[0] > 0 else extra_arr
-            items_map["color"] = items_map["clip"] + color_extra
-            _save_model_to_cache("color", new_color, items_map["color"])
 
     # ── DINOv2 ViT-L/14 (uses torch.hub, not open_clip) ─────────────────────
     dino_items = items_map["dino"]
@@ -606,10 +566,10 @@ def main():
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
 
-        def _dino_ckpt(partial_embs, partial_items, _colors):
+        def _dino_ckpt(partial_embs, partial_items):
             _save_model_to_cache("dino", partial_embs, partial_items)
 
-        new_dino, _ = _run_pass(
+        new_dino = _run_pass(
             dino_items, dino_preprocess, 518, max(1, args.batch_size // 2), "DINOv2", dino_model,
             on_checkpoint=_dino_ckpt,
         )

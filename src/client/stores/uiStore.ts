@@ -16,6 +16,7 @@ interface UIState {
   showPreview: boolean;
   showOrganize: boolean;
   showPaths: boolean;
+  showReview: boolean;
   toast: Toast | null;
   canUndo: boolean;
   targetDir: string;
@@ -30,6 +31,7 @@ interface UIState {
   setShowPreview: (show: boolean) => void;
   setShowOrganize: (show: boolean) => void;
   setShowPaths: (show: boolean) => void;
+  setShowReview: (show: boolean) => void;
   showToast: (message: string, type: Toast["type"]) => void;
   setPreviewRenames: (renames: RenameMapping[]) => void;
   setOrganizeMappings: (mappings: OrganizeMapping[]) => void;
@@ -45,6 +47,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   showPreview: false,
   showOrganize: false,
   showPaths: false,
+  showReview: false,
   toast: null,
   canUndo: false,
   targetDir: "",
@@ -59,6 +62,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   setShowPreview: (show) => set({ showPreview: show }),
   setShowOrganize: (show) => set({ showOrganize: show }),
   setShowPaths: (show) => set({ showPaths: show }),
+  setShowReview: (show) => set({ showReview: show }),
 
   showToast: (message, type) => {
     if (_toastTimer) clearTimeout(_toastTimer);

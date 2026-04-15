@@ -5,8 +5,12 @@ import { flushGroupPersist, useGroupStore } from "../stores/groupStore.ts";
 import { useImageStore } from "../stores/imageStore.ts";
 import { useSelectionStore } from "../stores/selectionStore.ts";
 import { useUIStore } from "../stores/uiStore.ts";
-import type { ImageInfo } from "../types.ts";
-import { getErrorMessage, postJson, stripFolderNumber } from "../utils/helpers.ts";
+import {
+  getErrorMessage,
+  postJson,
+  reorderImagesByGroups,
+  stripFolderNumber,
+} from "../utils/helpers.ts";
 import { GroupPicker } from "./GroupPicker.tsx";
 
 export function Toolbar() {
@@ -37,6 +41,7 @@ export function Toolbar() {
   const setShowPreview = useUIStore((s) => s.setShowPreview);
   const setShowPaths = useUIStore((s) => s.setShowPaths);
   const setShowOrganize = useUIStore((s) => s.setShowOrganize);
+  const setShowReview = useUIStore((s) => s.setShowReview);
   const setPreviewRenames = useUIStore((s) => s.setPreviewRenames);
   const setOrganizeMappings = useUIStore((s) => s.setOrganizeMappings);
   const checkUndo = useUIStore((s) => s.checkUndo);
@@ -164,9 +169,6 @@ export function Toolbar() {
   }
 
   function handleGroupsToTop() {
-    const grouped = new Set<string>();
-    for (const g of groups) for (const fn of g.images) grouped.add(fn);
-
     const imageIndex = new Map(images.map((img, i) => [img.filename, i]));
     const sortedGroups = [...groups].sort((a, b) => {
       const aIdx = a.images.reduce(
@@ -181,18 +183,7 @@ export function Toolbar() {
     });
 
     const { imageMap, setImages } = useImageStore.getState();
-    const result: ImageInfo[] = [];
-    for (const g of sortedGroups) {
-      for (const fn of g.images) {
-        const img = imageMap.get(fn);
-        if (img) result.push(img);
-      }
-    }
-    for (const img of images) {
-      if (!grouped.has(img.filename)) result.push(img);
-    }
-
-    setImages(result);
+    setImages(reorderImagesByGroups(images, imageMap, sortedGroups));
   }
 
   const hasSelectionActions = selectedIds.size > 0;
@@ -247,6 +238,9 @@ export function Toolbar() {
           <span className="header-separator" />
           <button className="btn btn-secondary" onClick={handleGroupsToTop}>
             Groups to Top
+          </button>
+          <button className="btn btn-secondary" onClick={() => setShowReview(true)}>
+            Review
           </button>
           <button className="btn btn-secondary" onClick={handleOrganizeClick} disabled={saving}>
             Organize Folders

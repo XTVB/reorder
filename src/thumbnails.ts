@@ -1,5 +1,5 @@
-import { mkdir, readdir, rm, stat, unlink } from "node:fs/promises";
 import type { Stats } from "node:fs";
+import { mkdir, readdir, rm, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import sharp from "sharp";
 

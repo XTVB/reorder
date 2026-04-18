@@ -1,5 +1,5 @@
 import { useUIStore } from "../stores/uiStore.ts";
-import { postJson } from "../utils/helpers.ts";
+import { copyContactSheetToClipboard, getErrorMessage, postJson } from "../utils/helpers.ts";
 
 const DEFAULT_PROMPT = "Give me a descriptive sexy title for this photoset, 4-6 words";
 
@@ -20,26 +20,10 @@ export function AskClaudeButton({ images, name, prompt = DEFAULT_PROMPT }: AskCl
       });
       const result: { filename?: string } = await res.json();
       if (!result.filename) return;
-
-      const imgRes = await fetch(`/api/contact-sheet/${encodeURIComponent(result.filename)}`);
-      const jpegBlob = await imgRes.blob();
-
-      // Clipboard API requires image/png
-      const bitmap = await createImageBitmap(jpegBlob);
-      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(bitmap, 0, 0);
-      const pngBlob = await canvas.convertToBlob({ type: "image/png" });
-
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          "text/plain": new Blob([prompt], { type: "text/plain" }),
-          "image/png": pngBlob,
-        }),
-      ]);
+      await copyContactSheetToClipboard(result.filename, prompt);
       showToast("Contact sheet + prompt copied to clipboard", "success");
     } catch (err) {
-      showToast(`Failed to generate contact sheet: ${err}`, "error");
+      showToast(getErrorMessage(err, "Failed to generate contact sheet"), "error");
     }
   }
 

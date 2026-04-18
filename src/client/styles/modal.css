@@ -166,6 +166,45 @@
   margin-bottom: 8px;
 }
 
+.paths-atprefix-row {
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.paths-atprefix-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.paths-atprefix-label code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+  font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+}
+
+.paths-batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.paths-batch-sheet-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 /* Review modal */
 .review-modal {
   max-width: 900px;

@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
-import type { DistanceProfile, WeightConfig } from "../../types.ts";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useUIStore } from "../../stores/uiStore.ts";
+import type { DistanceProfile, ImportClusterInput, WeightConfig } from "../../types.ts";
+import { getErrorMessage } from "../../utils/helpers.ts";
 
 const DEFAULT_N_CLUSTERS = 200;
 
@@ -50,6 +52,8 @@ interface Props {
   onExpandAll: () => void;
   onCollapseAll: () => void;
   onAcceptAll: (minSize: number) => void;
+  onImportClusters: (payload: { clusters: ImportClusterInput[] }) => void;
+  onClearImported: () => void;
 }
 
 export function ClusterToolbar({
@@ -70,12 +74,33 @@ export function ClusterToolbar({
   onExpandAll,
   onCollapseAll,
   onAcceptAll,
+  onImportClusters,
+  onClearImported,
 }: Props) {
   const [customN, setCustomN] = useState(String(nClusters));
   const [sliderPos, setSliderPos] = useState(500);
   const [previewCount, setPreviewCount] = useState<number | null>(null);
   const [showWeights, setShowWeights] = useState(false);
   const [minClusterSize, setMinClusterSize] = useState(5);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const showToast = useUIStore((s) => s.showToast);
+
+  const handleImportFile = useCallback(
+    async (file: File) => {
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        if (!parsed || !Array.isArray(parsed.clusters)) {
+          showToast("Import JSON must be an object with a `clusters` array", "error");
+          return;
+        }
+        onImportClusters(parsed);
+      } catch (err) {
+        showToast(`Failed to parse JSON: ${getErrorMessage(err, "parse error")}`, "error");
+      }
+    },
+    [onImportClusters, showToast],
+  );
 
   useEffect(() => {
     setCustomN(String(nClusters));
@@ -152,92 +177,94 @@ export function ClusterToolbar({
         {loading ? "Clustering..." : "Run Clustering"}
       </button>
 
-      {/* Weights selector */}
-      <div className="cluster-weights-control">
-        <button
-          className="btn btn-small"
-          onClick={() => setShowWeights(!showWeights)}
-          title="Configure embedding weights"
+      {/* Configuration: weights + patches toggle */}
+      <div className="toolbar-group" title="Embedding configuration">
+        <div className="cluster-weights-control">
+          <button
+            className="btn"
+            onClick={() => setShowWeights(!showWeights)}
+            title="Configure embedding weights"
+          >
+            {activeWeightParts.join(", ") || "No weights"}
+          </button>
+          {showWeights && (
+            <div className="cluster-weights-dropdown">
+              <div className="cluster-weights-presets">
+                {WEIGHT_PRESETS.map((p) => (
+                  <button
+                    key={p.label}
+                    className="btn btn-small"
+                    onClick={() => {
+                      onWeightsChange(p.weights);
+                      setShowWeights(false);
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              <div className="cluster-weights-sliders">
+                {WEIGHT_LABELS.map(({ key, label }) => (
+                  <label key={key} className="cluster-weight-row">
+                    <span className="cluster-weight-label">{label}</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      value={weights[key] ?? 0}
+                      onChange={(e) =>
+                        onWeightsChange({ ...weights, [key]: parseFloat(e.target.value) })
+                      }
+                    />
+                    <span className="cluster-weight-value">{(weights[key] ?? 0).toFixed(1)}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <label
+          className="cluster-patches-toggle"
+          title="Use DINOv3 patch-level distances instead of global embeddings (better for distinguishing specific outfits/locations, ~30s extra)"
         >
-          {activeWeightParts.join(", ") || "No weights"}
-        </button>
-        {showWeights && (
-          <div className="cluster-weights-dropdown">
-            <div className="cluster-weights-presets">
-              {WEIGHT_PRESETS.map((p) => (
-                <button
-                  key={p.label}
-                  className="btn btn-small"
-                  onClick={() => {
-                    onWeightsChange(p.weights);
-                    setShowWeights(false);
-                  }}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-            <div className="cluster-weights-sliders">
-              {WEIGHT_LABELS.map(({ key, label }) => (
-                <label key={key} className="cluster-weight-row">
-                  <span className="cluster-weight-label">{label}</span>
-                  <input
-                    type="range"
-                    min="0"
-                    max="2"
-                    step="0.1"
-                    value={weights[key] ?? 0}
-                    onChange={(e) =>
-                      onWeightsChange({ ...weights, [key]: parseFloat(e.target.value) })
-                    }
-                  />
-                  <span className="cluster-weight-value">{(weights[key] ?? 0).toFixed(1)}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
+          <input
+            type="checkbox"
+            checked={usePatches}
+            onChange={(e) => onUsePatchesChange(e.target.checked)}
+          />
+          Patches
+        </label>
       </div>
 
-      <label
-        className="cluster-patches-toggle"
-        title="Use DINOv3 patch-level distances instead of global embeddings (better for distinguishing specific outfits/locations, ~30s extra)"
-      >
-        <input
-          type="checkbox"
-          checked={usePatches}
-          onChange={(e) => onUsePatchesChange(e.target.checked)}
-        />
-        Patches
-      </label>
-
-      {/* Threshold slider or N input */}
+      {/* Tuning: threshold slider(s) or N input */}
       {hasProfile ? (
-        <label className="cluster-threshold-control">
-          <span className="cluster-threshold-label">Coarse</span>
-          <input
-            type="range"
-            className="cluster-threshold-slider"
+        <div className="toolbar-group" title="Cut tuning">
+          <ThresholdSlider
+            label="Cut"
+            title="Drag left for coarser (fewer) clusters, right for finer (more) clusters"
             min={0}
             max={1000}
             value={sliderPos}
-            onChange={(e) => handleSliderInput(parseInt(e.target.value, 10))}
-            onMouseUp={(e) =>
-              handleSliderCommit(parseInt((e.target as HTMLInputElement).value, 10))
-            }
-            onTouchEnd={(e) =>
-              handleSliderCommit(parseInt((e.target as HTMLInputElement).value, 10))
-            }
             disabled={loading}
+            onInput={handleSliderInput}
+            onCommit={handleSliderCommit}
+            countText={String(displayCount)}
+            countTitle={`threshold: ${sliderToThreshold(sliderPos).toFixed(4)}`}
           />
-          <span className="cluster-threshold-label">Fine</span>
-          <span
-            className="cluster-threshold-count"
-            title={`threshold: ${sliderToThreshold(sliderPos).toFixed(4)}`}
-          >
-            → {displayCount} clusters
-          </span>
-        </label>
+          <ThresholdSlider
+            label="Min"
+            title="Min cluster size — smaller = more granular clusters"
+            min={2}
+            max={30}
+            value={minClusterSize}
+            disabled={loading}
+            onInput={setMinClusterSize}
+            onCommit={onRecutAdaptive}
+            countText={String(minClusterSize)}
+          />
+        </div>
       ) : (
         <label className="cluster-n-selector">
           N=
@@ -262,42 +289,20 @@ export function ClusterToolbar({
         </label>
       )}
 
-      {/* HDBSCAN stability-based adaptive cutting */}
-      {hasProfile && (
-        <label className="cluster-threshold-control">
-          <span className="cluster-threshold-label">Stability</span>
-          <input
-            type="range"
-            className="cluster-threshold-slider"
-            min={2}
-            max={30}
-            value={minClusterSize}
-            onChange={(e) => setMinClusterSize(parseInt(e.target.value, 10))}
-            onMouseUp={(e) => onRecutAdaptive(parseInt((e.target as HTMLInputElement).value, 10))}
-            onTouchEnd={(e) => onRecutAdaptive(parseInt((e.target as HTMLInputElement).value, 10))}
-            disabled={loading}
-          />
-          <span
-            className="cluster-threshold-count"
-            title="Min cluster size — smaller = more granular clusters"
-          >
-            min {minClusterSize}
-          </span>
-        </label>
-      )}
-
       {(loading || hasError) && (
         <span className={`cluster-progress ${hasError ? "cluster-error" : ""}`}>{progress}</span>
       )}
       {totalClusters > 0 && !hasProfile && (
         <span className="cluster-count">{totalClusters} clusters</span>
       )}
+
       <button className="btn btn-small" onClick={onExpandAll} disabled={!totalClusters}>
         Expand All
       </button>
       <button className="btn btn-small" onClick={onCollapseAll} disabled={!totalClusters}>
         Collapse All
       </button>
+
       <button
         className="btn btn-success"
         onClick={() => onAcceptAll(minClusterSize)}
@@ -305,6 +310,84 @@ export function ClusterToolbar({
       >
         Accept All
       </button>
+
+      <button
+        className="btn btn-small"
+        onClick={() => fileInputRef.current?.click()}
+        disabled={loading}
+        title="Import clusters from a JSON file (bypasses CLIP/DINO pipeline)"
+      >
+        Import JSON
+      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleImportFile(file);
+          e.target.value = "";
+        }}
+      />
+      <button
+        className="btn btn-small"
+        onClick={() => {
+          if (confirm("Clear imported clusters? The linkage-tree cache (if any) will remain.")) {
+            onClearImported();
+          }
+        }}
+        disabled={loading}
+        title="Delete the imported-clusters cache so the view falls back to the linkage tree"
+      >
+        Clear Import
+      </button>
     </>
+  );
+}
+
+interface ThresholdSliderProps {
+  label: string;
+  title: string;
+  min: number;
+  max: number;
+  value: number;
+  disabled: boolean;
+  onInput: (v: number) => void;
+  onCommit: (v: number) => void;
+  countText: string;
+  countTitle?: string;
+}
+
+function ThresholdSlider({
+  label,
+  title,
+  min,
+  max,
+  value,
+  disabled,
+  onInput,
+  onCommit,
+  countText,
+  countTitle,
+}: ThresholdSliderProps) {
+  return (
+    <label className="cluster-threshold-control" title={title}>
+      <span className="cluster-threshold-label">{label}</span>
+      <input
+        type="range"
+        className="cluster-threshold-slider"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onInput(parseInt(e.target.value, 10))}
+        onMouseUp={(e) => onCommit(parseInt((e.target as HTMLInputElement).value, 10))}
+        onTouchEnd={(e) => onCommit(parseInt((e.target as HTMLInputElement).value, 10))}
+        disabled={disabled}
+      />
+      <span className="cluster-threshold-count" title={countTitle}>
+        {countText}
+      </span>
+    </label>
   );
 }

@@ -5,11 +5,17 @@
   border-radius: var(--radius);
   font-size: 14px;
   font-weight: 500;
+  background: var(--border);
+  color: var(--text);
   cursor: pointer;
   transition:
     background 0.15s,
     opacity 0.15s;
   white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--surface-hover);
 }
 
 .btn:disabled {
@@ -24,15 +30,6 @@
 
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
-}
-
-.btn-secondary {
-  background: var(--border);
-  color: var(--text);
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: var(--surface-hover);
 }
 
 .btn-danger {

@@ -6,51 +6,172 @@
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   box-shadow: 0 1px 8px rgba(0, 0, 0, 0.3);
-  height: var(--header-height);
-  padding: 0 20px;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
+  min-height: var(--header-height);
+  padding: 8px 20px;
+  display: flex;
   align-items: center;
-  gap: 16px;
+  justify-content: space-between;
+  gap: 20px;
 }
 
 .app-header-left {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-
-.app-header-center {
+  gap: 14px;
   min-width: 0;
-  text-align: center;
+  flex-shrink: 1;
 }
 
 .app-header-right {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
+  gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
-}
-
-.header-title {
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .header-subtitle {
   font-size: 12px;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .header-separator {
   width: 1px;
-  height: 20px;
+  height: 18px;
   background: var(--border);
   flex-shrink: 0;
+  margin: 0 4px;
+  opacity: 0.7;
+}
+
+/* Visually clusters a set of related toolbar actions */
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.toolbar-group .btn {
+  background: transparent;
+  color: var(--text);
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 5px;
+}
+
+.toolbar-group .btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.toolbar-group .btn:disabled {
+  color: var(--text-muted);
+}
+
+/* Inline label-style controls inside a toolbar-group (sliders, checkboxes) */
+.toolbar-group > label {
+  padding: 2px 8px;
+}
+
+/* Overflow menu — kebab trigger + dropdown panel for rare options */
+.overflow-menu {
+  position: relative;
+}
+
+.overflow-menu-trigger {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.overflow-menu-trigger:hover,
+.overflow-menu-trigger[aria-expanded="true"] {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.overflow-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 180px;
+  padding: 4px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.overflow-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.overflow-menu-item:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.overflow-menu-item:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.overflow-menu-check {
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+  color: var(--accent);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.overflow-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
+}
+
+.overflow-menu-danger {
+  color: var(--danger);
+}
+
+.overflow-menu-danger:hover:not(:disabled) {
+  background: rgba(255, 87, 87, 0.12);
 }

@@ -7,7 +7,7 @@ import { ClusterToolbar } from "./components/ClusterView/ClusterToolbar.tsx";
 import { ClusterView } from "./components/ClusterView/ClusterView.tsx";
 import { MergeSuggestions } from "./components/MergeSuggestions/MergeSuggestions.tsx";
 import { Toast } from "./components/Toast.tsx";
-import { Toolbar } from "./components/Toolbar.tsx";
+import { Toolbar, ToolbarOverflowMenu } from "./components/Toolbar.tsx";
 import { useRouter } from "./hooks/useRouter.ts";
 import { useClusterStore } from "./stores/clusterStore.ts";
 import { useDndStore } from "./stores/dndStore.ts";
@@ -41,7 +41,11 @@ function AppShell() {
 
   return (
     <>
-      <AppShellHeader mode={mode} navigate={navigate}>
+      <AppShellHeader
+        mode={mode}
+        navigate={navigate}
+        leftSlot={mode === "reorder" ? <ToolbarOverflowMenu /> : null}
+      >
         {mode === "cluster" ? (
           <ClusterActions />
         ) : mode === "cluster-compare" || mode === "merge-suggestions" ? null : (
@@ -77,6 +81,8 @@ function ClusterActions() {
   const expandAll = useClusterStore((s) => s.expandAll);
   const collapseAll = useClusterStore((s) => s.collapseAll);
   const acceptAllClusters = useClusterStore((s) => s.acceptAllClusters);
+  const importClusters = useClusterStore((s) => s.importClusters);
+  const clearImportedClusters = useClusterStore((s) => s.clearImportedClusters);
   const visibleCount = clusterData?.clusters.length ?? 0;
   const hasError = progress.startsWith("Error:");
 
@@ -99,6 +105,8 @@ function ClusterActions() {
       onExpandAll={expandAll}
       onCollapseAll={collapseAll}
       onAcceptAll={acceptAllClusters}
+      onImportClusters={importClusters}
+      onClearImported={clearImportedClusters}
     />
   );
 }

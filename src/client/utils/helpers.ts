@@ -68,6 +68,54 @@ export function postJson(url: string, body: unknown): Promise<Response> {
 }
 
 /**
+ * Copy a JPEG contact sheet (served from /api/contact-sheet/:filename) alongside
+ * some text via the async Clipboard API. Transcodes JPEG→PNG because the
+ * Clipboard API rejects image/jpeg.
+ */
+export async function copyContactSheetToClipboard(sheetFilename: string, text: string) {
+  const imgRes = await fetch(`/api/contact-sheet/${encodeURIComponent(sheetFilename)}`);
+  const jpegBlob = await imgRes.blob();
+  const bitmap = await createImageBitmap(jpegBlob);
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(bitmap, 0, 0);
+  const pngBlob = await canvas.convertToBlob({ type: "image/png" });
+  await navigator.clipboard.write([
+    new ClipboardItem({
+      "text/plain": new Blob([text], { type: "text/plain" }),
+      "image/png": pngBlob,
+    }),
+  ]);
+}
+
+export interface ContactSheetRequest {
+  filenames: string[];
+  clusterName: string;
+  withLabels?: boolean;
+}
+
+export interface ContactSheetResult {
+  path: string;
+  filename: string;
+}
+
+/** Kick off N contact-sheet jobs in parallel against /api/cluster/contact-sheet. */
+export async function generateContactSheetsBatch(
+  requests: ContactSheetRequest[],
+): Promise<ContactSheetResult[]> {
+  return Promise.all(
+    requests.map(async (req, i) => {
+      const res = await postJson("/api/cluster/contact-sheet", req);
+      const data = (await res.json()) as { path?: string; filename?: string; error?: string };
+      if (!res.ok || !data.path || !data.filename) {
+        throw new Error(data.error ?? `Failed batch ${i + 1}`);
+      }
+      return { path: data.path, filename: data.filename };
+    }),
+  );
+}
+
+/**
  * Rebuild a flat images array by placing grouped images (in the given group order)
  * before ungrouped images (preserving their original relative order). The save flow
  * reads image order from imageStore.images, so this is what drives the rename.

@@ -4,20 +4,26 @@ import { basename, extname, join } from "node:path";
 import type { ClusterData, ImageGroup, MergeSuggestionSimilar } from "./client/types.ts";
 import {
   broadcastProgress,
+  buildImportedResult,
   cancelClusterJob,
+  clearImportedClusters,
   computeMergeSuggestions,
   ensureTextEmbeddings,
   extractFeatures,
   generateContactSheet,
   getClusterAbortSignal,
   getLastProgress,
+  hasImportedClusters,
+  type ImportClusterInput,
   invalidateClusterCache,
   isClusterJobRunning,
+  loadImportedClusters,
   runFullCluster,
   runLinkageOnly,
   runRecut,
   runRecutAdaptive,
   runRecutByThreshold,
+  saveImportedClusters,
   setClusterJobRunning,
   subscribeProgress,
   type WeightConfig,
@@ -318,6 +324,87 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
       });
     }
 
+    if (path === "/api/reorder-by-groups" && req.method === "POST") {
+      return withRenameLock(async () => {
+        const t0 = Date.now();
+        const label = "reorder-by-groups";
+        log(label, "Received reorder-by-groups request");
+        const warnings: string[] = [];
+
+        const [groups, diskImages] = await Promise.all([
+          readGroupsFile(targetDir),
+          listImages(targetDir),
+        ]);
+        const diskSet = new Set(diskImages);
+
+        log(
+          label,
+          `Loaded ${groups.length} groups from ${GROUPS_FILE}, ${diskImages.length} images on disk`,
+        );
+
+        const seen = new Set<string>();
+        const order: string[] = [];
+        const missing: string[] = [];
+        let groupedCount = 0;
+
+        for (const g of groups) {
+          for (const fn of g.images) {
+            if (seen.has(fn)) continue;
+            if (!diskSet.has(fn)) {
+              missing.push(`${g.name}: ${fn}`);
+              continue;
+            }
+            seen.add(fn);
+            order.push(fn);
+            groupedCount++;
+          }
+        }
+
+        for (const fn of diskImages) {
+          if (seen.has(fn)) continue;
+          seen.add(fn);
+          order.push(fn);
+        }
+
+        const ungroupedCount = order.length - groupedCount;
+
+        if (missing.length > 0) {
+          warnings.push(`${missing.length} group member(s) not found on disk (skipped)`);
+          logData(label, "Missing group members", missing.join("\n"));
+        }
+
+        log(
+          label,
+          `Computed order: ${order.length} files (${groupedCount} grouped, ${ungroupedCount} ungrouped at end)`,
+        );
+        logData(label, "Input order", order.join("\n"));
+
+        log(label, "Executing filesystem renames...");
+        const renames = await executeRenames(targetDir, order);
+        const effective = renames.filter((r) => r.from !== r.to);
+        log(
+          label,
+          `Filesystem renames complete: ${effective.length} changed, ${renames.length - effective.length} unchanged`,
+        );
+        logData(
+          label,
+          "All rename mappings",
+          renames
+            .map((r) => (r.from === r.to ? `  ${r.from} (unchanged)` : `  ${r.from} → ${r.to}`))
+            .join("\n"),
+        );
+
+        await remapAfterRename(targetDir, renames, label, warnings);
+
+        const elapsed = Date.now() - t0;
+        log(
+          label,
+          `Complete in ${elapsed}ms — ${effective.length} files renamed${warnings.length > 0 ? `, ${warnings.length} warning(s)` : ""}`,
+        );
+        return json({ success: true, renames, warnings });
+      });
+    }
+
     if (path === "/api/undo" && req.method === "POST") {
       return withRenameLock(async () => {
         const t0 = Date.now();
@@ -555,7 +642,36 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
 
     if (path === "/api/cluster/cache-status" && req.method === "GET") {
       const cached = await Bun.file(join(targetDir, ".reorder-cache", "linkage_tree.bin")).exists();
-      return json({ cached });
+      const imported = hasImportedClusters(targetDir);
+      return json({ cached, imported });
+    }
+
+    if (path === "/api/cluster/import" && req.method === "POST") {
+      const body = (await req.json()) as { clusters?: ImportClusterInput[] };
+      if (!body.clusters || !Array.isArray(body.clusters) || body.clusters.length === 0) {
+        return json({ error: "Body must include non-empty `clusters` array" }, 400);
+      }
+      for (const c of body.clusters) {
+        if (typeof c.name !== "string" || !Array.isArray(c.images)) {
+          return json({ error: "Each cluster needs `name` string and `images` string[]" }, 400);
+        }
+      }
+      log("cluster", `Import request: ${body.clusters.length} clusters`);
+      const result = await buildImportedResult(targetDir, body.clusters);
+      await saveImportedClusters(targetDir, result);
+      return json(result);
+    }
+
+    if (path === "/api/cluster/imported" && req.method === "GET") {
+      const data = await loadImportedClusters(targetDir);
+      if (!data) return json({ error: "No imported clusters" }, 404);
+      return json(data);
+    }
+
+    if (path === "/api/cluster/imported" && req.method === "DELETE") {
+      await clearImportedClusters(targetDir);
+      log("cluster", "Cleared imported clusters cache");
+      return json({ ok: true });
     }
 
     if (path === "/api/cluster/embeddings-status" && req.method === "GET") {
@@ -665,8 +781,17 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
     }
 
     if (path === "/api/cluster/contact-sheet" && req.method === "POST") {
-      const body = (await req.json()) as { filenames: string[]; clusterName: string };
-      const outPath = await generateContactSheet(targetDir, body.filenames, body.clusterName);
+      const body = (await req.json()) as {
+        filenames: string[];
+        clusterName: string;
+        withLabels?: boolean;
+      };
+      const outPath = await generateContactSheet(
+        targetDir,
+        body.filenames,
+        body.clusterName,
+        body.withLabels ?? false,
+      );
       return json({ path: outPath, filename: basename(outPath) });
     }
 

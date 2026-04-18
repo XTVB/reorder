@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import type { ClusterData, ClusterResultData, WeightConfig } from "../types.ts";
-import { postJson } from "../utils/helpers.ts";
+import type { ClusterData, ClusterResultData, ImportClusterInput, WeightConfig } from "../types.ts";
+import { getErrorMessage, postJson } from "../utils/helpers.ts";
 import { consolidateBlock } from "../utils/reorder.ts";
 import { consumeSSE } from "../utils/sse.ts";
 import { useGroupStore } from "./groupStore.ts";
@@ -51,6 +51,8 @@ interface ClusterState {
   acceptAllClusters: (minSize: number) => void;
   addToGroup: (cluster: ClusterResultData) => void;
   loadCachedClusters: () => Promise<void>;
+  importClusters: (payload: { clusters: ImportClusterInput[] }) => Promise<void>;
+  clearImportedClusters: () => Promise<void>;
 }
 
 function applyClusterResult(data: ClusterData): Partial<ClusterState> {
@@ -448,10 +450,51 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
   loadCachedClusters: async () => {
     try {
       const res = await fetch("/api/cluster/cache-status");
-      const { cached } = await res.json();
-      if (cached && !get().clusterData && !get().loading) {
+      const { cached, imported } = await res.json();
+      if (get().clusterData || get().loading) return;
+      if (imported) {
+        const importedRes = await fetch("/api/cluster/imported");
+        if (importedRes.ok) {
+          const data: ClusterData = await importedRes.json();
+          set(applyClusterResult(data));
+          return;
+        }
+      }
+      if (cached) {
         await get().recutClusters(200);
       }
     } catch {}
+  },
+
+  importClusters: async (payload) => {
+    set({ loading: true, progress: "Importing clusters..." });
+    try {
+      const res = await postJson("/api/cluster/import", payload);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        set({ loading: false, progress: `Error: ${err.error ?? "import failed"}` });
+        return;
+      }
+      const result: ClusterData = await res.json();
+      set(applyClusterResult(result));
+      useUIStore.getState().showToast(`Imported ${result.clusters.length} clusters`, "success");
+    } catch (err) {
+      set({ loading: false, progress: `Error: ${getErrorMessage(err, "import failed")}` });
+    }
+  },
+
+  clearImportedClusters: async () => {
+    try {
+      await fetch("/api/cluster/imported", { method: "DELETE" });
+      set({
+        clusterData: null,
+        collapsedClusters: new Set(),
+        selectedImages: new Set(),
+        mergeSelection: new Set(),
+      });
+      useUIStore.getState().showToast("Cleared imported clusters", "success");
+    } catch (err) {
+      useUIStore.getState().showToast(getErrorMessage(err, "Failed to clear"), "error");
+    }
   },
 }));

@@ -112,3 +112,8 @@ export interface ClusterData {
   nClusters: number;
   distanceProfile?: DistanceProfile;
 }
+
+export interface ImportClusterInput {
+  name: string;
+  images: string[];
+}

@@ -25,10 +25,12 @@ export function modeFromPath(pathname: string): AppMode {
 export function AppShellHeader({
   mode,
   navigate,
+  leftSlot,
   children,
 }: {
   mode: AppMode;
   navigate: (path: string) => void;
+  leftSlot?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   const headerSubtitle = useUIStore((s) => s.headerSubtitle);
@@ -55,9 +57,7 @@ export function AppShellHeader({
             </button>
           ))}
         </div>
-      </div>
-      <div className="app-header-center">
-        <div className="header-title">{MODES.find((m) => m.key === mode)?.title}</div>
+        {leftSlot}
         {headerSubtitle && <div className="header-subtitle">{headerSubtitle}</div>}
       </div>
       <div className="app-header-right">{children}</div>

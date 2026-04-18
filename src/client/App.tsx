@@ -622,17 +622,14 @@ export function App() {
       {showPaths &&
         targetDir &&
         (() => {
-          const paths = images
+          const selectedFilenames = images
             .filter((i) => selectedIds.has(i.filename))
-            .map((i) => `@"${targetDir}/${i.filename}"`);
+            .map((i) => i.filename);
           return (
             <PathsModal
-              paths={paths}
+              filenames={selectedFilenames}
+              targetDir={targetDir}
               onClose={() => setShowPaths(false)}
-              onCopyText={(text) => {
-                navigator.clipboard.writeText(text);
-                showToast("Copied to clipboard", "success");
-              }}
             />
           );
         })()}

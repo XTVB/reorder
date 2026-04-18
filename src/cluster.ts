@@ -8,6 +8,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import sharp from "sharp";
 import {
@@ -20,11 +21,12 @@ import type {
   ClusterData,
   ClusterResultData,
   DistanceProfile,
+  ImportClusterInput,
   WeightConfig,
 } from "./client/types.ts";
 import { log } from "./log.ts";
 
-export type { WeightConfig };
+export type { ImportClusterInput, WeightConfig };
 
 // ── Paths ────────────────────────────────────────────────────────────────────
 
@@ -911,10 +913,73 @@ export function computeAutoNames(
 
 // ── Contact sheet generation ─────────────────────────────────────────────────
 
+function escapeSvgText(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function truncateMiddle(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const keep = max - 1;
+  const left = Math.ceil(keep * 0.55);
+  const right = keep - left;
+  return `${s.slice(0, left)}…${s.slice(s.length - right)}`;
+}
+
+interface LabelCell {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  label: string;
+}
+
+function buildLabelOverlay(cells: LabelCell[], width: number, height: number): Buffer {
+  // Fixed sizes — labels just need to be legible, not scale with the thumb.
+  const labelH = 34;
+  const fontSize = 16;
+  const padX = 10;
+  const parts: string[] = [];
+  for (const c of cells) {
+    const maxChars = Math.max(12, Math.floor((c.width - padX * 2) / 9));
+    const text = escapeSvgText(truncateMiddle(c.label, maxChars));
+    parts.push(
+      `<rect x="${c.x}" y="${c.y + c.height - labelH}" width="${c.width}" height="${labelH}" fill="black" fill-opacity="0.72"/>`,
+    );
+    parts.push(
+      `<text x="${c.x + padX}" y="${c.y + c.height - 11}" font-family="Arial, sans-serif" font-size="${fontSize}" font-weight="600" fill="white">${text}</text>`,
+    );
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${parts.join("")}</svg>`;
+  return Buffer.from(svg);
+}
+
+// Grid for N images (index = N-1). Minimises empty cells while keeping the
+// layout roughly square; N=10 keeps 4×3 with 2 blanks for aspect consistency.
+const CONTACT_SHEET_GRID: [cols: number, rows: number][] = [
+  [1, 1], // 1
+  [2, 1], // 2
+  [3, 1], // 3
+  [2, 2], // 4
+  [3, 2], // 5 (1 blank)
+  [3, 2], // 6
+  [4, 2], // 7 (1 blank)
+  [4, 2], // 8
+  [3, 3], // 9
+  [4, 3], // 10 (2 blanks)
+  [4, 3], // 11 (1 blank)
+  [4, 3], // 12
+];
+
 export async function generateContactSheet(
   targetDir: string,
   filenames: string[],
   clusterName: string,
+  withLabels = false,
 ): Promise<string> {
   const outDir = join(cacheDir(targetDir), "contact_sheets");
   mkdirSync(outDir, { recursive: true });
@@ -932,37 +997,76 @@ export async function generateContactSheet(
     }
   }
 
-  const thumbSize = 400;
-  const cols = 4;
-  const rows = Math.ceil(selected.length / cols);
-  const width = cols * thumbSize;
-  const height = rows * thumbSize;
+  const [cols, rows] = CONTACT_SHEET_GRID[selected.length - 1] ?? [4, 3];
 
-  // Generate thumbnails
-  const thumbnails = await Promise.all(
-    selected.map(async (f) => {
-      const path = join(targetDir, f);
-      return sharp(path)
-        .resize(thumbSize, thumbSize, { fit: "cover" })
-        .jpeg({ quality: 85 })
-        .toBuffer();
+  // Justified-row layout: per-image widths sum exactly to canvasW so no letterbox
+  // bars appear around real images; rows with blanks pad the width budget with
+  // avgAspect so non-full rows scale the same as full ones.
+  const paths = selected.map((f) => join(targetDir, f));
+  const aspects = await Promise.all(
+    paths.map(async (p) => {
+      const m = await sharp(p).metadata();
+      return (m.width ?? 1) / (m.height ?? 1);
     }),
   );
+  const avgAspect = aspects.reduce((s, a) => s + a, 0) / aspects.length;
 
-  // Compose grid
-  const composites = thumbnails.map((buf, i) => ({
-    input: buf,
-    left: (i % cols) * thumbSize,
-    top: Math.floor(i / cols) * thumbSize,
+  const canvasW = 2000;
+  interface Cell {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }
+  const cells: Cell[] = [];
+  let yCursor = 0;
+  for (let r = 0; r < rows; r++) {
+    const start = r * cols;
+    const end = Math.min(start + cols, selected.length);
+    const rowAspects = aspects.slice(start, end);
+    const blanks = cols - rowAspects.length;
+    const effectiveSum = rowAspects.reduce((s, a) => s + a, 0) + blanks * avgAspect;
+    const rowH = Math.round(canvasW / effectiveSum);
+
+    let x = 0;
+    for (let i = 0; i < rowAspects.length; i++) {
+      const isLastInFullRow = blanks === 0 && i === rowAspects.length - 1;
+      const right = isLastInFullRow ? canvasW : Math.round(x + rowH * rowAspects[i]!);
+      cells.push({ x, y: yCursor, width: right - x, height: rowH });
+      x = right;
+    }
+    yCursor += rowH;
+  }
+  const canvasH = yCursor;
+
+  const thumbnails = await Promise.all(
+    cells.map((c, i) =>
+      sharp(paths[i]!).resize(c.width, c.height, { fit: "cover" }).jpeg({ quality: 85 }).toBuffer(),
+    ),
+  );
+
+  // Label overlay composited last so text sits above thumbnails.
+  const composites: { input: Buffer; left: number; top: number }[] = cells.map((c, i) => ({
+    input: thumbnails[i]!,
+    left: c.x,
+    top: c.y,
   }));
+  if (withLabels) {
+    const labelCells = cells.map((c, i) => ({ ...c, label: selected[i]! }));
+    composites.push({
+      input: buildLabelOverlay(labelCells, canvasW, canvasH),
+      left: 0,
+      top: 0,
+    });
+  }
 
   const safeName = clusterName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80);
   const outPath = join(outDir, `${safeName}.jpg`);
 
   await sharp({
     create: {
-      width,
-      height,
+      width: canvasW,
+      height: canvasH,
       channels: 3,
       background: { r: 26, g: 26, b: 46 },
     },
@@ -1125,6 +1229,71 @@ async function buildRecutResult(
     suggestedCounts: computeSuggestedCounts(filenames.length),
     nClusters,
     distanceProfile,
+  };
+}
+
+// ── Imported clusters (JSON import bypass) ──────────────────────────────────
+
+const IMPORTED_CLUSTERS_FILENAME = "imported_clusters.json";
+
+export function importedClustersPath(targetDir: string): string {
+  return join(cacheDir(targetDir), IMPORTED_CLUSTERS_FILENAME);
+}
+
+export function hasImportedClusters(targetDir: string): boolean {
+  return existsSync(importedClustersPath(targetDir));
+}
+
+export async function loadImportedClusters(targetDir: string): Promise<ClusterData | null> {
+  try {
+    return (await Bun.file(importedClustersPath(targetDir)).json()) as ClusterData;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveImportedClusters(targetDir: string, data: ClusterData): Promise<void> {
+  mkdirSync(cacheDir(targetDir), { recursive: true });
+  await Bun.write(importedClustersPath(targetDir), JSON.stringify(data, null, 2));
+}
+
+export async function clearImportedClusters(targetDir: string): Promise<void> {
+  await unlink(importedClustersPath(targetDir)).catch(() => {});
+}
+
+export async function buildImportedResult(
+  targetDir: string,
+  input: ImportClusterInput[],
+): Promise<ClusterData> {
+  const groupsPath = join(targetDir, ".reorder-groups.json");
+  let groups: { id: string; name: string; images: string[] }[] = [];
+  try {
+    const data = await Bun.file(groupsPath).json();
+    groups = Array.isArray(data) ? data : Array.isArray(data?.groups) ? data.groups : [];
+  } catch {}
+  const imgToGroup = new Map<string, (typeof groups)[0]>();
+  for (const g of groups) {
+    for (const f of g.images) imgToGroup.set(f, g);
+  }
+
+  const clusters: ClusterResultData[] = input.map((c, i) => {
+    const sortedImages = [...c.images].sort();
+    const confirmed = sortedImages.find((f) => imgToGroup.has(f));
+    const group = confirmed ? (imgToGroup.get(confirmed) ?? null) : null;
+    return {
+      id: `imported_${i}`,
+      autoName: c.name,
+      autoTags: [],
+      images: sortedImages,
+      confirmedGroup: group ? { id: group.id, name: group.name, images: group.images } : null,
+    };
+  });
+
+  const totalImages = clusters.reduce((n, c) => n + c.images.length, 0);
+  return {
+    clusters,
+    suggestedCounts: computeSuggestedCounts(totalImages),
+    nClusters: clusters.length,
   };
 }
 

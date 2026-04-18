@@ -61,7 +61,8 @@ Stage 2b: Rust (rust/group-similarity/)
 Stage 3: Bun (src/cluster.ts)
   Re-cuts cached linkage tree — three modes: fixed N, distance threshold, HDBSCAN-style adaptive
   TF-IDF auto-naming: CLIP × 334-term vocabulary, z-score ranking
-  Contact sheets via Sharp (4×3 grid, 400px thumbs)
+  Contact sheets via Sharp: justified-row layout on a 2000px-wide canvas, variable
+  grid up to 12 images (CONTACT_SHEET_GRID), optional filename label overlay
 ```
 
 ### Key Patterns
@@ -78,6 +79,8 @@ Stage 3: Bun (src/cluster.ts)
 - **Debounced group persist** — 300ms; `flushGroupPersist()` for critical paths
 - **Folder mode change detection** — disk snapshot + computed `hasChanges` against local state
 - **Client-side routing** — server returns `index.html` for any non-API, non-asset path
+- **Imported-clusters bypass** — `/api/cluster/import` stores clusters at `.reorder-cache/imported_clusters.json` and takes precedence over linkage-tree re-cuts on load; `DELETE /api/cluster/imported` removes it
+- **Apply-JSON-order** — `/api/reorder-by-groups` renames on disk to match `.reorder-groups.json` order, then ungrouped files (separate from normal drag-reorder save flow)
 
 ## Python Environment
 

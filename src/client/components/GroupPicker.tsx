@@ -1,5 +1,6 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useDismissOnOutside } from "../hooks/useDismissOnOutside.ts";
 import type { ImageGroup } from "../types.ts";
 
 interface GroupPickerProps {
@@ -42,17 +43,7 @@ export function GroupPicker({ groups, onSelect, selectedCount }: GroupPickerProp
     }
   }, [open]);
 
-  // Close on outside click
-  useEffect(() => {
-    if (!open) return;
-    function handleClick(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [open]);
+  useDismissOnOutside(containerRef, open, () => setOpen(false));
 
   const handleSelect = useCallback(
     (groupId: string) => {

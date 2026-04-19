@@ -4,12 +4,14 @@ import { useSelectionStore } from "../stores/selectionStore.ts";
 
 interface KeyboardShortcutsDeps {
   isLightboxOpen: boolean;
+  isSlideshowOpen: boolean;
   searchState: { isOpen: boolean; close: () => void };
   onCreateGroup: () => void;
 }
 
 export function useKeyboardShortcuts({
   isLightboxOpen,
+  isSlideshowOpen,
   searchState,
   onCreateGroup,
 }: KeyboardShortcutsDeps) {
@@ -18,11 +20,14 @@ export function useKeyboardShortcuts({
 
   const lightboxOpenRef = useRef(false);
   lightboxOpenRef.current = isLightboxOpen;
+  const slideshowOpenRef = useRef(false);
+  slideshowOpenRef.current = isSlideshowOpen;
   const createGroupRef = useRef(onCreateGroup);
   createGroupRef.current = onCreateGroup;
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
+      if (slideshowOpenRef.current) return;
       if (e.key === "Escape") {
         if (lightboxOpenRef.current) return;
         if (searchState.isOpen) {

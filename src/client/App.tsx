@@ -25,6 +25,7 @@ import { PathsModal } from "./components/PathsModal.tsx";
 import { PreviewModal } from "./components/PreviewModal.tsx";
 import { ReviewModal } from "./components/ReviewModal.tsx";
 import { SearchBar, SearchContext, useSearchState } from "./components/SearchBar.tsx";
+import { Slideshow } from "./components/Slideshow.tsx";
 import { SortableCard } from "./components/SortableCard.tsx";
 import { SortableFolderCard } from "./components/SortableFolderCard.tsx";
 import { SortableGroupCard } from "./components/SortableGroupCard.tsx";
@@ -93,6 +94,8 @@ export function App() {
   const showOrganize = useUIStore((s) => s.showOrganize);
   const showPaths = useUIStore((s) => s.showPaths);
   const showReview = useUIStore((s) => s.showReview);
+  const slideshow = useUIStore((s) => s.slideshow);
+  const closeSlideshow = useUIStore((s) => s.closeSlideshow);
   const targetDir = useUIStore((s) => s.targetDir);
   const previewRenames = useUIStore((s) => s.previewRenames);
   const organizeMappings = useUIStore((s) => s.organizeMappings);
@@ -193,6 +196,7 @@ export function App() {
 
   useKeyboardShortcuts({
     isLightboxOpen: lightboxIndex !== null,
+    isSlideshowOpen: slideshow.open,
     searchState,
     onCreateGroup: groupOps.handleCreateGroup,
   });
@@ -609,6 +613,10 @@ export function App() {
 
       {lightboxIndex !== null && (
         <Lightbox images={images} initialIndex={lightboxIndex} onClose={closeLightbox} />
+      )}
+
+      {slideshow.open && (
+        <Slideshow images={images} initialIndex={slideshow.startIndex} onClose={closeSlideshow} />
       )}
 
       {showPreview && (

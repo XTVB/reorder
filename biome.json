@@ -15,11 +15,7 @@
       "style": {
         "noNonNullAssertion": "off"
       },
-      "a11y": {
-        "useButtonType": "off",
-        "noStaticElementInteractions": "off",
-        "useKeyWithClickEvents": "off"
-      }
+      "a11y": "off"
     }
   },
   "formatter": {

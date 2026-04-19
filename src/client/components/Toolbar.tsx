@@ -39,6 +39,7 @@ export function Toolbar() {
   const setShowPaths = useUIStore((s) => s.setShowPaths);
   const setShowOrganize = useUIStore((s) => s.setShowOrganize);
   const setShowReview = useUIStore((s) => s.setShowReview);
+  const openSlideshow = useUIStore((s) => s.openSlideshow);
   const setPreviewRenames = useUIStore((s) => s.setPreviewRenames);
   const setOrganizeMappings = useUIStore((s) => s.setOrganizeMappings);
   const checkUndo = useUIStore((s) => s.checkUndo);
@@ -272,6 +273,23 @@ export function Toolbar() {
       {!folderModeEnabled && canUndo && (
         <button className="btn btn-danger" onClick={handleUndo} disabled={saving}>
           Undo
+        </button>
+      )}
+      {!folderModeEnabled && images.length > 0 && (
+        <button
+          className="btn btn-secondary"
+          onClick={() => {
+            const sel = useSelectionStore.getState().selectedIds;
+            let startIdx = 0;
+            if (sel.size > 0) {
+              const firstSelected = images.findIndex((img) => sel.has(img.filename));
+              if (firstSelected !== -1) startIdx = firstSelected;
+            }
+            openSlideshow(startIdx);
+          }}
+          title="Slideshow (full-screen viewer with autoplay)"
+        >
+          Slideshow
         </button>
       )}
       <button

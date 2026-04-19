@@ -1,0 +1,312 @@
+/* Slideshow — immersive full-screen viewer */
+
+.slideshow-backdrop {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.slideshow-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  opacity: 0;
+  will-change: opacity;
+}
+
+.slideshow-image-top {
+  opacity: 1;
+}
+
+/* Transition: fade — cross-dissolve between layers */
+.slideshow-transition-fade .slideshow-image {
+  transition: opacity 350ms ease;
+}
+
+/* Transition: none — instant swap */
+.slideshow-transition-none .slideshow-image {
+  transition: none;
+}
+
+.slideshow-preload {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* All chrome fades together on mouse idle */
+.slideshow-chrome {
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+}
+
+.slideshow-ui-hidden {
+  cursor: none;
+}
+
+.slideshow-ui-hidden .slideshow-chrome {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.slideshow-ui-visible .slideshow-chrome {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.slideshow-top-right {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 610;
+}
+
+.slideshow-icon-btn {
+  background: rgba(0, 0, 0, 0.45);
+  border: none;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: var(--radius);
+  line-height: 1;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.slideshow-icon-btn:hover {
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+}
+
+.slideshow-close {
+  font-size: 28px;
+}
+
+.slideshow-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0, 0, 0, 0.4);
+  border: none;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 56px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 8px 18px;
+  border-radius: var(--radius);
+  z-index: 610;
+}
+
+.slideshow-nav:hover {
+  background: rgba(0, 0, 0, 0.65);
+  color: white;
+}
+
+.slideshow-prev {
+  left: 20px;
+}
+
+.slideshow-next {
+  right: 20px;
+}
+
+.slideshow-controls {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 610;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+}
+
+.slideshow-ui-hidden .slideshow-controls {
+  transform: translateX(-50%) translateY(8px);
+}
+
+.slideshow-play-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: white;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.slideshow-play-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.slideshow-play-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.slideshow-interval {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.slideshow-interval input {
+  width: 56px;
+  padding: 4px 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: white;
+  font-size: 13px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+}
+
+.slideshow-interval input::-webkit-outer-spin-button,
+.slideshow-interval input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.slideshow-interval input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.slideshow-select-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.slideshow-select-field select {
+  padding: 4px 24px 4px 8px;
+  background: rgba(255, 255, 255, 0.08)
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='none' stroke='%23fff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/></svg>")
+    no-repeat right 8px center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: white;
+  font-size: 13px;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.slideshow-select-field select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.slideshow-select-field select option {
+  background: #222;
+  color: white;
+}
+
+.slideshow-toggle {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.8);
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.slideshow-toggle:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: white;
+}
+
+.slideshow-toggle-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.slideshow-toggle-on:hover {
+  background: var(--accent);
+  filter: brightness(1.1);
+}
+
+.slideshow-counter {
+  color: rgba(255, 255, 255, 0.6);
+  font-variant-numeric: tabular-nums;
+  min-width: 56px;
+  text-align: center;
+}
+
+.slideshow-caption {
+  position: absolute;
+  top: 16px;
+  left: 20px;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: var(--radius);
+  z-index: 610;
+  max-width: calc(100vw - 100px);
+}
+
+.slideshow-filename {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slideshow-dimensions {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.slideshow-empty {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 14px;
+}

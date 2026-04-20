@@ -48,8 +48,12 @@ export function ClusterView() {
     if (unsortedClusters.length === 0) return unsortedClusters;
     const withGroup: ClusterResultData[] = [];
     const withoutGroup: ClusterResultData[] = [];
+    const sectionById = new Map<string, "group" | "none">();
     for (const c of unsortedClusters) {
-      if (c.confirmedGroup) withGroup.push(c);
+      const inGroup =
+        !!c.confirmedGroup || (c.splitFrom != null && sectionById.get(c.splitFrom) === "group");
+      sectionById.set(c.id, inGroup ? "group" : "none");
+      if (inGroup) withGroup.push(c);
       else withoutGroup.push(c);
     }
     if (withGroup.length === 0) return unsortedClusters;

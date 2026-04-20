@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useGroupStore } from "../stores/groupStore.ts";
 import { useSelectionStore } from "../stores/selectionStore.ts";
+import { useUIStore } from "../stores/uiStore.ts";
 
 interface KeyboardShortcutsDeps {
   isLightboxOpen: boolean;
@@ -38,10 +39,18 @@ export function useKeyboardShortcuts({
         if (expId) collapseGroup();
         else if (useSelectionStore.getState().selectedIds.size > 0) clearSelection();
       }
-      if (e.key === "g" && !e.metaKey && !e.ctrlKey && !(e.target instanceof HTMLInputElement)) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === "g") {
         const { groupsEnabled } = useGroupStore.getState();
         const { selectedIds } = useSelectionStore.getState();
         if (groupsEnabled && selectedIds.size > 0) createGroupRef.current();
+      } else if (e.key === "h") {
+        const { groupsEnabled, groups } = useGroupStore.getState();
+        const { selectedIds } = useSelectionStore.getState();
+        if (groupsEnabled && selectedIds.size > 0 && groups.length > 0) {
+          useUIStore.getState().setShowGroupPicker(true);
+        }
       }
     }
     window.addEventListener("keydown", handleKey);

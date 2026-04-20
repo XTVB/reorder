@@ -215,33 +215,37 @@ export function Toolbar() {
 
   const hasSelectionActions = selectedIds.size > 0;
   const hasGroupManagement = !folderModeEnabled && groups.length > 0;
+  const showUndo = !folderModeEnabled && canUndo;
+  const showSlideshow = !folderModeEnabled && images.length > 0;
 
   return (
     <>
       {hasSelectionActions && (
-        <button className="btn btn-secondary" onClick={() => setShowPaths(true)}>
-          Paths ({selectedIds.size})
-        </button>
-      )}
-      {!folderModeEnabled && groupsEnabled && selectedIds.size > 0 && (
-        <>
-          <button className="btn btn-secondary" onClick={groupOps.handleCreateGroup}>
-            Group ({selectedIds.size})
+        <div className="toolbar-group">
+          <button className="btn btn-secondary" onClick={() => setShowPaths(true)}>
+            Paths
           </button>
-          {groups.length > 0 && (
-            <GroupPicker
-              groups={groups}
-              onSelect={(groupId) =>
-                groupOps.addImagesToGroup(groupId, [...useSelectionStore.getState().selectedIds])
-              }
-              selectedCount={selectedIds.size}
-            />
+          {!folderModeEnabled && groupsEnabled && (
+            <>
+              <button className="btn btn-secondary" onClick={groupOps.handleCreateGroup}>
+                Group
+              </button>
+              {groups.length > 0 && (
+                <GroupPicker
+                  groups={groups}
+                  onSelect={(groupId) =>
+                    groupOps.addImagesToGroup(groupId, [
+                      ...useSelectionStore.getState().selectedIds,
+                    ])
+                  }
+                />
+              )}
+            </>
           )}
-        </>
+        </div>
       )}
-      {hasSelectionActions && <span className="header-separator" />}
       {hasGroupManagement && (
-        <>
+        <div className="toolbar-group">
           <button className="btn btn-secondary" onClick={handleGroupsToTop}>
             Groups to Top
           </button>
@@ -251,7 +255,7 @@ export function Toolbar() {
             disabled={saving}
             title="Rename files on disk so groups appear in the order listed in .reorder-groups.json (ungrouped files at end)"
           >
-            Apply JSON Order
+            Apply Order
           </button>
           <button
             className="btn btn-secondary"
@@ -259,48 +263,73 @@ export function Toolbar() {
             disabled={generatingSheets}
             title="Generate a contact sheet for each group and copy paths to clipboard"
           >
-            {generatingSheets ? "Generating..." : "Contact Sheets"}
+            {generatingSheets ? "Generating..." : "Generate"}
           </button>
           <button className="btn btn-secondary" onClick={() => setShowReview(true)}>
             Review
           </button>
           <button className="btn btn-secondary" onClick={handleOrganizeClick} disabled={saving}>
-            Organize Folders
+            Make Folders
           </button>
-          <span className="header-separator" />
-        </>
+        </div>
       )}
-      {!folderModeEnabled && canUndo && (
-        <button className="btn btn-danger" onClick={handleUndo} disabled={saving}>
-          Undo
-        </button>
+      {(showUndo || showSlideshow) && (
+        <div className="toolbar-group">
+          {showUndo && (
+            <button
+              className="btn btn-ghost-danger"
+              onClick={handleUndo}
+              disabled={saving}
+              title="Undo last save"
+            >
+              Undo
+            </button>
+          )}
+          {showSlideshow && (
+            <button
+              className="btn btn-secondary btn-icon"
+              onClick={() => {
+                const sel = useSelectionStore.getState().selectedIds;
+                let startIdx = 0;
+                if (sel.size > 0) {
+                  const firstSelected = images.findIndex((img) => sel.has(img.filename));
+                  if (firstSelected !== -1) startIdx = firstSelected;
+                }
+                openSlideshow(startIdx);
+              }}
+              title="Slideshow (full-screen viewer with autoplay)"
+              aria-label="Slideshow"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" role="presentation">
+                <path
+                  d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          )}
+          <button
+            className="btn btn-secondary btn-icon"
+            onClick={refreshState}
+            disabled={saving}
+            title="Refresh"
+            aria-label="Refresh"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" role="presentation">
+              <path
+                d="M20 11A8 8 0 1 0 18.3 17M20 5v6h-6"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
       )}
-      {!folderModeEnabled && images.length > 0 && (
-        <button
-          className="btn btn-secondary"
-          onClick={() => {
-            const sel = useSelectionStore.getState().selectedIds;
-            let startIdx = 0;
-            if (sel.size > 0) {
-              const firstSelected = images.findIndex((img) => sel.has(img.filename));
-              if (firstSelected !== -1) startIdx = firstSelected;
-            }
-            openSlideshow(startIdx);
-          }}
-          title="Slideshow (full-screen viewer with autoplay)"
-        >
-          Slideshow
-        </button>
-      )}
-      <button
-        className="btn btn-secondary"
-        onClick={refreshState}
-        disabled={saving}
-        title="Refresh"
-        aria-label="Refresh"
-      >
-        ↻
-      </button>
       {folderModeEnabled ? (
         <button
           className="btn btn-primary"
@@ -315,7 +344,7 @@ export function Toolbar() {
           onClick={handleSaveClick}
           disabled={!hasChanges || saving}
         >
-          {saving ? "Saving..." : "Save Order"}
+          {saving ? "Saving..." : "Save"}
         </button>
       )}
     </>

@@ -322,6 +322,7 @@ export const useClusterStore = create<ClusterState>((set, get) => ({
         autoTags: [],
         images: splitFiles,
         confirmedGroup: null,
+        splitFrom: source.id,
       };
       newClusters.splice(sourceIdx + 1, 0, newCluster);
     }

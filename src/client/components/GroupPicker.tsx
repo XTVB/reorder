@@ -1,12 +1,12 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDismissOnOutside } from "../hooks/useDismissOnOutside.ts";
+import { useUIStore } from "../stores/uiStore.ts";
 import type { ImageGroup } from "../types.ts";
 
 interface GroupPickerProps {
   groups: ImageGroup[];
   onSelect: (groupId: string) => void;
-  selectedCount: number;
 }
 
 function fuzzyMatch(query: string, text: string): boolean {
@@ -19,8 +19,9 @@ function fuzzyMatch(query: string, text: string): boolean {
   return qi === lq.length;
 }
 
-export function GroupPicker({ groups, onSelect, selectedCount }: GroupPickerProps) {
-  const [open, setOpen] = useState(false);
+export function GroupPicker({ groups, onSelect }: GroupPickerProps) {
+  const open = useUIStore((s) => s.showGroupPicker);
+  const setOpen = useUIStore((s) => s.setShowGroupPicker);
   const [query, setQuery] = useState("");
   const [highlightIdx, setHighlightIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -45,12 +46,14 @@ export function GroupPicker({ groups, onSelect, selectedCount }: GroupPickerProp
 
   useDismissOnOutside(containerRef, open, () => setOpen(false));
 
+  useEffect(() => () => setOpen(false), [setOpen]);
+
   const handleSelect = useCallback(
     (groupId: string) => {
       onSelect(groupId);
       setOpen(false);
     },
-    [onSelect],
+    [onSelect, setOpen],
   );
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -70,8 +73,12 @@ export function GroupPicker({ groups, onSelect, selectedCount }: GroupPickerProp
 
   return (
     <div className="group-picker" ref={containerRef}>
-      <button className="btn btn-secondary" onClick={() => setOpen(!open)}>
-        Add to Group ({selectedCount})
+      <button
+        className="btn btn-secondary"
+        onClick={() => setOpen(!open)}
+        title="Add selection to an existing group (H)"
+      >
+        Add to Group
       </button>
       {open && (
         <div className="group-picker-dropdown">

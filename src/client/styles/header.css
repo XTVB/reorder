@@ -7,17 +7,17 @@
   border-bottom: 1px solid var(--border);
   box-shadow: 0 1px 8px rgba(0, 0, 0, 0.3);
   min-height: var(--header-height);
-  padding: 8px 20px;
+  padding: 8px 15px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 15px;
 }
 
 .app-header-left {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   min-width: 0;
   flex-shrink: 1;
 }
@@ -25,18 +25,22 @@
 .app-header-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 
 .header-subtitle {
-  font-size: 12px;
+  font-size: 16px;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
 }
 
 .header-separator {
@@ -52,20 +56,21 @@
 .toolbar-group {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 3px;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid var(--border);
+  gap: 1px;
+  padding: 2px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius);
 }
 
 .toolbar-group .btn {
   background: transparent;
   color: var(--text);
-  padding: 4px 9px;
-  font-size: 12px;
+  padding: 6px 13px;
+  font-size: 16px;
   font-weight: 500;
   border-radius: 5px;
+  border: 1px solid transparent;
 }
 
 .toolbar-group .btn:hover:not(:disabled) {

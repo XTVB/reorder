@@ -98,6 +98,7 @@ export interface ClusterResultData {
   autoTags: { term: string; z: number }[];
   images: string[];
   confirmedGroup: { id: string; name: string; images: string[] } | null;
+  splitFrom?: string;
 }
 
 export interface DistanceProfile {

@@ -1,6 +1,7 @@
 import React from "react";
 import { useMergeSuggestionsStore } from "../../stores/mergeSuggestionsStore.ts";
 import type { MergeSuggestionSimilar } from "../../types.ts";
+import { cn } from "../../utils/helpers.ts";
 import { MergeSuggestionCard, type OpenCardHandler } from "./MergeSuggestionCard.tsx";
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
   pendingCandidates: Set<string>;
   refCardExpanded: boolean;
   expandedCandidateId: string | null;
+  isCurrentSearchMatch?: boolean;
   onOpenCard: OpenCardHandler;
 }
 
@@ -24,6 +26,7 @@ export const MergeSuggestionRow = React.memo(function MergeSuggestionRow({
   pendingCandidates,
   refCardExpanded,
   expandedCandidateId,
+  isCurrentSearchMatch,
   onOpenCard,
 }: Props) {
   const toggleRowCollapse = useMergeSuggestionsStore((s) => s.toggleRowCollapse);
@@ -37,7 +40,7 @@ export const MergeSuggestionRow = React.memo(function MergeSuggestionRow({
   const someSelected = similar.some((s) => pendingCandidates.has(s.groupId));
 
   return (
-    <div className="merge-row">
+    <div className={cn("merge-row", isCurrentSearchMatch && "merge-row-search-current")}>
       <div className="merge-row-header" onClick={() => toggleRowCollapse(refGroupId)}>
         <span className={`merge-row-chevron ${collapsed ? "" : "merge-row-chevron-open"}`}>
           {"\u25B6"}

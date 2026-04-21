@@ -29,6 +29,10 @@ struct Cli {
     #[arg(long, default_value_t = 0.0)]
     min_score: f32,
 
+    /// Skip pairs whose combined image count exceeds this value (0 = no limit)
+    #[arg(long, default_value_t = 0)]
+    max_combined_size: usize,
+
     /// Mode: "merge-suggestions" (default) or "dist-matrix"
     #[arg(long, default_value = "merge-suggestions")]
     mode: String,
@@ -262,12 +266,24 @@ fn main() {
     }
 
     // ── Compute patch match scores for all group pairs (parallel) ────────
-    let n_total_pairs = n_groups * (n_groups - 1) / 2;
-    eprintln!("Computing patch match scores for {} group pairs...", n_total_pairs);
-
+    let n_full_pairs = n_groups * (n_groups - 1) / 2;
+    let max_combined = cli.max_combined_size;
     let pair_indices: Vec<(usize, usize)> = (0..n_groups)
         .flat_map(|i| ((i + 1)..n_groups).map(move |j| (i, j)))
+        .filter(|&(i, j)| {
+            max_combined == 0
+                || groups[i].indices.len() + groups[j].indices.len() <= max_combined
+        })
         .collect();
+    let n_total_pairs = pair_indices.len();
+    if max_combined > 0 {
+        eprintln!(
+            "Computing patch match scores for {}/{} group pairs (max combined size = {})...",
+            n_total_pairs, n_full_pairs, max_combined,
+        );
+    } else {
+        eprintln!("Computing patch match scores for {} group pairs...", n_total_pairs);
+    }
 
     // Thread-local similarity buffer to avoid per-call allocation
     use std::cell::RefCell;

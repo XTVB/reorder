@@ -16,6 +16,7 @@ interface MergeSuggestionsState {
 
   threshold: number;
   fullResolution: boolean;
+  maxCombinedSize: number;
 
   collapsedRows: Set<string>;
   pendingMerges: Map<string, Set<string>>; // refGroupId → candidate groupIds
@@ -24,6 +25,7 @@ interface MergeSuggestionsState {
 
   setThreshold: (t: number) => void;
   setFullResolution: (v: boolean) => void;
+  setMaxCombinedSize: (n: number) => void;
   fetchSuggestions: () => Promise<void>;
   toggleRowCollapse: (groupId: string) => void;
   collapseAllRows: () => void;
@@ -47,6 +49,7 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
 
   threshold: 0.65,
   fullResolution: false,
+  maxCombinedSize: 40,
 
   collapsedRows: new Set(),
   pendingMerges: new Map(),
@@ -55,15 +58,17 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
 
   setThreshold: (t) => set({ threshold: t }),
   setFullResolution: (v) => set({ fullResolution: v }),
+  setMaxCombinedSize: (n) => set({ maxCombinedSize: Math.max(0, Math.floor(n)) }),
 
   fetchSuggestions: async () => {
-    const { threshold, fullResolution } = get();
+    const { threshold, fullResolution, maxCombinedSize } = get();
     set({ loading: true, error: null, progress: "Starting..." });
     try {
       const resp = await postJson("/api/merge-suggestions", {
         threshold,
         maxPerGroup: MAX_PER_GROUP,
         fullResolution,
+        maxCombinedSize,
       });
       if (!resp.ok) {
         const err = await resp.json();

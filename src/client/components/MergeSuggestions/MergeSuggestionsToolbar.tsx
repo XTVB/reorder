@@ -7,8 +7,10 @@ interface Props {
   pendingCount: number;
   canUndo: boolean;
   fullResolution: boolean;
+  maxCombinedSize: number;
   onThresholdChange: (t: number) => void;
   onFullResolutionChange: (v: boolean) => void;
+  onMaxCombinedSizeChange: (n: number) => void;
   onCompute: () => void;
   onApply: () => void;
   onUndo: () => void;
@@ -26,8 +28,10 @@ export function MergeSuggestionsToolbar({
   pendingCount,
   canUndo,
   fullResolution,
+  maxCombinedSize,
   onThresholdChange,
   onFullResolutionChange,
+  onMaxCombinedSizeChange,
   onCompute,
   onApply,
   onUndo,
@@ -73,6 +77,25 @@ export function MergeSuggestionsToolbar({
             disabled={loading}
           />
           <span className="merge-threshold-value">{threshold.toFixed(2)}</span>
+        </label>
+
+        <label
+          className="merge-threshold-control"
+          title="Skip pairs whose combined image count would exceed this value. 0 = no limit. Smaller limits make compute much faster."
+        >
+          <span className="merge-threshold-label">Max combined size</span>
+          <input
+            type="number"
+            className="merge-max-size-input"
+            min="0"
+            step="1"
+            value={maxCombinedSize}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              onMaxCombinedSizeChange(Number.isFinite(v) ? v : 0);
+            }}
+            disabled={loading}
+          />
         </label>
 
         {computeTimeMs != null && (

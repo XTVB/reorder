@@ -51,11 +51,121 @@ export function useSearchState() {
   };
 }
 
+// Minimal local state for callers that don't need to share matches via context.
+export function useSearchOverlayState() {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const open = useCallback(() => setIsOpen(true), []);
+  const close = useCallback(() => {
+    setIsOpen(false);
+    setQuery("");
+  }, []);
+  return { isOpen, query, setQuery, open, close };
+}
+
+interface SearchOverlayProps {
+  isOpen: boolean;
+  query: string;
+  setQuery: (q: string) => void;
+  open: () => void;
+  close: () => void;
+  matchCount: number;
+  currentMatchIndex: number;
+  onNext: () => void;
+  onPrev: () => void;
+  placeholder?: string;
+}
+
+/**
+ * Presentational search overlay: input + counter + prev/next/close.
+ * Owns the Cmd/Ctrl+F opener, Esc-to-close, and Enter/Shift+Enter cycling.
+ * Callers supply the match count and navigation callbacks.
+ */
+export function SearchOverlay({
+  isOpen,
+  query,
+  setQuery,
+  open,
+  close,
+  matchCount,
+  currentMatchIndex,
+  onNext,
+  onPrev,
+  placeholder = "Search...",
+}: SearchOverlayProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        e.preventDefault();
+        open();
+      }
+    }
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [open]);
+
+  useEffect(() => {
+    if (isOpen) inputRef.current?.focus();
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Escape") {
+      close();
+    } else if (e.key === "Enter") {
+      if (e.shiftKey) onPrev();
+      else onNext();
+    }
+  }
+
+  return (
+    <div className="search-bar">
+      <input
+        ref={inputRef}
+        type="text"
+        className="search-input"
+        placeholder={placeholder}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={handleKeyDown}
+      />
+      <span className="search-count">
+        {query.trim()
+          ? matchCount > 0
+            ? `${currentMatchIndex + 1} of ${matchCount}`
+            : "No matches"
+          : ""}
+      </span>
+      <button
+        className="search-nav-btn"
+        onClick={onPrev}
+        disabled={matchCount === 0}
+        title="Previous (Shift+Enter)"
+      >
+        &#8593;
+      </button>
+      <button
+        className="search-nav-btn"
+        onClick={onNext}
+        disabled={matchCount === 0}
+        title="Next (Enter)"
+      >
+        &#8595;
+      </button>
+      <button className="search-close-btn" onClick={close} title="Close (Esc)">
+        &times;
+      </button>
+    </div>
+  );
+}
+
 export function SearchBar({ gridItems, onScrollToRow, columnCount }: SearchBarProps) {
   const { isOpen, query, setQuery, setMatchIds, setCurrentMatchId, open, close } =
     useSearchContext()!;
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
   const groupMap = useGroupStore((s) => s.groupMap);
 
   // Compute matches (pure — no state updates)
@@ -118,81 +228,28 @@ export function SearchBar({ gridItems, onScrollToRow, columnCount }: SearchBarPr
     onScrollToRow(rowIndex);
   }, [currentMatchIndex, matches, columnCount, gridItems, onScrollToRow]);
 
-  // Focus input when opened
-  useEffect(() => {
-    if (isOpen) inputRef.current?.focus();
-  }, [isOpen]);
-
-  // Keyboard shortcut
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
-        e.preventDefault();
-        open();
-      }
-    }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [open]);
-
-  if (!isOpen) return null;
-
-  function goNext() {
+  const goNext = useCallback(() => {
     if (matches.length === 0) return;
     setCurrentMatchIndex((i) => (i + 1) % matches.length);
-  }
+  }, [matches.length]);
 
-  function goPrev() {
+  const goPrev = useCallback(() => {
     if (matches.length === 0) return;
     setCurrentMatchIndex((i) => (i - 1 + matches.length) % matches.length);
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Escape") {
-      close();
-    } else if (e.key === "Enter") {
-      if (e.shiftKey) goPrev();
-      else goNext();
-    }
-  }
+  }, [matches.length]);
 
   return (
-    <div className="search-bar">
-      <input
-        ref={inputRef}
-        type="text"
-        className="search-input"
-        placeholder="Search images..."
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={handleKeyDown}
-      />
-      <span className="search-count">
-        {query.trim()
-          ? matches.length > 0
-            ? `${currentMatchIndex + 1} of ${matches.length}`
-            : "No matches"
-          : ""}
-      </span>
-      <button
-        className="search-nav-btn"
-        onClick={goPrev}
-        disabled={matches.length === 0}
-        title="Previous (Shift+Enter)"
-      >
-        &#8593;
-      </button>
-      <button
-        className="search-nav-btn"
-        onClick={goNext}
-        disabled={matches.length === 0}
-        title="Next (Enter)"
-      >
-        &#8595;
-      </button>
-      <button className="search-close-btn" onClick={close} title="Close (Esc)">
-        &times;
-      </button>
-    </div>
+    <SearchOverlay
+      isOpen={isOpen}
+      query={query}
+      setQuery={setQuery}
+      open={open}
+      close={close}
+      matchCount={matches.length}
+      currentMatchIndex={currentMatchIndex}
+      onNext={goNext}
+      onPrev={goPrev}
+      placeholder="Search images..."
+    />
   );
 }

@@ -1,11 +1,12 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRemeasureVirtualRows } from "../../hooks/useRemeasureVirtualRows.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useMergeSuggestionsStore } from "../../stores/mergeSuggestionsStore.ts";
 import { useUIStore } from "../../stores/uiStore.ts";
 import type { MergeSuggestionRow as MergeSuggestionRowType } from "../../types.ts";
 import { Lightbox } from "../Lightbox.tsx";
+import { SearchOverlay, useSearchOverlayState } from "../SearchBar.tsx";
 import { MergePopover } from "./MergePopover.tsx";
 import type { OpenCardHandler } from "./MergeSuggestionCard.tsx";
 import { MergeSuggestionRow } from "./MergeSuggestionRow.tsx";
@@ -35,12 +36,14 @@ export function MergeSuggestions() {
   const progress = useMergeSuggestionsStore((s) => s.progress);
   const threshold = useMergeSuggestionsStore((s) => s.threshold);
   const fullResolution = useMergeSuggestionsStore((s) => s.fullResolution);
+  const maxCombinedSize = useMergeSuggestionsStore((s) => s.maxCombinedSize);
   const collapsedRows = useMergeSuggestionsStore((s) => s.collapsedRows);
   const pendingMerges = useMergeSuggestionsStore((s) => s.pendingMerges);
   const undoStack = useMergeSuggestionsStore((s) => s.undoStack);
 
   const setThreshold = useMergeSuggestionsStore((s) => s.setThreshold);
   const setFullResolution = useMergeSuggestionsStore((s) => s.setFullResolution);
+  const setMaxCombinedSize = useMergeSuggestionsStore((s) => s.setMaxCombinedSize);
   const fetchSuggestions = useMergeSuggestionsStore((s) => s.fetchSuggestions);
   const clearPendingMerges = useMergeSuggestionsStore((s) => s.clearPendingMerges);
   const applyMerges = useMergeSuggestionsStore((s) => s.applyMerges);
@@ -54,6 +57,8 @@ export function MergeSuggestions() {
 
   const [expandedCard, setExpandedCard] = useState<ExpandedCard | null>(null);
   const [lightbox, setLightbox] = useState<LightboxState | null>(null);
+  const search = useSearchOverlayState();
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
 
   const handleOpenCard = useCallback<OpenCardHandler>(
     ({ anchorEl, displayName, images, refGroupId, candidateId }) => {
@@ -115,6 +120,49 @@ export function MergeSuggestions() {
 
   useRemeasureVirtualRows(virtualizer, scrollContainerRef, [rows, collapsedRows]);
 
+  const matchRowIndices = useMemo(() => {
+    const q = search.query.trim().toLowerCase();
+    if (!q) return [] as number[];
+    const indices: number[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]!;
+      if (
+        row.refGroupName.toLowerCase().includes(q) ||
+        row.similar.some((c) => c.groupName.toLowerCase().includes(q))
+      ) {
+        indices.push(i);
+      }
+    }
+    return indices;
+  }, [rows, search.query]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: query is the intentional trigger; body only resets the cursor
+  useEffect(() => {
+    setCurrentMatchIndex(0);
+  }, [search.query]);
+
+  const clampedMatchIndex =
+    matchRowIndices.length === 0 ? 0 : Math.min(currentMatchIndex, matchRowIndices.length - 1);
+  const currentMatchRowIndex = matchRowIndices[clampedMatchIndex];
+  const currentMatchRefId =
+    currentMatchRowIndex !== undefined ? (rows[currentMatchRowIndex]?.refGroupId ?? null) : null;
+
+  useEffect(() => {
+    if (currentMatchRowIndex !== undefined) {
+      virtualizer.scrollToIndex(currentMatchRowIndex, { align: "center" });
+    }
+  }, [currentMatchRowIndex, virtualizer]);
+
+  const goNextMatch = useCallback(() => {
+    if (matchRowIndices.length === 0) return;
+    setCurrentMatchIndex((i) => (i + 1) % matchRowIndices.length);
+  }, [matchRowIndices.length]);
+
+  const goPrevMatch = useCallback(() => {
+    if (matchRowIndices.length === 0) return;
+    setCurrentMatchIndex((i) => (i - 1 + matchRowIndices.length) % matchRowIndices.length);
+  }, [matchRowIndices.length]);
+
   const count = pendingMergeCount();
 
   return (
@@ -128,14 +176,29 @@ export function MergeSuggestions() {
         pendingCount={count}
         canUndo={undoStack.length > 0}
         fullResolution={fullResolution}
+        maxCombinedSize={maxCombinedSize}
         onThresholdChange={setThreshold}
         onFullResolutionChange={setFullResolution}
+        onMaxCombinedSizeChange={setMaxCombinedSize}
         onCompute={fetchSuggestions}
         onApply={applyMerges}
         onUndo={undo}
         onClear={clearPendingMerges}
         onExpandAll={expandAllRows}
         onCollapseAll={collapseAllRows}
+      />
+
+      <SearchOverlay
+        isOpen={search.isOpen}
+        query={search.query}
+        setQuery={search.setQuery}
+        open={search.open}
+        close={search.close}
+        matchCount={matchRowIndices.length}
+        currentMatchIndex={clampedMatchIndex}
+        onNext={goNextMatch}
+        onPrev={goPrevMatch}
+        placeholder="Search group names..."
       />
 
       {error && <div className="merge-error">{error}</div>}
@@ -180,6 +243,7 @@ export function MergeSuggestions() {
                   pendingCandidates={pending}
                   refCardExpanded={rowHasExpansion && expandedCard!.candidateId === null}
                   expandedCandidateId={rowHasExpansion ? expandedCard!.candidateId : null}
+                  isCurrentSearchMatch={row.refGroupId === currentMatchRefId}
                   onOpenCard={handleOpenCard}
                 />
               </div>

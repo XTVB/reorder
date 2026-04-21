@@ -808,10 +808,12 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
         threshold?: number;
         maxPerGroup?: number;
         fullResolution?: boolean;
+        maxCombinedSize?: number;
       };
       const threshold = body.threshold ?? 0.65;
       const maxPerGroup = body.maxPerGroup ?? 8;
       const fullResolution = body.fullResolution ?? false;
+      const maxCombinedSize = Math.max(0, Math.floor(body.maxCombinedSize ?? 0));
 
       // SSE stream for progress + result (matches /api/cluster pattern)
       const stream = new ReadableStream({
@@ -839,6 +841,7 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
 
             const entries = await computeMergeSuggestions(targetDir, threshold, {
               fullResolution,
+              maxCombinedSize,
               onProgress: (msg) => send("progress", { message: msg }),
             });
 

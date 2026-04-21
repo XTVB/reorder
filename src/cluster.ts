@@ -1340,10 +1340,15 @@ export interface GroupPairResult {
 export async function computeMergeSuggestions(
   targetDir: string,
   minScore = 0.55,
-  options?: { fullResolution?: boolean; onProgress?: (msg: string) => void },
+  options?: {
+    fullResolution?: boolean;
+    maxCombinedSize?: number;
+    onProgress?: (msg: string) => void;
+  },
 ): Promise<GroupPairResult[]> {
   const cache = cacheDir(targetDir);
   const fullRes = options?.fullResolution ?? false;
+  const maxCombinedSize = Math.max(0, Math.floor(options?.maxCombinedSize ?? 0));
   const patchesCachePath = join(
     cache,
     fullRes ? "dinov3_patches_full_hash_cache.npy" : "dinov3_patches_hash_cache.npy",
@@ -1351,10 +1356,9 @@ export async function computeMergeSuggestions(
   const patchesHashesPath = join(cache, "dinov3_patches_hashes.json");
   const contentHashesPath = join(cache, "content_hashes.json");
   const groupsPath = join(targetDir, ".reorder-groups.json");
-  const resultCachePath = join(
-    cache,
-    fullRes ? "merge_suggestions_full.json" : "merge_suggestions.json",
-  );
+  const resSuffix = fullRes ? "_full" : "";
+  const sizeSuffix = maxCombinedSize > 0 ? `_m${maxCombinedSize}` : "";
+  const resultCachePath = join(cache, `merge_suggestions${resSuffix}${sizeSuffix}.json`);
 
   if (!existsSync(patchesCachePath)) {
     throw new Error(
@@ -1369,6 +1373,17 @@ export async function computeMergeSuggestions(
     );
   }
 
+  const applyFilters = (rows: GroupPairResult[]) => {
+    let out = rows;
+    if (maxCombinedSize > 0) {
+      out = out.filter((r) => r.size_a + r.size_b <= maxCombinedSize);
+    }
+    if (minScore > 0) {
+      out = out.filter((r) => r.patch_median >= minScore);
+    }
+    return out;
+  };
+
   // Disk cache is valid if newer than both the groups file and patches cache.
   try {
     const cacheFile = Bun.file(resultCachePath);
@@ -1381,7 +1396,7 @@ export async function computeMergeSuggestions(
       log("merge-suggestions", `Using cached results (${fullRes ? "full-res" : "pooled"})`);
       options?.onProgress?.("Using cached results");
       const cached: GroupPairResult[] = await cacheFile.json();
-      return minScore > 0 ? cached.filter((r) => r.patch_median >= minScore) : cached;
+      return applyFilters(cached);
     }
   } catch {}
 
@@ -1398,6 +1413,9 @@ export async function computeMergeSuggestions(
     "--min-score",
     "0",
   ];
+  if (maxCombinedSize > 0) {
+    args.push("--max-combined-size", String(maxCombinedSize));
+  }
 
   const label = fullRes ? "merge-suggestions-full" : "merge-suggestions";
   log(label, `Running group-similarity: ${args.join(" ")}`);
@@ -1411,7 +1429,7 @@ export async function computeMergeSuggestions(
   await Bun.write(resultCachePath, stdout);
   log(label, `Cached ${allResults.length} results to ${resultCachePath}`);
 
-  return minScore > 0 ? allResults.filter((r) => r.patch_median >= minScore) : allResults;
+  return applyFilters(allResults);
 }
 
 // Progress broadcasting — allows reconnecting to an in-progress job

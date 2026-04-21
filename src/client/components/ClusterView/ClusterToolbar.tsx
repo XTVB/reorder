@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useGroupStore } from "../../stores/groupStore.ts";
 import { useUIStore } from "../../stores/uiStore.ts";
 import type { DistanceProfile, ImportClusterInput, WeightConfig } from "../../types.ts";
 import { getErrorMessage } from "../../utils/helpers.ts";
+import { ScopePickerModal } from "./ScopePickerModal.tsx";
 
 const DEFAULT_N_CLUSTERS = 200;
 
 const WEIGHT_PRESETS: { label: string; weights: WeightConfig }[] = [
-  { label: "PE-Core G + color", weights: { pecore_g: 1.0, color: 0.5 } },
-  { label: "CLIP + color (legacy)", weights: { clip: 1.0, color: 0.5 } },
-  { label: "PE-Core L", weights: { pecore_l: 1.0 } },
-  { label: "PE-Core G + CLIP + color", weights: { pecore_g: 1.0, clip: 1.0, color: 0.5 } },
-  { label: "PE-Core L + CLIP + color", weights: { pecore_l: 1.0, clip: 1.0, color: 0.5 } },
+  { label: "PE-G + Color", weights: { pecore_g: 1.0, color: 0.5 } },
+  { label: "PE-G + Color (high)", weights: { pecore_g: 1.0, color: 0.8 } },
+  { label: "PE-G + Color + DINOv3", weights: { pecore_g: 2.0, color: 1.0, dinov3: 0.5 } },
+  { label: "DINOv3", weights: { dinov3: 1.0 } },
 ];
 
 const WEIGHT_LABELS: { key: keyof Required<WeightConfig>; label: string }[] = [
@@ -43,6 +44,7 @@ interface Props {
   distanceProfile: DistanceProfile | null;
   weights: WeightConfig;
   usePatches: boolean;
+  inScope: boolean;
   onRun: (n?: number) => void;
   onRecut: (n: number) => void;
   onRecutByThreshold: (threshold: number) => void;
@@ -64,6 +66,7 @@ export function ClusterToolbar({
   hasError,
   distanceProfile,
   weights,
+  inScope,
   onRun,
   onRecut,
   onRecutByThreshold,
@@ -82,8 +85,10 @@ export function ClusterToolbar({
   const [previewCount, setPreviewCount] = useState<number | null>(null);
   const [showWeights, setShowWeights] = useState(false);
   const [minClusterSize, setMinClusterSize] = useState(5);
+  const [scopePickerOpen, setScopePickerOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const showToast = useUIStore((s) => s.showToast);
+  const hasAnyGroups = useGroupStore((s) => s.groups.length > 0);
 
   const handleImportFile = useCallback(
     async (file: File) => {
@@ -174,8 +179,19 @@ export function ClusterToolbar({
         onClick={() => onRun(parseInt(customN, 10) || DEFAULT_N_CLUSTERS)}
         disabled={loading}
       >
-        {loading ? "Clustering..." : "Run Clustering"}
+        {loading ? "Clustering..." : inScope ? "Re-run scoped" : "Run Clustering"}
       </button>
+      {!inScope && (
+        <button
+          className="btn btn-secondary"
+          onClick={() => setScopePickerOpen(true)}
+          disabled={loading || !hasAnyGroups}
+          title="Cluster within a chosen subset of groups"
+        >
+          Scope…
+        </button>
+      )}
+      {scopePickerOpen && <ScopePickerModal onClose={() => setScopePickerOpen(false)} />}
 
       {/* Configuration: weights + patches toggle */}
       <div className="toolbar-group" title="Embedding configuration">
@@ -311,37 +327,43 @@ export function ClusterToolbar({
         Accept All
       </button>
 
-      <button
-        className="btn btn-small"
-        onClick={() => fileInputRef.current?.click()}
-        disabled={loading}
-        title="Import clusters from a JSON file (bypasses CLIP/DINO pipeline)"
-      >
-        Import JSON
-      </button>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="application/json,.json"
-        style={{ display: "none" }}
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) handleImportFile(file);
-          e.target.value = "";
-        }}
-      />
-      <button
-        className="btn btn-small"
-        onClick={() => {
-          if (confirm("Clear imported clusters? The linkage-tree cache (if any) will remain.")) {
-            onClearImported();
-          }
-        }}
-        disabled={loading}
-        title="Delete the imported-clusters cache so the view falls back to the linkage tree"
-      >
-        Clear Import
-      </button>
+      {!inScope && (
+        <>
+          <button
+            className="btn btn-small"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={loading}
+            title="Import clusters from a JSON file (bypasses CLIP/DINO pipeline)"
+          >
+            Import JSON
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleImportFile(file);
+              e.target.value = "";
+            }}
+          />
+          <button
+            className="btn btn-small"
+            onClick={() => {
+              if (
+                confirm("Clear imported clusters? The linkage-tree cache (if any) will remain.")
+              ) {
+                onClearImported();
+              }
+            }}
+            disabled={loading}
+            title="Delete the imported-clusters cache so the view falls back to the linkage tree"
+          >
+            Clear Import
+          </button>
+        </>
+      )}
     </>
   );
 }

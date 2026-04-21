@@ -7,12 +7,14 @@
  * - Generates contact sheets via Sharp
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import sharp from "sharp";
 import {
   ensureHashOrderJson,
+  type HashMapping,
   loadHashMapping,
   parseNpyFromNpz,
   reindexToFilenameOrder,
@@ -20,13 +22,29 @@ import {
 import type {
   ClusterData,
   ClusterResultData,
+  ClusterScope,
   DistanceProfile,
+  ImageGroup,
   ImportClusterInput,
   WeightConfig,
 } from "./client/types.ts";
 import { log } from "./log.ts";
 
 export type { ImportClusterInput, WeightConfig };
+
+// ── Shared helpers ───────────────────────────────────────────────────────────
+
+/** Read .reorder-groups.json, tolerating both array and `{groups: [...]}` shapes. */
+export function loadGroups(targetDir: string): ImageGroup[] {
+  const path = join(targetDir, ".reorder-groups.json");
+  if (!existsSync(path)) return [];
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8"));
+    if (Array.isArray(raw)) return raw;
+    if (Array.isArray(raw?.groups)) return raw.groups;
+  } catch {}
+  return [];
+}
 
 // ── Paths ────────────────────────────────────────────────────────────────────
 
@@ -229,6 +247,102 @@ export async function ensureTextEmbeddings(targetDir: string): Promise<string> {
 
 // ── Rust linkage ─────────────────────────────────────────────────────────────
 
+export function patchDistMatrixPath(targetDir: string): string {
+  return join(cacheDir(targetDir), "patch_dist_matrix.bin");
+}
+
+/** Ensure the DINOv3 patch distance matrix exists; recompute via group-similarity if stale/missing. */
+export async function ensurePatchDistMatrix(
+  targetDir: string,
+  onProgress?: (line: string) => void,
+): Promise<string> {
+  const cache = cacheDir(targetDir);
+  const contentHashesPath = join(cache, "content_hashes.json");
+  const patchesCachePath = join(cache, "dinov3_patches_hash_cache.npy");
+  const patchesHashesPath = join(cache, "dinov3_patches_hashes.json");
+  const distMatrixPath = patchDistMatrixPath(targetDir);
+
+  if (!existsSync(patchesCachePath)) {
+    throw new Error(
+      "DINOv3 patches cache not found. Run feature extraction with --required dinov3 first.",
+    );
+  }
+  if (!existsSync(GROUP_SIM_BINARY)) {
+    throw new Error(
+      `group-similarity binary not found. Build with: cd rust/group-similarity && cargo build --release`,
+    );
+  }
+
+  let cacheValid = false;
+  if (existsSync(distMatrixPath)) {
+    const matMtime = Bun.file(distMatrixPath).lastModified;
+    if (
+      matMtime > Bun.file(patchesCachePath).lastModified &&
+      matMtime > Bun.file(contentHashesPath).lastModified
+    ) {
+      cacheValid = true;
+    }
+  }
+
+  if (cacheValid) {
+    log("cluster", "Using cached patch-based distance matrix");
+    return distMatrixPath;
+  }
+
+  log("cluster", "Precomputing patch-based distance matrix...");
+  onProgress?.("Computing patch distance matrix...");
+  await runRustBinary(
+    GROUP_SIM_BINARY,
+    [
+      "--patches-cache",
+      patchesCachePath,
+      "--content-hashes",
+      contentHashesPath,
+      "--patches-hashes",
+      patchesHashesPath,
+      "--groups",
+      "",
+      "--mode",
+      "dist-matrix",
+      "--output",
+      distMatrixPath,
+    ],
+    "patch-dist-matrix",
+    onProgress,
+  );
+  return distMatrixPath;
+}
+
+let _patchDistMatrixCache: {
+  targetDir: string;
+  mtime: number;
+  n: number;
+  distances: Float64Array;
+} | null = null;
+
+/** Read patch_dist_matrix.bin: [u64 n][f64×n*(n-1)/2] condensed upper triangle. mtime-cached. */
+export function loadPatchDistMatrix(targetDir: string): { n: number; distances: Float64Array } {
+  const path = patchDistMatrixPath(targetDir);
+  const mtime = statSync(path).mtimeMs;
+  if (
+    _patchDistMatrixCache &&
+    _patchDistMatrixCache.targetDir === targetDir &&
+    _patchDistMatrixCache.mtime === mtime
+  ) {
+    return { n: _patchDistMatrixCache.n, distances: _patchDistMatrixCache.distances };
+  }
+  const buf = readFileSync(path) as Buffer;
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  // n stored as u64 LE — low 32 bits suffice for our scale
+  const n = view.getUint32(0, true);
+  const nHi = view.getUint32(4, true);
+  if (nHi !== 0) throw new Error("Patch dist matrix: n > 2^32 not supported");
+  const nPairs = (n * (n - 1)) / 2;
+  const distances = new Float64Array(buf.buffer, buf.byteOffset + 8, nPairs);
+  _patchDistMatrixCache = { targetDir, mtime, n, distances };
+  return { n, distances };
+}
+
 export async function runLinkage(
   targetDir: string,
   nClusters: number,
@@ -241,57 +355,10 @@ export async function runLinkage(
   const hashOrderPath = join(cache, "hash_cache_order.json");
   const groupsFile = join(targetDir, ".reorder-groups.json");
   const treePath = join(cache, "linkage_tree.bin");
-  const distMatrixPath = join(cache, "patch_dist_matrix.bin");
+  const distMatrixPath = patchDistMatrixPath(targetDir);
 
   if (usePatches) {
-    const patchesCachePath = join(cache, "dinov3_patches_hash_cache.npy");
-    const patchesHashesPath = join(cache, "dinov3_patches_hashes.json");
-    if (!existsSync(patchesCachePath)) {
-      throw new Error(
-        "DINOv3 patches cache not found. Run feature extraction with --required dinov3 first.",
-      );
-    }
-    if (!existsSync(GROUP_SIM_BINARY)) {
-      throw new Error(
-        `group-similarity binary not found. Build with: cd rust/group-similarity && cargo build --release`,
-      );
-    }
-
-    // Reuse cached distance matrix if it's newer than both inputs (O(N²) patches matching is expensive).
-    let cacheValid = false;
-    if (existsSync(distMatrixPath)) {
-      const matMtime = Bun.file(distMatrixPath).lastModified;
-      if (
-        matMtime > Bun.file(patchesCachePath).lastModified &&
-        matMtime > Bun.file(contentHashesPath).lastModified
-      ) {
-        cacheValid = true;
-      }
-    }
-
-    if (cacheValid) {
-      log("cluster", "Using cached patch-based distance matrix");
-    } else {
-      log("cluster", "Precomputing patch-based distance matrix...");
-      await runRustBinary(
-        GROUP_SIM_BINARY,
-        [
-          "--patches-cache",
-          patchesCachePath,
-          "--content-hashes",
-          contentHashesPath,
-          "--patches-hashes",
-          patchesHashesPath,
-          "--groups",
-          "",
-          "--mode",
-          "dist-matrix",
-          "--output",
-          distMatrixPath,
-        ],
-        "patch-dist-matrix",
-      );
-    }
+    await ensurePatchDistMatrix(targetDir);
   }
 
   // Ensure the JSON sidecar exists (regenerate from NPZ if needed)
@@ -747,16 +814,28 @@ export function getDistanceProfile(targetDir: string): DistanceProfile {
   return distanceProfileFromTree(loadTree(targetDir));
 }
 
-// ── Auto-naming (TF-IDF) ────────────────────────────────────────────────────
+// ── Embedding loading (shared between auto-naming + NN query) ───────────────
+
+export const MODEL_KEYS = ["clip", "dino", "dinov3", "pecore_l", "pecore_g", "color"] as const;
+export type ModelKey = (typeof MODEL_KEYS)[number];
+
+export class ModelMissingError extends Error {
+  constructor(public modelKey: string) {
+    super(`Model '${modelKey}' embedding not found in hash cache — run extraction first`);
+  }
+}
+
+export interface ModelEmbedding {
+  filenames: string[];
+  data: Float32Array;
+  dim: number;
+  normalized: boolean; // color is not L2-normalized
+}
 
 let _textEmbCache: TextEmbeddings | null = null;
-let _clipEmbCache: {
-  filenames: string[];
-  clip: Float32Array;
-  nImages: number;
-  dim: number;
-} | null = null;
+const _modelEmbCaches = new Map<string, ModelEmbedding>();
 let _tfidfStatsCache: { globalAvg: Float64Array; globalStd: Float64Array } | null = null;
+let _hashMappingCache: { targetDir: string; mtime: number; mapping: HashMapping } | null = null;
 
 function loadTextEmbeddings(targetDir: string): TextEmbeddings {
   if (_textEmbCache) return _textEmbCache;
@@ -778,18 +857,57 @@ function loadTextEmbeddings(targetDir: string): TextEmbeddings {
   return _textEmbCache;
 }
 
-function loadClipEmbeddings(targetDir: string) {
-  if (_clipEmbCache) return _clipEmbCache;
-
+/** mtime-keyed wrapper around loadHashMapping — content_hashes.json changes only on extraction/rename. */
+export function cachedHashMapping(targetDir: string): HashMapping {
   const cache = cacheDir(targetDir);
+  const hashesPath = join(cache, "content_hashes.json");
+  const mtime = statSync(hashesPath).mtimeMs;
+  if (
+    _hashMappingCache &&
+    _hashMappingCache.targetDir === targetDir &&
+    _hashMappingCache.mtime === mtime
+  ) {
+    return _hashMappingCache.mapping;
+  }
   const mapping = loadHashMapping(cache);
-  const npzBuf = readFileSync(join(cache, "clip_hash_cache.npz"));
-  const clipHashOrdered = parseNpyFromNpz(npzBuf, "clip.npy");
-  const dim = clipHashOrdered.length / mapping.hashOrder.length;
-  const clip = reindexToFilenameOrder(clipHashOrdered, dim, mapping);
+  _hashMappingCache = { targetDir, mtime, mapping };
+  return mapping;
+}
 
-  _clipEmbCache = { filenames: mapping.filenames, clip, nImages: mapping.nImages, dim };
-  return _clipEmbCache;
+export function loadModelEmbedding(targetDir: string, modelKey: ModelKey): ModelEmbedding {
+  const key = `${targetDir}::${modelKey}`;
+  const cached = _modelEmbCaches.get(key);
+  if (cached) return cached;
+
+  const mapping = cachedHashMapping(targetDir);
+  const npzBuf = readFileSync(join(cacheDir(targetDir), "clip_hash_cache.npz")) as Buffer;
+  let hashOrdered: Float32Array;
+  try {
+    hashOrdered = parseNpyFromNpz(npzBuf, `${modelKey}.npy`);
+  } catch {
+    throw new ModelMissingError(modelKey);
+  }
+  const dim = hashOrdered.length / mapping.hashOrder.length;
+  const data = reindexToFilenameOrder(hashOrdered, dim, mapping);
+  const emb: ModelEmbedding = {
+    filenames: mapping.filenames,
+    data,
+    dim,
+    normalized: modelKey !== "color",
+  };
+  _modelEmbCaches.set(key, emb);
+  return emb;
+}
+
+/** Back-compat wrapper for computeAutoNames / buildRecutResult which use `clip` as the field name. */
+function loadClipEmbeddings(targetDir: string): {
+  filenames: string[];
+  clip: Float32Array;
+  nImages: number;
+  dim: number;
+} {
+  const emb = loadModelEmbedding(targetDir, "clip");
+  return { filenames: emb.filenames, clip: emb.data, nImages: emb.filenames.length, dim: emb.dim };
 }
 
 /** Fallback when CLIP embeddings aren't available — uses confirmed group names or generic labels. */
@@ -1095,24 +1213,13 @@ function computeSuggestedCounts(nImages: number): number[] {
 
 // ── Full pipeline ────────────────────────────────────────────────────────────
 
-/** Derive the set of model keys needed for a given weight config. */
+/** Derive the set of model keys needed for a given weight config.
+ * Only models explicitly given a positive weight are extracted — missing keys
+ * mean "don't extract", so CLIP etc. are never pulled unless the user asked for them. */
 function modelsForWeights(weights?: WeightConfig): string[] | undefined {
   if (!weights) return undefined; // no config → extract all (auto mode)
-  // Rust defaults: clip=1.0, color=0.5, others=0.0
-  const defaults: Record<string, number> = {
-    clip: 1.0,
-    color: 0.5,
-    dino: 0.0,
-    pecore_l: 0.0,
-    pecore_g: 0.0,
-    dinov3: 0.0,
-  };
-  const needed: string[] = [];
-  for (const [key, defaultVal] of Object.entries(defaults)) {
-    const val = weights[key as keyof WeightConfig] ?? defaultVal;
-    if (val > 0) needed.push(key);
-  }
-  return needed;
+  const keys: (keyof WeightConfig)[] = ["clip", "color", "dino", "pecore_l", "pecore_g", "dinov3"];
+  return keys.filter((k) => (weights[k] ?? 0) > 0);
 }
 
 export async function runFullCluster(
@@ -1183,26 +1290,18 @@ export async function runRecutAdaptive(
   return buildRecutResult(targetDir, labels, nClusters, distanceProfile);
 }
 
-async function buildRecutResult(
+/** Group labels[] into clusters, attach confirmed-group info, auto-name, sort by size. */
+function buildClustersFromLabels(
   targetDir: string,
+  filenames: string[],
   labels: number[],
-  nClusters: number,
-  distanceProfile: DistanceProfile,
-): Promise<ClusterData> {
-  const { filenames } = loadClipEmbeddings(targetDir);
-
-  // Load groups for confirmed_group info
-  const groupsPath = join(targetDir, ".reorder-groups.json");
-  let groups: { id: string; name: string; images: string[] }[] = [];
-  try {
-    groups = await Bun.file(groupsPath).json();
-  } catch {}
-  const imgToGroup = new Map<string, (typeof groups)[0]>();
-  for (const g of groups) {
+  opts: { idPrefix: string },
+): ClusterResultData[] {
+  const imgToGroup = new Map<string, ImageGroup>();
+  for (const g of loadGroups(targetDir)) {
     for (const f of g.images) imgToGroup.set(f, g);
   }
 
-  // Group by label
   const clusterMembers = new Map<number, string[]>();
   for (let i = 0; i < labels.length; i++) {
     const label = labels[i]!;
@@ -1216,14 +1315,27 @@ async function buildRecutResult(
       const confirmed = images.find((f) => imgToGroup.has(f));
       const group = confirmed ? (imgToGroup.get(confirmed) ?? null) : null;
       return {
-        id: `cluster_${ci}`,
+        id: `${opts.idPrefix}${ci}`,
         images: images.sort(),
         confirmed_group: group ? { id: group.id, name: group.name, images: group.images } : null,
       };
     });
 
-  const clusters = computeAutoNames(targetDir, rawClusters);
+  try {
+    return computeAutoNames(targetDir, rawClusters);
+  } catch {
+    return clustersWithoutAutoNames(rawClusters);
+  }
+}
 
+async function buildRecutResult(
+  targetDir: string,
+  labels: number[],
+  nClusters: number,
+  distanceProfile: DistanceProfile,
+): Promise<ClusterData> {
+  const { filenames } = cachedHashMapping(targetDir);
+  const clusters = buildClustersFromLabels(targetDir, filenames, labels, { idPrefix: "cluster_" });
   return {
     clusters,
     suggestedCounts: computeSuggestedCounts(filenames.length),
@@ -1265,14 +1377,8 @@ export async function buildImportedResult(
   targetDir: string,
   input: ImportClusterInput[],
 ): Promise<ClusterData> {
-  const groupsPath = join(targetDir, ".reorder-groups.json");
-  let groups: { id: string; name: string; images: string[] }[] = [];
-  try {
-    const data = await Bun.file(groupsPath).json();
-    groups = Array.isArray(data) ? data : Array.isArray(data?.groups) ? data.groups : [];
-  } catch {}
-  const imgToGroup = new Map<string, (typeof groups)[0]>();
-  for (const g of groups) {
+  const imgToGroup = new Map<string, ImageGroup>();
+  for (const g of loadGroups(targetDir)) {
     for (const f of g.images) imgToGroup.set(f, g);
   }
 
@@ -1301,8 +1407,10 @@ export async function buildImportedResult(
 
 export function invalidateClusterCache() {
   _textEmbCache = null;
-  _clipEmbCache = null;
+  _modelEmbCaches.clear();
   _tfidfStatsCache = null;
+  _hashMappingCache = null;
+  _patchDistMatrixCache = null;
 }
 
 // ── Job guard ───────────────────────────────────────────────────────────────
@@ -1321,6 +1429,269 @@ export function cancelClusterJob() {
   if (_clusterAbort) {
     _clusterAbort.abort();
     log("cluster", "Cluster job cancellation requested");
+  }
+}
+
+// ── Scoped clustering (subset of groups) ────────────────────────────────────
+
+interface ScopedMeta {
+  groupIds: string[];
+  groupNames: string[];
+  subsetFilenames: string[];
+}
+
+export function computeScopeKey(groupIds: string[]): string {
+  const canonical = [...groupIds].sort().join("\n");
+  return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
+}
+
+export function scopedCacheDir(targetDir: string, scopeKey: string): string {
+  return join(cacheDir(targetDir), "scoped", scopeKey);
+}
+
+function scopedTreePath(targetDir: string, scopeKey: string): string {
+  return join(scopedCacheDir(targetDir, scopeKey), "linkage_tree.bin");
+}
+
+function scopedSubsetPath(targetDir: string, scopeKey: string): string {
+  return join(scopedCacheDir(targetDir, scopeKey), "subset_filenames.json");
+}
+
+function scopedMetaPath(targetDir: string, scopeKey: string): string {
+  return join(scopedCacheDir(targetDir, scopeKey), "meta.json");
+}
+
+export async function unionGroupFilenames(
+  targetDir: string,
+  groupIds: string[],
+): Promise<{ filenames: string[]; groupNames: string[] }> {
+  const groups = loadGroups(targetDir);
+  if (groups.length === 0) {
+    throw new Error("No groups found — create groups first");
+  }
+  const byId = new Map(groups.map((g) => [g.id, g]));
+
+  const groupNames: string[] = [];
+  const fnSet = new Set<string>();
+  for (const gid of groupIds) {
+    const g = byId.get(gid);
+    if (!g) throw new Error(`Group not found: ${gid}`);
+    groupNames.push(g.name);
+    for (const f of g.images) fnSet.add(f);
+  }
+
+  const contentHashesPath = join(cacheDir(targetDir), "content_hashes.json");
+  if (!existsSync(contentHashesPath)) {
+    throw new Error("content_hashes.json missing — run feature extraction first");
+  }
+  const contentHashes: Record<string, string> = JSON.parse(
+    readFileSync(contentHashesPath, "utf-8"),
+  );
+
+  const filenames = [...fnSet].filter((f) => f in contentHashes).sort();
+  return { filenames, groupNames };
+}
+
+export async function runScopedLinkage(
+  targetDir: string,
+  groupIds: string[],
+  nClusters: number,
+  weights?: WeightConfig,
+  onProgress?: (line: string) => void,
+): Promise<{ rustOutput: RustOutput; scopeKey: string; meta: ScopedMeta }> {
+  const scopeKey = computeScopeKey(groupIds);
+  const scopeDir = scopedCacheDir(targetDir, scopeKey);
+  mkdirSync(scopeDir, { recursive: true });
+
+  const { filenames: subsetFilenames, groupNames } = await unionGroupFilenames(targetDir, groupIds);
+  if (subsetFilenames.length < 2) {
+    throw new Error("Scoped clustering needs at least 2 images across the selected groups");
+  }
+
+  const meta: ScopedMeta = { groupIds, groupNames, subsetFilenames };
+  await Bun.write(scopedSubsetPath(targetDir, scopeKey), JSON.stringify(subsetFilenames));
+  await Bun.write(scopedMetaPath(targetDir, scopeKey), JSON.stringify(meta));
+
+  const cache = cacheDir(targetDir);
+  const hashCachePath = join(cache, "clip_hash_cache.npz");
+  const contentHashesPath = join(cache, "content_hashes.json");
+  const hashOrderPath = join(cache, "hash_cache_order.json");
+  const groupsFile = join(targetDir, ".reorder-groups.json");
+  const treePath = scopedTreePath(targetDir, scopeKey);
+
+  ensureHashOrderJson(cache);
+
+  const args = [
+    "--hash-cache",
+    hashCachePath,
+    "--content-hashes",
+    contentHashesPath,
+    "--hash-order",
+    hashOrderPath,
+    "--filenames",
+    scopedSubsetPath(targetDir, scopeKey),
+    "--n-clusters",
+    String(nClusters),
+    "--output-tree",
+    treePath,
+  ];
+  if (existsSync(groupsFile)) args.push("--groups", groupsFile);
+  if (weights) {
+    for (const [key, val] of Object.entries(weights)) {
+      if (val !== undefined) args.push(`--${key.replace(/_/g, "-")}-weight`, String(val));
+    }
+  }
+
+  if (!existsSync(RUST_BINARY)) {
+    throw new Error(
+      `Rust binary not found at ${RUST_BINARY}. Build with: cd rust/cluster-tool && cargo build --release`,
+    );
+  }
+
+  log("cluster", `Running scoped linkage (${subsetFilenames.length} images): ${args.join(" ")}`);
+  const stdout = await runRustBinary(RUST_BINARY, args, "scoped-cluster", onProgress);
+  const rustOutput: RustOutput = JSON.parse(stdout);
+  return { rustOutput, scopeKey, meta };
+}
+
+function loadScopedMeta(targetDir: string, scopeKey: string): ScopedMeta {
+  const path = scopedMetaPath(targetDir, scopeKey);
+  if (!existsSync(path)) {
+    throw new Error(`Scope ${scopeKey} not found — enter scope again`);
+  }
+  return JSON.parse(readFileSync(path, "utf-8"));
+}
+
+function loadScopedTree(targetDir: string, scopeKey: string): LinkageTree {
+  const path = scopedTreePath(targetDir, scopeKey);
+  if (!existsSync(path)) {
+    throw new Error(`Scoped tree for ${scopeKey} missing — run scoped clustering first`);
+  }
+  return parseLinkageTree(path);
+}
+
+export async function runScopedFull(
+  targetDir: string,
+  groupIds: string[],
+  nClusters: number,
+  weights?: WeightConfig,
+  onProgress?: (line: string) => void,
+): Promise<ClusterData> {
+  const { rustOutput, scopeKey, meta } = await runScopedLinkage(
+    targetDir,
+    groupIds,
+    nClusters,
+    weights,
+    onProgress,
+  );
+
+  let clusters: ClusterResultData[];
+  try {
+    clusters = computeAutoNames(targetDir, rustOutput.clusters);
+  } catch {
+    clusters = clustersWithoutAutoNames(rustOutput.clusters);
+  }
+
+  const scope: ClusterScope = {
+    scopeKey,
+    groupIds,
+    groupNames: meta.groupNames,
+    nImages: meta.subsetFilenames.length,
+    subsetFilenames: meta.subsetFilenames,
+  };
+
+  return {
+    clusters,
+    suggestedCounts: computeSuggestedCounts(meta.subsetFilenames.length),
+    nClusters,
+    distanceProfile: distanceProfileFromTree(loadScopedTree(targetDir, scopeKey)),
+    scope,
+  };
+}
+
+export async function runScopedRecut(
+  targetDir: string,
+  scopeKey: string,
+  params: { nClusters?: number; threshold?: number; minClusterSize?: number },
+): Promise<ClusterData> {
+  // Tree staleness is surfaced to the client (treeStale flag → "Re-run scoped"
+  // banner), matching how the global tree handles it. The server trusts the
+  // caller and just re-cuts from disk.
+  const meta = loadScopedMeta(targetDir, scopeKey);
+  const tree = loadScopedTree(targetDir, scopeKey);
+  const nAfterPremerge = tree.nImages - tree.nPreMerges;
+
+  let labels: number[];
+  let resultN: number;
+
+  if (params.threshold != null) {
+    const { nPreMerges, steps } = tree;
+    let mainMerges = 0;
+    for (let i = nPreMerges; i < steps.length; i++) {
+      if (steps[i]!.distance >= params.threshold) break;
+      mainMerges++;
+    }
+    labels = cutTree(tree, mainMerges);
+    resultN = nAfterPremerge - mainMerges;
+  } else if (params.minClusterSize != null) {
+    // Scoped adaptive: approximate by mapping minClusterSize to a target N.
+    const target = Math.max(2, Math.floor(meta.subsetFilenames.length / params.minClusterSize));
+    const minClusters = Math.max(target, tree.nGroups);
+    const mainMergesNeeded = Math.max(0, nAfterPremerge - minClusters);
+    labels = cutTree(tree, mainMergesNeeded);
+    resultN = nAfterPremerge - mainMergesNeeded;
+  } else {
+    const n = params.nClusters ?? Math.max(10, Math.floor(meta.subsetFilenames.length / 20));
+    const minClusters = Math.max(n, tree.nGroups);
+    const mainMergesNeeded = Math.max(0, nAfterPremerge - minClusters);
+    labels = cutTree(tree, mainMergesNeeded);
+    resultN = nAfterPremerge - mainMergesNeeded;
+  }
+
+  return buildScopedRecutResult(
+    targetDir,
+    scopeKey,
+    meta,
+    labels,
+    resultN,
+    distanceProfileFromTree(tree),
+  );
+}
+
+async function buildScopedRecutResult(
+  targetDir: string,
+  scopeKey: string,
+  meta: ScopedMeta,
+  labels: number[],
+  nClusters: number,
+  distanceProfile: DistanceProfile,
+): Promise<ClusterData> {
+  const filenames = meta.subsetFilenames;
+  const clusters = buildClustersFromLabels(targetDir, filenames, labels, {
+    idPrefix: "scoped_cluster_",
+  });
+
+  const scope: ClusterScope = {
+    scopeKey,
+    groupIds: meta.groupIds,
+    groupNames: meta.groupNames,
+    nImages: meta.subsetFilenames.length,
+    subsetFilenames: meta.subsetFilenames,
+  };
+
+  return {
+    clusters,
+    suggestedCounts: computeSuggestedCounts(filenames.length),
+    nClusters,
+    distanceProfile,
+    scope,
+  };
+}
+
+export function clearScopedCache(targetDir: string): void {
+  const scopedDir = join(cacheDir(targetDir), "scoped");
+  if (existsSync(scopedDir)) {
+    rmSync(scopedDir, { recursive: true, force: true });
   }
 }
 

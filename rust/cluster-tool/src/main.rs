@@ -39,11 +39,11 @@ struct Cli {
     output_tree: String,
 
     /// CLIP feature weight
-    #[arg(long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = 0.0)]
     clip_weight: f32,
 
     /// Color feature weight
-    #[arg(long, default_value_t = 0.5)]
+    #[arg(long, default_value_t = 0.0)]
     color_weight: f32,
 
     /// DINOv2 feature weight
@@ -70,6 +70,12 @@ struct Cli {
     /// 1.0 = patches only, 0.0 = embeddings only, 0.5 = equal blend.
     #[arg(long, default_value_t = 1.0)]
     dist_matrix_weight: f32,
+
+    /// Optional path to a JSON array of filenames. When provided, clustering is
+    /// restricted to this subset (applied before group loading and embedding load).
+    /// Incompatible with --dist-matrix for now (matrix is indexed on the full set).
+    #[arg(long, default_value = "")]
+    filenames: String,
 }
 
 // ── Data types ───────────────────────────────────────────────────────────────
@@ -117,6 +123,12 @@ fn main() {
     let cli = Cli::parse();
 
     let use_dist_matrix = !cli.dist_matrix.is_empty();
+    let use_filename_subset = !cli.filenames.is_empty();
+
+    if use_dist_matrix && use_filename_subset {
+        eprintln!("ERROR: --filenames and --dist-matrix are incompatible (matrix is indexed on the full image set).");
+        std::process::exit(2);
+    }
 
     // Load content_hashes.json → sorted filenames + hash lookup
     let content_hashes: HashMap<String, String> = {
@@ -127,6 +139,29 @@ fn main() {
     };
     let mut filenames: Vec<String> = content_hashes.keys().cloned().collect();
     filenames.sort();
+
+    // Narrow to the subset-of-filenames if requested. Applied before group
+    // loading and embedding reindex so the rest of the pipeline is unchanged.
+    if use_filename_subset {
+        let subset_raw = std::fs::read_to_string(&cli.filenames)
+            .unwrap_or_else(|_| panic!("Missing --filenames path: {}", cli.filenames));
+        let subset_list: Vec<String> = serde_json::from_str(&subset_raw)
+            .unwrap_or_else(|_| panic!("Invalid --filenames JSON: {}", cli.filenames));
+        let subset_set: HashSet<String> = subset_list.into_iter().collect();
+        let before = filenames.len();
+        filenames.retain(|f| subset_set.contains(f));
+        eprintln!(
+            "Subset mode: narrowed {} → {} filenames (from {})",
+            before,
+            filenames.len(),
+            cli.filenames
+        );
+        if filenames.len() < 2 {
+            eprintln!("ERROR: subset has fewer than 2 filenames after intersection with content_hashes.json");
+            std::process::exit(2);
+        }
+    }
+
     let n_images = filenames.len();
 
     let fname_to_idx: HashMap<&str, usize> = filenames

@@ -107,14 +107,53 @@ export interface DistanceProfile {
   nGroups: number;
 }
 
+export interface ClusterScope {
+  scopeKey: string;
+  groupIds: string[];
+  groupNames: string[];
+  nImages: number;
+  subsetFilenames: string[];
+}
+
 export interface ClusterData {
   clusters: ClusterResultData[];
   suggestedCounts: number[];
   nClusters: number;
   distanceProfile?: DistanceProfile;
+  scope?: ClusterScope;
 }
 
 export interface ImportClusterInput {
   name: string;
   images: string[];
+}
+
+// Nearest-neighbor query types
+
+export type NNAggregation = "centroid" | "min";
+export type NNFilter = "any" | "in-group" | "not-in-group";
+
+export interface NNResult {
+  filename: string;
+  distance: number;
+  inGroupId: string | null;
+  inGroupName: string | null;
+}
+
+export interface NNQueryRequest {
+  queryFilenames: string[];
+  topN?: number;
+  filter?: NNFilter;
+  aggregation?: NNAggregation;
+  weights: WeightConfig;
+  usePatches: boolean;
+  restrictToFilenames?: string[];
+  excludeQuery?: boolean;
+}
+
+export interface NNQueryResponse {
+  results: NNResult[];
+  usedModels: string[];
+  queryCount: number;
+  patchesBlended: boolean;
 }

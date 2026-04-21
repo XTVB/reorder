@@ -1,13 +1,21 @@
 import type { Stats } from "node:fs";
 import { stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
-import type { ClusterData, ImageGroup, MergeSuggestionSimilar } from "./client/types.ts";
+import type {
+  ClusterData,
+  ImageGroup,
+  MergeSuggestionSimilar,
+  NNAggregation,
+  NNFilter,
+} from "./client/types.ts";
 import {
   broadcastProgress,
   buildImportedResult,
   cancelClusterJob,
   clearImportedClusters,
+  clearScopedCache,
   computeMergeSuggestions,
+  ensurePatchDistMatrix,
   ensureTextEmbeddings,
   extractFeatures,
   generateContactSheet,
@@ -17,18 +25,23 @@ import {
   type ImportClusterInput,
   invalidateClusterCache,
   isClusterJobRunning,
+  loadGroups,
   loadImportedClusters,
+  loadPatchDistMatrix,
   runFullCluster,
   runLinkageOnly,
   runRecut,
   runRecutAdaptive,
   runRecutByThreshold,
+  runScopedFull,
+  runScopedRecut,
   saveImportedClusters,
   setClusterJobRunning,
   subscribeProgress,
   type WeightConfig,
 } from "./cluster.ts";
 import { initLog, log, logData, logError } from "./log.ts";
+import { findNearestNeighbors, ModelMissingError } from "./nn-query.ts";
 import {
   canUndo,
   computeOrganize,
@@ -49,17 +62,6 @@ import { getThumbnail } from "./thumbnails.ts";
 
 const GROUPS_FILE = ".reorder-groups.json";
 
-async function readGroupsFile(targetDir: string): Promise<ImageGroup[]> {
-  try {
-    const file = Bun.file(join(targetDir, GROUPS_FILE));
-    if (await file.exists()) {
-      const data = await file.json();
-      return Array.isArray(data) ? data : Array.isArray(data?.groups) ? data.groups : [];
-    }
-  } catch {}
-  return [];
-}
-
 async function writeGroupsFile(targetDir: string, groups: ImageGroup[]) {
   const mainPath = join(targetDir, GROUPS_FILE);
   const backupPath = join(targetDir, ".reorder-groups.bak.json");
@@ -76,7 +78,7 @@ async function remapGroups(
   targetDir: string,
   renames: RenameMapping[],
 ): Promise<{ before: ImageGroup[]; after: ImageGroup[] }> {
-  const groups = await readGroupsFile(targetDir);
+  const groups = loadGroups(targetDir);
   if (groups.length === 0) return { before: [], after: [] };
   const renameMap = new Map(renames.map((r) => [r.from, r.to]));
   const remapped = groups.map((g) => ({
@@ -161,6 +163,57 @@ function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/json" },
+  });
+}
+
+type SSESend = (event: "progress" | "result" | "error", data: unknown) => void;
+
+/**
+ * Build an SSE Response that invokes `handler(send)` to produce events.
+ * Owns encoder, keepalive, and controller cleanup so callers only write logic.
+ */
+function sseResponse(handler: (send: SSESend) => Promise<void>): Response {
+  const stream = new ReadableStream({
+    async start(controller) {
+      const enc = new TextEncoder();
+      let closed = false;
+      const send: SSESend = (event, data) => {
+        if (closed) return;
+        try {
+          controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          closed = true;
+        }
+      };
+      const keepalive = setInterval(() => {
+        if (closed) return;
+        try {
+          controller.enqueue(enc.encode(": keepalive\n\n"));
+        } catch {
+          closed = true;
+        }
+      }, 30_000);
+      try {
+        await handler(send);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        send("error", { error: msg });
+      } finally {
+        clearInterval(keepalive);
+        if (!closed) {
+          try {
+            controller.close();
+          } catch {}
+        }
+      }
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
   });
 }
 
@@ -331,10 +384,8 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
         log(label, "Received reorder-by-groups request");
         const warnings: string[] = [];
 
-        const [groups, diskImages] = await Promise.all([
-          readGroupsFile(targetDir),
-          listImages(targetDir),
-        ]);
+        const groups = loadGroups(targetDir);
+        const diskImages = await listImages(targetDir);
         const diskSet = new Set(diskImages);
 
         log(
@@ -442,8 +493,7 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
 
     if (path === "/api/groups" && req.method === "GET") {
       return withRenameLock(async () => {
-        const groups = await readGroupsFile(targetDir);
-        return json(groups);
+        return json(loadGroups(targetDir));
       });
     }
 
@@ -519,60 +569,27 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
       setClusterJobRunning(true);
       log("cluster", `Full cluster request (SSE): n=${nClusters} usePatches=${usePatches}`);
 
-      const stream = new ReadableStream({
-        async start(controller) {
-          const enc = new TextEncoder();
-          let closed = false;
-          const send = (event: string, data: string) => {
-            if (closed) return;
-            try {
-              controller.enqueue(enc.encode(`event: ${event}\ndata: ${data}\n\n`));
-            } catch {
-              closed = true;
-            }
-          };
-          const keepalive = setInterval(() => {
-            if (closed) return;
-            try {
-              controller.enqueue(enc.encode(": keepalive\n\n"));
-            } catch {
-              closed = true;
-            }
-          }, 30_000);
-          try {
-            const result = await runFullCluster(
-              targetDir,
-              nClusters,
-              (line) => {
-                log("cluster", line);
-                broadcastProgress(line);
-                send("progress", JSON.stringify({ message: line }));
-              },
-              weights,
-              usePatches,
-            );
-            invalidateClusterCache();
-            log("cluster", `Returned ${result.clusters.length} clusters`);
-            broadcastProgress("");
-            send("result", JSON.stringify(result));
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            broadcastProgress("");
-            send("error", JSON.stringify({ error: msg }));
-          } finally {
-            clearInterval(keepalive);
-            setClusterJobRunning(false);
-            if (!closed) controller.close();
-          }
-        },
-      });
-
-      return new Response(stream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        },
+      return sseResponse(async (send) => {
+        try {
+          const result = await runFullCluster(
+            targetDir,
+            nClusters,
+            (line) => {
+              log("cluster", line);
+              broadcastProgress(line);
+              send("progress", { message: line });
+            },
+            weights,
+            usePatches,
+          );
+          invalidateClusterCache();
+          log("cluster", `Returned ${result.clusters.length} clusters`);
+          broadcastProgress("");
+          send("result", result);
+        } finally {
+          broadcastProgress("");
+          setClusterJobRunning(false);
+        }
       });
     }
 
@@ -693,54 +710,26 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
         `Extract embeddings request (SSE)${models ? ` models=${models.join(",")}` : ""}`,
       );
 
-      const stream = new ReadableStream({
-        async start(controller) {
-          const enc = new TextEncoder();
-          let closed = false;
-          const send = (event: string, data: string) => {
-            if (closed) return;
-            try {
-              controller.enqueue(enc.encode(`event: ${event}\ndata: ${data}\n\n`));
-            } catch {
-              closed = true;
-            }
-          };
-          // SSE keepalive: send a comment every 30s to prevent idle timeout
-          const keepalive = setInterval(() => {
-            if (closed) return;
-            try {
-              controller.enqueue(enc.encode(": keepalive\n\n"));
-            } catch {
-              closed = true;
-            }
-          }, 30_000);
-          try {
-            const signal = getClusterAbortSignal();
-            const result = await extractFeatures(
-              targetDir,
-              (line) => {
-                broadcastProgress(line);
-                send("progress", JSON.stringify({ message: line }));
-              },
-              models ? { force: models, signal } : { signal },
-            );
-            invalidateClusterCache();
-            await ensureTextEmbeddings(targetDir);
-            broadcastProgress("");
-            send("result", JSON.stringify(result));
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            broadcastProgress("");
-            send("error", JSON.stringify({ error: msg }));
-          } finally {
-            clearInterval(keepalive);
-            setClusterJobRunning(false);
-            if (!closed) controller.close();
-          }
-        },
-      });
-      return new Response(stream, {
-        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+      return sseResponse(async (send) => {
+        try {
+          const signal = getClusterAbortSignal();
+          const result = await extractFeatures(
+            targetDir,
+            (line) => {
+              broadcastProgress(line);
+              send("progress", { message: line });
+            },
+            models ? { force: models, signal } : { signal },
+          );
+          invalidateClusterCache();
+          clearScopedCache(targetDir); // embeddings changed → all scoped trees stale
+          await ensureTextEmbeddings(targetDir);
+          broadcastProgress("");
+          send("result", result);
+        } finally {
+          broadcastProgress("");
+          setClusterJobRunning(false);
+        }
       });
     }
 
@@ -815,102 +804,183 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
       const fullResolution = body.fullResolution ?? false;
       const maxCombinedSize = Math.max(0, Math.floor(body.maxCombinedSize ?? 0));
 
-      // SSE stream for progress + result (matches /api/cluster pattern)
-      const stream = new ReadableStream({
-        async start(controller) {
-          const enc = new TextEncoder();
-          let closed = false;
-          const send = (event: string, data: unknown) => {
-            if (closed) return;
-            try {
-              controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-            } catch {
-              closed = true;
-            }
-          };
-          const keepalive = setInterval(() => {
-            if (closed) return;
-            try {
-              controller.enqueue(enc.encode(": keepalive\n\n"));
-            } catch {
-              closed = true;
-            }
-          }, 30_000);
-          try {
-            const startTime = performance.now();
+      return sseResponse(async (send) => {
+        const startTime = performance.now();
 
-            const entries = await computeMergeSuggestions(targetDir, threshold, {
-              fullResolution,
-              maxCombinedSize,
-              onProgress: (msg) => send("progress", { message: msg }),
+        const entries = await computeMergeSuggestions(targetDir, threshold, {
+          fullResolution,
+          maxCombinedSize,
+          onProgress: (msg) => send("progress", { message: msg }),
+        });
+
+        const groupMap = new Map(loadGroups(targetDir).map((g) => [g.id, g]));
+        const rowMap = new Map<string, { refGroupId: string; similar: MergeSuggestionSimilar[] }>();
+
+        for (const d of entries) {
+          const gA = groupMap.get(d.group_a);
+          const gB = groupMap.get(d.group_b);
+          if (!gA || !gB) continue;
+
+          // 1 - patch_median so lower = more similar, matching the Ward-distance semantics used by other UI.
+          const displayDist = 1 - d.patch_median;
+
+          for (const [srcId, other] of [
+            [d.group_a, gB],
+            [d.group_b, gA],
+          ] as const) {
+            let row = rowMap.get(srcId);
+            if (!row) {
+              row = { refGroupId: srcId, similar: [] };
+              rowMap.set(srcId, row);
+            }
+            row.similar.push({
+              groupId: other.id,
+              groupName: other.name,
+              groupImages: other.images,
+              distance: displayDist,
             });
-
-            const groups = (await readGroupsFile(targetDir)) as ImageGroup[];
-            const groupMap = new Map(groups.map((g) => [g.id, g]));
-
-            const rowMap = new Map<
-              string,
-              { refGroupId: string; similar: MergeSuggestionSimilar[] }
-            >();
-
-            for (const d of entries) {
-              const gA = groupMap.get(d.group_a);
-              const gB = groupMap.get(d.group_b);
-              if (!gA || !gB) continue;
-
-              // 1 - patch_median so lower = more similar, matching the Ward-distance semantics used by other UI.
-              const displayDist = 1 - d.patch_median;
-
-              for (const [srcId, other] of [
-                [d.group_a, gB],
-                [d.group_b, gA],
-              ] as const) {
-                let row = rowMap.get(srcId);
-                if (!row) {
-                  row = { refGroupId: srcId, similar: [] };
-                  rowMap.set(srcId, row);
-                }
-                row.similar.push({
-                  groupId: other.id,
-                  groupName: other.name,
-                  groupImages: other.images,
-                  distance: displayDist,
-                });
-              }
-            }
-
-            const suggestions = Array.from(rowMap.values())
-              .map((row) => {
-                const g = groupMap.get(row.refGroupId)!;
-                row.similar.sort((a, b) => a.distance - b.distance);
-                row.similar = row.similar.slice(0, maxPerGroup);
-                return {
-                  refGroupId: row.refGroupId,
-                  refGroupName: g.name,
-                  refGroupImages: g.images,
-                  similar: row.similar,
-                };
-              })
-              .sort((a, b) => a.similar[0]!.distance - b.similar[0]!.distance);
-
-            const computeTimeMs = Math.round(performance.now() - startTime);
-            send("result", { suggestions, computeTimeMs });
-          } catch (err) {
-            send("error", { error: err instanceof Error ? err.message : "Unknown error" });
-          } finally {
-            clearInterval(keepalive);
-            if (!closed) controller.close();
           }
-        },
-      });
+        }
 
-      return new Response(stream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        },
+        const suggestions = Array.from(rowMap.values())
+          .map((row) => {
+            const g = groupMap.get(row.refGroupId)!;
+            row.similar.sort((a, b) => a.distance - b.distance);
+            row.similar = row.similar.slice(0, maxPerGroup);
+            return {
+              refGroupId: row.refGroupId,
+              refGroupName: g.name,
+              refGroupImages: g.images,
+              similar: row.similar,
+            };
+          })
+          .sort((a, b) => a.similar[0]!.distance - b.similar[0]!.distance);
+
+        const computeTimeMs = Math.round(performance.now() - startTime);
+        send("result", { suggestions, computeTimeMs });
       });
+    }
+
+    // ── Nearest-neighbor query (SSE — extraction may be needed) ──────
+    if (path === "/api/cluster/nn-query" && req.method === "POST") {
+      const body = (await req.json()) as {
+        queryFilenames?: string[];
+        topN?: number;
+        filter?: NNFilter;
+        aggregation?: NNAggregation;
+        weights?: WeightConfig;
+        usePatches?: boolean;
+        restrictToFilenames?: string[];
+        excludeQuery?: boolean;
+      };
+      if (!Array.isArray(body.queryFilenames) || body.queryFilenames.length === 0) {
+        return json({ error: "queryFilenames must be non-empty" }, 400);
+      }
+      const queryFilenames = body.queryFilenames;
+      const usePatches = body.usePatches ?? false;
+      const opts = {
+        topN: Math.max(1, Math.min(body.topN ?? 50, 500)),
+        filter: body.filter ?? "any",
+        aggregation: body.aggregation ?? "centroid",
+        excludeQuery: body.excludeQuery !== false,
+        weights: body.weights ?? {},
+        usePatches,
+        restrictToFilenames: body.restrictToFilenames,
+      };
+
+      return sseResponse(async (send) => {
+        let mutexTaken = false;
+        const onProgress = (msg: string) => send("progress", { message: msg });
+        const takeMutex = (): boolean => {
+          if (mutexTaken) return true;
+          if (isClusterJobRunning()) {
+            send("error", { error: "Clustering in progress — retry shortly" });
+            return false;
+          }
+          setClusterJobRunning(true);
+          mutexTaken = true;
+          return true;
+        };
+        try {
+          let patchDistances: Float64Array | null = null;
+          if (usePatches) {
+            if (!takeMutex()) return;
+            await ensurePatchDistMatrix(targetDir, onProgress);
+            patchDistances = loadPatchDistMatrix(targetDir).distances;
+          }
+
+          // Retry once: on ModelMissingError, extract the missing model and retry.
+          for (let attempt = 0; attempt <= 1; attempt++) {
+            try {
+              const result = findNearestNeighbors(targetDir, queryFilenames, opts, patchDistances);
+              send("result", result);
+              return;
+            } catch (err) {
+              if (!(err instanceof ModelMissingError) || attempt === 1) throw err;
+              if (!takeMutex()) return;
+              send("progress", { message: `Extracting missing model: ${err.modelKey}` });
+              await extractFeatures(targetDir, onProgress, {
+                force: [err.modelKey],
+                signal: getClusterAbortSignal(),
+              });
+              invalidateClusterCache();
+            }
+          }
+        } finally {
+          if (mutexTaken) setClusterJobRunning(false);
+        }
+      });
+    }
+
+    // ── Scoped clustering (subset of groups, SSE) ────────────────────
+    if (path === "/api/cluster/scoped" && req.method === "POST") {
+      const body = (await req.json()) as {
+        groupIds?: string[];
+        nClusters?: number;
+        weights?: WeightConfig;
+      };
+      if (!Array.isArray(body.groupIds) || body.groupIds.length === 0) {
+        return json({ error: "groupIds must be non-empty" }, 400);
+      }
+      if (isClusterJobRunning()) {
+        return json({ error: "Clustering already in progress" }, 409);
+      }
+      setClusterJobRunning(true);
+      const groupIds = body.groupIds;
+      const nClusters = body.nClusters ?? 50;
+      const weights = body.weights;
+
+      log("cluster", `Scoped cluster request: groups=${groupIds.join(",")} n=${nClusters}`);
+
+      return sseResponse(async (send) => {
+        try {
+          const result = await runScopedFull(targetDir, groupIds, nClusters, weights, (line) => {
+            broadcastProgress(line);
+            send("progress", { message: line });
+          });
+          broadcastProgress("");
+          send("result", result);
+        } finally {
+          broadcastProgress("");
+          setClusterJobRunning(false);
+        }
+      });
+    }
+
+    if (path === "/api/cluster/scoped/recut" && req.method === "POST") {
+      const body = (await req.json()) as {
+        scopeKey?: string;
+        nClusters?: number;
+        threshold?: number;
+        minClusterSize?: number;
+      };
+      if (!body.scopeKey) return json({ error: "scopeKey required" }, 400);
+      const result = await runScopedRecut(targetDir, body.scopeKey, {
+        nClusters: body.nClusters,
+        threshold: body.threshold,
+        minClusterSize: body.minClusterSize,
+      });
+      return json(result);
     }
 
     return json({ error: "Not found" }, 404);

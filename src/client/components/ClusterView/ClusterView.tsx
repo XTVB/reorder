@@ -1,13 +1,30 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import React, { useEffect, useRef } from "react";
 import { useRemeasureVirtualRows } from "../../hooks/useRemeasureVirtualRows.ts";
-import { useClusterStore } from "../../stores/clusterStore.ts";
+import { filenamesFromSelectedImages, useClusterStore } from "../../stores/clusterStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
+import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
 import { useUIStore } from "../../stores/uiStore.ts";
-import type { ClusterResultData } from "../../types.ts";
+import type { ClusterData, ClusterResultData } from "../../types.ts";
 import { Lightbox } from "../Lightbox.tsx";
 import { ClusterCard } from "./ClusterCard.tsx";
 import { MergeBar } from "./MergeBar.tsx";
+import { NNResultsModal } from "./NNResultsModal.tsx";
+import { ScopeBanner } from "./ScopeBanner.tsx";
+
+function getClusterSubtitle(
+  clusterData: ClusterData | null,
+  visibleCount: number,
+  groupCount: number,
+  loading: boolean,
+): string {
+  if (clusterData?.scope) {
+    const { scope } = clusterData;
+    return `Scoped: ${scope.groupIds.length} groups · ${scope.nImages} images`;
+  }
+  if (clusterData) return `${visibleCount} clusters — ${groupCount} groups`;
+  return loading ? "Loading..." : "Run clustering to start";
+}
 
 const EMPTY_CLUSTERS: ClusterResultData[] = [];
 
@@ -21,6 +38,7 @@ export function ClusterView() {
   const treeStale = useClusterStore((s) => s.treeStale);
   const focusedClusterId = useClusterStore((s) => s.focusedClusterId);
   const fetchClusters = useClusterStore((s) => s.fetchClusters);
+  const runScopedCluster = useClusterStore((s) => s.runScopedCluster);
   const toggleMergeSelect = useClusterStore((s) => s.toggleMergeSelect);
   const clearMergeSelection = useClusterStore((s) => s.clearMergeSelection);
   const mergeSelectedClusters = useClusterStore((s) => s.mergeSelectedClusters);
@@ -72,15 +90,11 @@ export function ClusterView() {
     loadCachedClusters();
   }, []);
 
-  // Update header subtitle
   // biome-ignore lint/correctness/useExhaustiveDependencies: setHeaderSubtitle is a stable Zustand action
   useEffect(() => {
-    const subtitle = clusterData
-      ? `${visibleClusters.length} clusters — ${groups.length} groups`
-      : loading
-        ? "Loading..."
-        : "Run clustering to start";
-    setHeaderSubtitle(subtitle);
+    setHeaderSubtitle(
+      getClusterSubtitle(clusterData, visibleClusters.length, groups.length, loading),
+    );
     return () => setHeaderSubtitle("");
   }, [visibleClusters.length, groups.length, clusterData, loading]);
 
@@ -173,6 +187,22 @@ export function ClusterView() {
           if (cluster?.confirmedGroup) addToGroup(cluster);
           break;
         }
+        case "f":
+        case "F": {
+          // Uppercase "F" or shift-modified "f" → NN for the cross-cluster selection.
+          // Lowercase "f" without shift → NN for the currently focused cluster.
+          const wantSelection = e.shiftKey || e.key === "F";
+          if (wantSelection) {
+            if (selectedImages.size === 0) break;
+            useNNQueryStore
+              .getState()
+              .openForSelection(filenamesFromSelectedImages(selectedImages));
+          } else {
+            const cluster = visibleClusters.find((c) => c.id === focusedClusterId);
+            if (cluster) useNNQueryStore.getState().openForCluster(cluster);
+          }
+          break;
+        }
       }
     }
     window.addEventListener("keydown", handleKey);
@@ -196,6 +226,7 @@ export function ClusterView() {
 
   return (
     <div className="cluster-view">
+      <ScopeBanner />
       {mergeSelection.size > 0 && (
         <MergeBar
           selection={mergeSelection}
@@ -265,26 +296,42 @@ export function ClusterView() {
           <button className="btn btn-accent" onClick={splitSelected}>
             Split to New Cluster
           </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() =>
+              useNNQueryStore
+                .getState()
+                .openForSelection(filenamesFromSelectedImages(selectedImages))
+            }
+            title="Find the nearest images to this selection (Shift+F)"
+          >
+            Find Nearest
+          </button>
           <button className="btn" onClick={clearImageSelection}>
             Deselect
           </button>
         </div>
       )}
 
-      {treeStale && (
+      {treeStale && clusterData && (
         <div className="cluster-stale-banner">
           Groups changed —{" "}
           <button
             className="btn btn-small btn-primary"
-            onClick={() => fetchClusters(clusterData?.nClusters)}
+            onClick={() =>
+              clusterData.scope
+                ? runScopedCluster(clusterData.scope.groupIds, { nClusters: clusterData.nClusters })
+                : fetchClusters(clusterData.nClusters)
+            }
           >
-            Re-run clustering
+            {clusterData.scope ? "Re-run scoped" : "Re-run clustering"}
           </button>{" "}
           to incorporate new groups as seeds
         </div>
       )}
 
       {renderLightbox()}
+      <NNResultsModal />
     </div>
   );
 }

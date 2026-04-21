@@ -1,6 +1,7 @@
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useClusterStore } from "../../stores/clusterStore.ts";
+import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
 import type { ClusterResultData } from "../../types.ts";
 import { cn, imageUrl } from "../../utils/helpers.ts";
 import { AskClaudeButton } from "../AskClaudeButton.tsx";
@@ -119,6 +120,13 @@ export function ClusterCard({
               Add {suggestedImages.length} to Group
             </button>
           )}
+          <button
+            className="btn btn-small"
+            onClick={() => useNNQueryStore.getState().openForCluster(cluster)}
+            title="Find images similar to this cluster (f)"
+          >
+            Find Similar
+          </button>
           <AskClaudeButton images={cluster.images} name={cluster.autoName || cluster.id} />
           <button className="btn btn-small btn-dismiss" onClick={onDismiss}>
             ×

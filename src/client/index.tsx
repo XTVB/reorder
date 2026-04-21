@@ -78,6 +78,10 @@ function ClusterActions() {
   const recutClusters = useClusterStore((s) => s.recutClusters);
   const recutByThreshold = useClusterStore((s) => s.recutByThreshold);
   const recutAdaptive = useClusterStore((s) => s.recutAdaptive);
+  const runScopedCluster = useClusterStore((s) => s.runScopedCluster);
+  const recutScopedByN = useClusterStore((s) => s.recutScopedByN);
+  const recutScopedByThreshold = useClusterStore((s) => s.recutScopedByThreshold);
+  const recutScopedAdaptive = useClusterStore((s) => s.recutScopedAdaptive);
   const expandAll = useClusterStore((s) => s.expandAll);
   const collapseAll = useClusterStore((s) => s.collapseAll);
   const acceptAllClusters = useClusterStore((s) => s.acceptAllClusters);
@@ -85,6 +89,16 @@ function ClusterActions() {
   const clearImportedClusters = useClusterStore((s) => s.clearImportedClusters);
   const visibleCount = clusterData?.clusters.length ?? 0;
   const hasError = progress.startsWith("Error:");
+  const scope = clusterData?.scope;
+  const inScope = !!scope;
+
+  const onRun =
+    inScope && scope
+      ? (n?: number) => runScopedCluster(scope.groupIds, { nClusters: n })
+      : fetchClusters;
+  const onRecut = inScope ? recutScopedByN : recutClusters;
+  const onRecutByThreshold = inScope ? recutScopedByThreshold : recutByThreshold;
+  const onRecutAdaptive = inScope ? recutScopedAdaptive : recutAdaptive;
 
   return (
     <ClusterToolbar
@@ -96,10 +110,11 @@ function ClusterActions() {
       distanceProfile={clusterData?.distanceProfile ?? null}
       weights={weights}
       usePatches={usePatches}
-      onRun={fetchClusters}
-      onRecut={recutClusters}
-      onRecutByThreshold={recutByThreshold}
-      onRecutAdaptive={recutAdaptive}
+      inScope={inScope}
+      onRun={onRun}
+      onRecut={onRecut}
+      onRecutByThreshold={onRecutByThreshold}
+      onRecutAdaptive={onRecutAdaptive}
       onWeightsChange={setWeights}
       onUsePatchesChange={setUsePatches}
       onExpandAll={expandAll}

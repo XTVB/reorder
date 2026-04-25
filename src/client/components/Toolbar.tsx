@@ -6,6 +6,7 @@ import { flushGroupPersist, useGroupStore } from "../stores/groupStore.ts";
 import { useImageStore } from "../stores/imageStore.ts";
 import { useSelectionStore } from "../stores/selectionStore.ts";
 import { useUIStore } from "../stores/uiStore.ts";
+import type { ImageGroup } from "../types.ts";
 import {
   generateContactSheetsBatch,
   getErrorMessage,
@@ -195,9 +196,9 @@ export function Toolbar() {
     }
   }
 
-  function handleGroupsToTop() {
+  function sortGroupsByGalleryOrder(): ImageGroup[] {
     const imageIndex = new Map(images.map((img, i) => [img.filename, i]));
-    const sortedGroups = [...groups].sort((a, b) => {
+    return [...groups].sort((a, b) => {
       const aIdx = a.images.reduce(
         (min, fn) => Math.min(min, imageIndex.get(fn) ?? Infinity),
         Infinity,
@@ -208,9 +209,28 @@ export function Toolbar() {
       );
       return aIdx - bIdx;
     });
+  }
 
+  function handleGroupsToTop() {
+    const sortedGroups = sortGroupsByGalleryOrder();
     const { imageMap, setImages } = useImageStore.getState();
     setImages(reorderImagesByGroups(images, imageMap, sortedGroups));
+  }
+
+  async function handleSaveJsonOrder() {
+    const sorted = sortGroupsByGalleryOrder();
+    const unchanged = sorted.every((g, i) => g.id === groups[i]?.id);
+    if (unchanged) {
+      showToast("JSON order already matches gallery", "success");
+      return;
+    }
+    useGroupStore.getState().updateGroups(() => sorted);
+    try {
+      await flushGroupPersist();
+      showToast("Saved group order to JSON", "success");
+    } catch (err) {
+      showToast(getErrorMessage(err, "Save group order failed"), "error");
+    }
   }
 
   const hasSelectionActions = selectedIds.size > 0;
@@ -259,17 +279,131 @@ export function Toolbar() {
           </button>
           <button
             className="btn btn-secondary"
+            onClick={handleSaveJsonOrder}
+            disabled={saving}
+            title="Reorder groups in .reorder-groups.json to match the current gallery order (no file renames)"
+          >
+            Save Order
+          </button>
+          <button
+            className="btn btn-secondary btn-icon"
             onClick={handleContactSheets}
             disabled={generatingSheets}
-            title="Generate a contact sheet for each group and copy paths to clipboard"
+            title={
+              generatingSheets
+                ? "Generating contact sheets..."
+                : "Generate a contact sheet for each group and copy paths to clipboard"
+            }
+            aria-label="Generate contact sheets"
           >
-            {generatingSheets ? "Generating..." : "Generate"}
+            {generatingSheets ? (
+              <svg
+                className="btn-spinner"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                role="presentation"
+              >
+                <circle
+                  cx="12"
+                  cy="12"
+                  r="9"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeOpacity="0.25"
+                />
+                <path
+                  d="M21 12a9 9 0 0 0-9-9"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" role="presentation">
+                <rect
+                  x="3"
+                  y="3"
+                  width="7"
+                  height="7"
+                  rx="1"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                />
+                <rect
+                  x="14"
+                  y="3"
+                  width="7"
+                  height="7"
+                  rx="1"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                />
+                <rect
+                  x="3"
+                  y="14"
+                  width="7"
+                  height="7"
+                  rx="1"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                />
+                <rect
+                  x="14"
+                  y="14"
+                  width="7"
+                  height="7"
+                  rx="1"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                />
+              </svg>
+            )}
           </button>
-          <button className="btn btn-secondary" onClick={() => setShowReview(true)}>
-            Review
+          <button
+            className="btn btn-secondary btn-icon"
+            onClick={() => setShowReview(true)}
+            title="Review groups"
+            aria-label="Review groups"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" role="presentation">
+              <path
+                d="M4 5l2 2 3-3M4 12l2 2 3-3M4 19l2 2 3-3"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M13 5h7M13 12h7M13 19h7"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
           </button>
-          <button className="btn btn-secondary" onClick={handleOrganizeClick} disabled={saving}>
-            Make Folders
+          <button
+            className="btn btn-secondary btn-icon"
+            onClick={handleOrganizeClick}
+            disabled={saving}
+            title="Organize groups into folders"
+            aria-label="Organize groups into folders"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" role="presentation">
+              <path
+                d="M3 5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5z"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M12 11v5M9.5 13.5h5"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
           </button>
         </div>
       )}

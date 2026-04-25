@@ -74,3 +74,14 @@
 .btn-icon:hover:not(:disabled) {
   color: var(--text);
 }
+
+.btn-spinner {
+  animation: btn-spinner-rotate 0.9s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes btn-spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}

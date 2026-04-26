@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDismissOnOutside } from "../hooks/useDismissOnOutside.ts";
 import { useGroupOperations } from "../hooks/useGroupOperations.ts";
 import { useFolderStore } from "../stores/folderStore.ts";
 import { flushGroupPersist, useGroupStore } from "../stores/groupStore.ts";
 import { useImageStore } from "../stores/imageStore.ts";
 import { useSelectionStore } from "../stores/selectionStore.ts";
+import { useTrashStore } from "../stores/trashStore.ts";
 import { useUIStore } from "../stores/uiStore.ts";
 import type { ImageGroup } from "../types.ts";
 import {
@@ -12,9 +13,11 @@ import {
   getErrorMessage,
   postJson,
   reorderImagesByGroups,
+  selectedImageFilenames as selectedImageFilenamesFromIds,
   stripFolderNumber,
 } from "../utils/helpers.ts";
 import { GroupPicker } from "./GroupPicker.tsx";
+import { TrashIcon } from "./TrashIcon.tsx";
 
 export function Toolbar() {
   const images = useImageStore((s) => s.images);
@@ -48,7 +51,29 @@ export function Toolbar() {
 
   const groupOps = useGroupOperations();
 
+  const markedTrashIds = useTrashStore((s) => s.markedIds);
+  const markTrash = useTrashStore((s) => s.mark);
+  const unmarkTrash = useTrashStore((s) => s.unmark);
+  const setShowTrashModal = useUIStore((s) => s.setShowTrashModal);
+
   const [generatingSheets, setGeneratingSheets] = useState(false);
+
+  const selectedImageFilenames = useMemo(
+    () => selectedImageFilenamesFromIds(selectedIds),
+    [selectedIds],
+  );
+  const selectionAllMarked =
+    selectedImageFilenames.length > 0 &&
+    selectedImageFilenames.every((fn) => markedTrashIds.has(fn));
+  const selectionTrashLabel = selectionAllMarked
+    ? "Unmark selection from deletion"
+    : "Mark selection for deletion";
+
+  function handleSelectionMarkTrash() {
+    if (selectedImageFilenames.length === 0) return;
+    if (selectionAllMarked) unmarkTrash(selectedImageFilenames);
+    else markTrash(selectedImageFilenames);
+  }
 
   // Update header subtitle when counts change
   // biome-ignore lint/correctness/useExhaustiveDependencies: setHeaderSubtitle is a stable Zustand action
@@ -237,6 +262,8 @@ export function Toolbar() {
   const hasGroupManagement = !folderModeEnabled && groups.length > 0;
   const showUndo = !folderModeEnabled && canUndo;
   const showSlideshow = !folderModeEnabled && images.length > 0;
+  const trashCount = !folderModeEnabled ? markedTrashIds.size : 0;
+  const showTrashButton = trashCount > 0;
 
   return (
     <>
@@ -261,6 +288,16 @@ export function Toolbar() {
                 />
               )}
             </>
+          )}
+          {!folderModeEnabled && selectedImageFilenames.length > 0 && (
+            <button
+              className="btn btn-secondary btn-icon"
+              onClick={handleSelectionMarkTrash}
+              title={`${selectionTrashLabel} (D)`}
+              aria-label={selectionTrashLabel}
+            >
+              <TrashIcon size={18} variant={selectionAllMarked ? "minus" : "plus"} />
+            </button>
           )}
         </div>
       )}
@@ -407,7 +444,7 @@ export function Toolbar() {
           </button>
         </div>
       )}
-      {(showUndo || showSlideshow) && (
+      {(showUndo || showSlideshow || showTrashButton) && (
         <div className="toolbar-group">
           {showUndo && (
             <button
@@ -462,6 +499,17 @@ export function Toolbar() {
               />
             </svg>
           </button>
+          {showTrashButton && (
+            <button
+              className="btn btn-secondary btn-icon toolbar-trash-btn"
+              onClick={() => setShowTrashModal(true)}
+              title={`Review ${trashCount} file${trashCount === 1 ? "" : "s"} marked for deletion`}
+              aria-label={`Review ${trashCount} marked for deletion`}
+            >
+              <TrashIcon size={16} />
+              <span className="toolbar-trash-count">{trashCount}</span>
+            </button>
+          )}
         </div>
       )}
       {folderModeEnabled ? (

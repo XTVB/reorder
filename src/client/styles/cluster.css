@@ -125,6 +125,13 @@
 .cluster-card.fully-grouped {
   opacity: 0.6;
 }
+.cluster-card.is-search-match {
+  border-color: var(--highlight);
+  box-shadow:
+    0 0 0 2px var(--highlight),
+    0 0 20px rgba(255, 204, 0, 0.4);
+  opacity: 1;
+}
 
 /* Cluster header */
 .cluster-header {
@@ -337,6 +344,11 @@
   border-color: var(--danger);
   border-style: solid;
   box-shadow: 0 0 0 2px var(--danger);
+}
+.cluster-thumb.search-match.search-match {
+  border-color: var(--highlight);
+  border-style: solid;
+  box-shadow: 0 0 0 2px var(--highlight);
 }
 .cluster-thumb img {
   width: 100%;
@@ -655,15 +667,18 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  flex: 1;
-  overflow: hidden;
 }
 
 .nn-toolbar {
+  position: sticky;
+  top: -16px;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 4px 0;
+  padding: 12px 0 8px;
+  margin-top: -12px;
+  background: var(--surface);
   flex-wrap: wrap;
   flex-shrink: 0;
 }
@@ -758,11 +773,8 @@
 
 .nn-results-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px;
-  overflow-y: auto;
-  flex: 1;
-  min-height: 0;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -770,42 +782,38 @@
 }
 .nn-card {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface);
+  aspect-ratio: 1 / 1;
+  background: var(--bg);
   border: 2px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
   transition:
     border-color 0.15s,
-    box-shadow 0.15s;
+    box-shadow 0.15s,
+    transform 0.1s;
 }
 .nn-card:hover {
   border-color: rgba(34, 211, 238, 0.5);
+  transform: scale(1.01);
 }
 .nn-card-selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
 }
 .nn-card-image {
-  position: relative;
-  aspect-ratio: 1 / 1;
+  position: absolute;
+  inset: 0;
   background: var(--bg);
   padding: 0;
   border: none;
   cursor: zoom-in;
   overflow: hidden;
-  display: block;
 }
 .nn-card-image img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
-  transition: transform 0.15s;
-}
-.nn-card-image:hover img {
-  transform: scale(1.02);
 }
 .nn-card-dist {
   position: absolute;
@@ -819,16 +827,17 @@
   font-variant-numeric: tabular-nums;
   font-weight: 600;
   pointer-events: none;
+  z-index: 2;
 }
 .nn-card-select {
   position: absolute;
   top: 6px;
   left: 6px;
-  z-index: 2;
-  width: 24px;
-  height: 24px;
+  z-index: 3;
+  width: 26px;
+  height: 26px;
   padding: 0;
-  border: 2px solid rgba(255, 255, 255, 0.7);
+  border: 2px solid rgba(255, 255, 255, 0.75);
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
@@ -836,7 +845,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   transition:
     background 0.15s,
@@ -856,34 +865,44 @@
   line-height: 1;
 }
 .nn-card-meta {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 6px 8px 8px;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 24px 8px 8px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0) 100%);
+  pointer-events: none;
+  z-index: 2;
   min-width: 0;
 }
 .nn-card-name {
   font-size: 11px;
-  color: var(--text);
+  color: rgba(255, 255, 255, 0.95);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  min-width: 0;
+  flex-shrink: 1;
 }
 .nn-card-group {
   font-size: 10px;
-  color: #67e8f9;
-  background: rgba(14, 116, 144, 0.18);
-  border: 1px solid rgba(34, 211, 238, 0.3);
+  color: #a5f3fc;
+  background: rgba(14, 116, 144, 0.55);
+  border: 1px solid rgba(34, 211, 238, 0.5);
   padding: 1px 6px;
   border-radius: 4px;
-  align-self: flex-start;
-  max-width: 100%;
+  max-width: 60%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .nn-footer-status {

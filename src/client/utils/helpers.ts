@@ -27,6 +27,14 @@ export function fromFolderSortId(id: string): string {
   return id.slice(FOLDER_PREFIX.length);
 }
 
+export function selectedImageFilenames(selectedIds: Iterable<string>): string[] {
+  const out: string[] = [];
+  for (const id of selectedIds) {
+    if (!isGroupSortId(id) && !isFolderSortId(id)) out.push(id);
+  }
+  return out;
+}
+
 export function stripFolderNumber(name: string): string {
   return name.replace(/^\d+\s*-\s*/, "").trim();
 }

@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
 import { useGroupStore } from "../stores/groupStore.ts";
 import { useSelectionStore } from "../stores/selectionStore.ts";
+import { useTrashStore } from "../stores/trashStore.ts";
 import { useUIStore } from "../stores/uiStore.ts";
+import { selectedImageFilenames } from "../utils/helpers.ts";
 
 interface KeyboardShortcutsDeps {
   isLightboxOpen: boolean;
@@ -51,6 +53,13 @@ export function useKeyboardShortcuts({
         if (groupsEnabled && selectedIds.size > 0 && groups.length > 0) {
           useUIStore.getState().setShowGroupPicker(true);
         }
+      } else if (e.key === "d" || e.key === "D") {
+        const fns = selectedImageFilenames(useSelectionStore.getState().selectedIds);
+        if (fns.length === 0) return;
+        const trash = useTrashStore.getState();
+        const allMarked = fns.every((fn) => trash.markedIds.has(fn));
+        if (allMarked) trash.unmark(fns);
+        else trash.mark(fns);
       }
     }
     window.addEventListener("keydown", handleKey);

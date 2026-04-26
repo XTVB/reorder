@@ -56,6 +56,7 @@ interface UIState {
   showPaths: boolean;
   showReview: boolean;
   showGroupPicker: boolean;
+  showTrashModal: boolean;
   slideshow: SlideshowState;
   toast: Toast | null;
   canUndo: boolean;
@@ -73,6 +74,7 @@ interface UIState {
   setShowPaths: (show: boolean) => void;
   setShowReview: (show: boolean) => void;
   setShowGroupPicker: (show: boolean) => void;
+  setShowTrashModal: (show: boolean) => void;
   openSlideshow: (startIndex: number) => void;
   closeSlideshow: () => void;
   setSlideshowPlaying: (playing: boolean) => void;
@@ -96,6 +98,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   showPaths: false,
   showReview: false,
   showGroupPicker: false,
+  showTrashModal: false,
   slideshow: {
     open: false,
     startIndex: 0,
@@ -120,6 +123,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   setShowPaths: (show) => set({ showPaths: show }),
   setShowReview: (show) => set({ showReview: show }),
   setShowGroupPicker: (show) => set({ showGroupPicker: show }),
+  setShowTrashModal: (show) => set({ showTrashModal: show }),
 
   openSlideshow: (startIndex) =>
     set((s) => ({

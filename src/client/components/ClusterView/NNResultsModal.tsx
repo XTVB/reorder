@@ -224,6 +224,15 @@ function NNCard({
     <div className={cn("nn-card", selected && "nn-card-selected")}>
       <button
         type="button"
+        className="nn-card-image"
+        onClick={onOpenLightbox}
+        title={`Open ${filename}`}
+        aria-label={`Open ${filename}`}
+      >
+        <img src={imageUrl(filename)} alt="" loading="lazy" decoding="async" draggable={false} />
+      </button>
+      <button
+        type="button"
         className="nn-card-select"
         onClick={(e) => {
           e.stopPropagation();
@@ -236,16 +245,7 @@ function NNCard({
           {selected ? "✓" : ""}
         </span>
       </button>
-      <button
-        type="button"
-        className="nn-card-image"
-        onClick={onOpenLightbox}
-        title={`Open ${filename}`}
-        aria-label={`Open ${filename}`}
-      >
-        <img src={imageUrl(filename)} alt="" loading="lazy" decoding="async" draggable={false} />
-        <span className="nn-card-dist">{distance.toFixed(3)}</span>
-      </button>
+      <span className="nn-card-dist">{distance.toFixed(3)}</span>
       <div className="nn-card-meta">
         <span className="nn-card-name" title={filename}>
           {filename}

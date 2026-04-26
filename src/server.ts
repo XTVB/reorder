@@ -46,6 +46,7 @@ import {
   canUndo,
   computeOrganize,
   computeRenames,
+  executeDelete,
   executeFolderSave,
   executeOrganize,
   executeRenames,
@@ -481,6 +482,86 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
           `Complete in ${elapsed}ms — ${effective.length} files reversed${warnings.length > 0 ? `, ${warnings.length} warning(s)` : ""}`,
         );
         return json({ success: true, renames, warnings });
+      });
+    }
+
+    if (path === "/api/delete" && req.method === "POST") {
+      const body = (await req.json()) as { filenames?: string[] };
+      const filenames = Array.isArray(body.filenames) ? body.filenames : [];
+      if (filenames.length === 0) {
+        return json({ error: "filenames must be a non-empty array" }, 400);
+      }
+      // Reject any compound paths — only bare filenames in targetDir are allowed
+      for (const fn of filenames) {
+        if (fn.includes("/") || fn.includes("..") || fn.startsWith(".")) {
+          return json({ error: `Invalid filename: ${fn}` }, 400);
+        }
+      }
+      return withRenameLock(async () => {
+        const t0 = Date.now();
+        log("delete", `Received delete request: ${filenames.length} files`);
+        logData("delete", "Files to delete", filenames.join("\n"));
+        const warnings: string[] = [];
+
+        const { deleted, missing } = await executeDelete(targetDir, filenames);
+        log(
+          "delete",
+          `Trash complete: ${deleted.length} moved to Trash, ${missing.length} missing`,
+        );
+        if (missing.length > 0) {
+          warnings.push(`${missing.length} file(s) not found on disk (skipped)`);
+          logData("delete", "Missing files", missing.join("\n"));
+        }
+
+        if (deleted.length > 0) {
+          const deletedSet = new Set(deleted);
+
+          const pruneGroups = async () => {
+            try {
+              const groups = loadGroups(targetDir);
+              if (groups.length === 0) return;
+              if (!groups.some((g) => g.images.some((fn) => deletedSet.has(fn)))) return;
+              const cleaned = groups
+                .map((g) => ({ ...g, images: g.images.filter((fn) => !deletedSet.has(fn)) }))
+                .filter((g) => g.images.length > 0);
+              await writeGroupsFile(targetDir, cleaned);
+              log("delete", `Pruned groups: ${cleaned.length} remaining`);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              logError("delete", "Group prune failed", err);
+              warnings.push(`Group cleanup failed: ${msg}`);
+            }
+          };
+
+          const pruneHashes = async () => {
+            try {
+              const hashesPath = join(targetDir, ".reorder-cache", "content_hashes.json");
+              if (!(await Bun.file(hashesPath).exists())) return;
+              const hashes: Record<string, string> = await Bun.file(hashesPath).json();
+              const filtered: Record<string, string> = {};
+              let changed = false;
+              for (const [k, v] of Object.entries(hashes)) {
+                if (deletedSet.has(k)) changed = true;
+                else filtered[k] = v;
+              }
+              if (changed) await Bun.write(hashesPath, JSON.stringify(filtered));
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              logError("delete", "content_hashes prune failed", err);
+              warnings.push(`Content hashes cleanup failed: ${msg}`);
+            }
+          };
+
+          await Promise.all([pruneGroups(), pruneHashes()]);
+          invalidateClusterCache();
+        }
+
+        const elapsed = Date.now() - t0;
+        log(
+          "delete",
+          `Complete in ${elapsed}ms — ${deleted.length} files moved to Trash${warnings.length > 0 ? `, ${warnings.length} warning(s)` : ""}`,
+        );
+        return json({ success: true, deleted, missing, warnings });
       });
     }
 

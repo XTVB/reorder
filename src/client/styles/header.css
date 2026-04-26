@@ -64,13 +64,24 @@
 }
 
 .toolbar-group .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   background: transparent;
   color: var(--text);
-  padding: 6px 13px;
-  font-size: 16px;
+  padding: 6px 10px;
+  font-size: 15px;
   font-weight: 500;
+  line-height: 16px;
+  min-height: 28px;
   border-radius: 5px;
   border: 1px solid transparent;
+}
+
+.toolbar-group .btn > svg {
+  display: block;
+  vertical-align: middle;
 }
 
 .toolbar-group .btn:hover:not(:disabled) {
@@ -179,4 +190,21 @@
 
 .overflow-menu-danger:hover:not(:disabled) {
   background: rgba(255, 87, 87, 0.12);
+}
+
+.toolbar-group .toolbar-trash-btn {
+  color: var(--danger);
+  gap: 6px;
+}
+
+.toolbar-group .toolbar-trash-btn:hover:not(:disabled) {
+  background: rgba(255, 87, 87, 0.12);
+}
+
+.toolbar-trash-count {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--danger);
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
 }

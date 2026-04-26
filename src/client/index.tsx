@@ -15,6 +15,7 @@ import { useGroupStore } from "./stores/groupStore.ts";
 import { useImageStore } from "./stores/imageStore.ts";
 import { useMergeSuggestionsStore } from "./stores/mergeSuggestionsStore.ts";
 import { useSelectionStore } from "./stores/selectionStore.ts";
+import { useTrashStore } from "./stores/trashStore.ts";
 import { useUIStore } from "./stores/uiStore.ts";
 
 // Expose all stores on window for console access / debugging
@@ -26,6 +27,7 @@ import { useUIStore } from "./stores/uiStore.ts";
   ui: useUIStore,
   cluster: useClusterStore,
   mergeSuggestions: useMergeSuggestionsStore,
+  trash: useTrashStore,
 };
 
 function AppShell() {

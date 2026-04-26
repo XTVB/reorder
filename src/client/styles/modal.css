@@ -414,3 +414,126 @@
   color: var(--text-muted);
   align-self: center;
 }
+
+/* Trash modal */
+.trash-modal {
+  max-width: 880px;
+  max-height: 90vh;
+}
+
+.trash-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trash-modal-count {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(255, 87, 87, 0.15);
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.trash-modal-body {
+  padding: 16px 20px;
+}
+
+.trash-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 32px 0;
+}
+
+.trash-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+  max-height: 65vh;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.trash-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid rgba(255, 87, 87, 0.35);
+  border-radius: 6px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.trash-thumb {
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  border: none;
+  background: var(--bg);
+  cursor: zoom-in;
+  overflow: hidden;
+  transition: transform 0.1s;
+}
+
+.trash-thumb:hover {
+  transform: scale(1.02);
+}
+
+.trash-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0.85;
+}
+
+.trash-item-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.trash-item-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trash-item-unmark {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+
+.trash-item-unmark:hover {
+  background: rgba(255, 87, 87, 0.15);
+  color: var(--danger);
+}
+
+.trash-footer-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  align-self: center;
+}

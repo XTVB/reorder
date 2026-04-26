@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import React, { useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRemeasureVirtualRows } from "../../hooks/useRemeasureVirtualRows.ts";
 import { filenamesFromSelectedImages, useClusterStore } from "../../stores/clusterStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
@@ -7,6 +7,7 @@ import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
 import { useUIStore } from "../../stores/uiStore.ts";
 import type { ClusterData, ClusterResultData } from "../../types.ts";
 import { Lightbox } from "../Lightbox.tsx";
+import { SearchOverlay, useSearchOverlayState } from "../SearchBar.tsx";
 import { ClusterCard } from "./ClusterCard.tsx";
 import { MergeBar } from "./MergeBar.tsx";
 import { NNResultsModal } from "./NNResultsModal.tsx";
@@ -123,6 +124,63 @@ export function ClusterView() {
 
   useRemeasureVirtualRows(virtualizer, scrollContainerRef, [visibleClusters, collapsedClusters]);
 
+  const search = useSearchOverlayState();
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+
+  const normalizedQuery = useMemo(() => search.query.trim().toLowerCase(), [search.query]);
+
+  const matchRowIndices = useMemo(() => {
+    if (!normalizedQuery) return [] as number[];
+    const indices: number[] = [];
+    for (let i = 0; i < visibleClusters.length; i++) {
+      const c = visibleClusters[i]!;
+      const nameHit =
+        c.autoName.toLowerCase().includes(normalizedQuery) ||
+        (c.confirmedGroup?.name.toLowerCase().includes(normalizedQuery) ?? false);
+      const fileHit = !nameHit && c.images.some((f) => f.toLowerCase().includes(normalizedQuery));
+      if (nameHit || fileHit) indices.push(i);
+    }
+    return indices;
+  }, [visibleClusters, normalizedQuery]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: query is the intentional trigger; body only resets the cursor
+  useEffect(() => {
+    setCurrentMatchIndex(0);
+  }, [normalizedQuery]);
+
+  const clampedMatchIndex =
+    matchRowIndices.length === 0 ? 0 : Math.min(currentMatchIndex, matchRowIndices.length - 1);
+  const currentMatchRowIndex = matchRowIndices[clampedMatchIndex];
+  const currentMatchClusterId =
+    currentMatchRowIndex !== undefined ? (visibleClusters[currentMatchRowIndex]?.id ?? null) : null;
+
+  const currentMatchFilenames = useMemo(() => {
+    if (currentMatchRowIndex === undefined || !normalizedQuery) return undefined;
+    const cluster = visibleClusters[currentMatchRowIndex];
+    if (!cluster) return undefined;
+    const matches = new Set<string>();
+    for (const f of cluster.images) {
+      if (f.toLowerCase().includes(normalizedQuery)) matches.add(f);
+    }
+    return matches;
+  }, [currentMatchRowIndex, visibleClusters, normalizedQuery]);
+
+  useEffect(() => {
+    if (currentMatchRowIndex !== undefined) {
+      virtualizer.scrollToIndex(currentMatchRowIndex, { align: "center" });
+    }
+  }, [currentMatchRowIndex, virtualizer]);
+
+  const goNextMatch = useCallback(() => {
+    if (matchRowIndices.length === 0) return;
+    setCurrentMatchIndex((i) => (i + 1) % matchRowIndices.length);
+  }, [matchRowIndices.length]);
+
+  const goPrevMatch = useCallback(() => {
+    if (matchRowIndices.length === 0) return;
+    setCurrentMatchIndex((i) => (i - 1 + matchRowIndices.length) % matchRowIndices.length);
+  }, [matchRowIndices.length]);
+
   // Focus scrolling via virtualizer
   // biome-ignore lint/correctness/useExhaustiveDependencies: focusedClusterId is the intentional trigger; virtualizer/visibleClusters are stable between renders
   useEffect(() => {
@@ -227,6 +285,18 @@ export function ClusterView() {
   return (
     <div className="cluster-view">
       <ScopeBanner />
+      <SearchOverlay
+        isOpen={search.isOpen}
+        query={search.query}
+        setQuery={search.setQuery}
+        open={search.open}
+        close={search.close}
+        matchCount={matchRowIndices.length}
+        currentMatchIndex={clampedMatchIndex}
+        onNext={goNextMatch}
+        onPrev={goPrevMatch}
+        placeholder="Search clusters or filenames..."
+      />
       {mergeSelection.size > 0 && (
         <MergeBar
           selection={mergeSelection}
@@ -270,6 +340,10 @@ export function ClusterView() {
                     mergeSelected={mergeSelection.has(cluster.id)}
                     focused={focusedClusterId === cluster.id}
                     selectedImages={selectedImages}
+                    isCurrentSearchMatch={cluster.id === currentMatchClusterId}
+                    searchMatchFilenames={
+                      cluster.id === currentMatchClusterId ? currentMatchFilenames : undefined
+                    }
                     onToggleCollapse={() => toggleCollapsed(cluster.id)}
                     onMergeSelect={(e) => {
                       if (e.metaKey || e.ctrlKey) toggleMergeSelect(cluster.id);

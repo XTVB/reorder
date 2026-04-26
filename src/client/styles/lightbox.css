@@ -115,3 +115,53 @@
   color: var(--accent);
   font-weight: 500;
 }
+
+.lightbox-trash {
+  position: absolute;
+  top: 16px;
+  right: 64px;
+  z-index: 510;
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius);
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.lightbox-trash:hover {
+  background: rgba(255, 87, 87, 0.18);
+  color: white;
+  border-color: rgba(255, 87, 87, 0.45);
+}
+
+.lightbox-trash-active {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: white;
+}
+
+.lightbox-trash-active:hover {
+  background: #e64545;
+  border-color: #e64545;
+}
+
+.lightbox-marked {
+  margin-left: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 87, 87, 0.18);
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}

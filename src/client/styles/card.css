@@ -104,3 +104,30 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.card-marked-trash {
+  border-color: rgba(255, 87, 87, 0.55);
+  box-shadow: 0 0 0 2px rgba(255, 87, 87, 0.45);
+}
+
+.card-marked-trash .card-thumb {
+  opacity: 0.55;
+  filter: grayscale(0.4);
+}
+
+.card-trash-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}

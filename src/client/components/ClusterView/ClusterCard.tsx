@@ -12,6 +12,8 @@ interface Props {
   mergeSelected: boolean;
   focused: boolean;
   selectedImages: Set<string>;
+  isCurrentSearchMatch?: boolean;
+  searchMatchFilenames?: Set<string>;
   onToggleCollapse: () => void;
   onMergeSelect: (e: React.MouseEvent) => void;
   onImageSelect: (filename: string) => void;
@@ -28,6 +30,8 @@ export function ClusterCard({
   mergeSelected,
   focused,
   selectedImages,
+  isCurrentSearchMatch,
+  searchMatchFilenames,
   onToggleCollapse,
   onMergeSelect,
   onImageSelect,
@@ -60,6 +64,7 @@ export function ClusterCard({
     mergeSelected && "merge-selected",
     focused && "focused",
     isFullyGrouped && "fully-grouped",
+    isCurrentSearchMatch && "is-search-match",
   );
 
   function renderThumbs(files: string[], confirmed: boolean) {
@@ -70,6 +75,7 @@ export function ClusterCard({
         index={imageIndex.get(f)!}
         isConfirmed={confirmed}
         isSelected={selectedImages.has(`${cluster.id}:${f}`)}
+        isSearchMatch={searchMatchFilenames?.has(f) ?? false}
         onSelect={onImageSelect}
         onRangeSelect={onImageRangeSelect}
         onOpenLightbox={onOpenLightbox}
@@ -170,6 +176,7 @@ function ThumbCard({
   index,
   isConfirmed,
   isSelected,
+  isSearchMatch,
   onSelect,
   onRangeSelect,
   onOpenLightbox,
@@ -178,6 +185,7 @@ function ThumbCard({
   index: number;
   isConfirmed: boolean;
   isSelected: boolean;
+  isSearchMatch: boolean;
   onSelect: (f: string) => void;
   onRangeSelect: (i: number) => void;
   onOpenLightbox: (i: number) => void;
@@ -186,6 +194,7 @@ function ThumbCard({
     "cluster-thumb",
     isConfirmed ? "confirmed" : "suggested",
     isSelected && "selected",
+    isSearchMatch && "search-match",
   );
 
   return (

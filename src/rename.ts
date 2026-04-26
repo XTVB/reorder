@@ -58,7 +58,7 @@ export function isImageFile(filename: string): boolean {
 export async function listImages(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   return entries
-    .filter((e) => e.isFile() && isImageFile(e.name))
+    .filter((e) => (e.isFile() || e.isSymbolicLink()) && isImageFile(e.name))
     .map((e) => e.name)
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
@@ -327,6 +327,63 @@ export async function executeOrganize(
   );
 
   return mappings;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Move files to macOS Trash via Finder (preserves "Put Back")        */
+/* ------------------------------------------------------------------ */
+
+export interface DeleteResult {
+  deleted: string[];
+  missing: string[];
+}
+
+export async function executeDelete(dir: string, filenames: string[]): Promise<DeleteResult> {
+  try {
+    await access(dir, constants.W_OK);
+  } catch {
+    throw new Error(`No write permission for directory: ${dir}`);
+  }
+
+  const present: string[] = [];
+  const missing: string[] = [];
+  await Promise.all(
+    filenames.map(async (fn) => {
+      try {
+        await access(join(dir, fn), constants.F_OK);
+        present.push(fn);
+      } catch {
+        missing.push(fn);
+      }
+    }),
+  );
+  if (present.length === 0) return { deleted: [], missing };
+
+  // Use Finder via osascript so files land in Trash with "Put Back" support.
+  const args: string[] = ["osascript", "-e", 'tell application "Finder"'];
+  for (const fn of present) {
+    const abs = join(dir, fn).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    args.push("-e", `delete (POSIX file "${abs}")`);
+  }
+  args.push("-e", "end tell");
+
+  const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`Trash delete failed (osascript exit ${exitCode}): ${stderr.trim()}`);
+  }
+
+  const tags = await readTagsJson(dir);
+  if (tags) {
+    const deletedSet = new Set(present);
+    const remaining = Object.fromEntries(
+      Object.entries(tags).filter(([key]) => !deletedSet.has(key)),
+    );
+    await Bun.write(join(dir, TAGS_FILE), JSON.stringify(remaining, null, 2));
+  }
+
+  return { deleted: present, missing };
 }
 
 /* ------------------------------------------------------------------ */

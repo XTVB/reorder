@@ -29,6 +29,7 @@ import { Slideshow } from "./components/Slideshow.tsx";
 import { SortableCard } from "./components/SortableCard.tsx";
 import { SortableFolderCard } from "./components/SortableFolderCard.tsx";
 import { SortableGroupCard } from "./components/SortableGroupCard.tsx";
+import { TrashModal } from "./components/TrashModal.tsx";
 import { useDragHandlers } from "./hooks/useDragHandlers.ts";
 import { useGridLayout } from "./hooks/useGridLayout.ts";
 import { useGroupOperations } from "./hooks/useGroupOperations.ts";
@@ -38,6 +39,7 @@ import { useFolderStore } from "./stores/folderStore.ts";
 import { flushGroupPersist, useGroupStore } from "./stores/groupStore.ts";
 import { useImageStore } from "./stores/imageStore.ts";
 import { useSelectionStore } from "./stores/selectionStore.ts";
+import { useTrashStore } from "./stores/trashStore.ts";
 import { useUIStore } from "./stores/uiStore.ts";
 import { computeGridItems, gridItemId } from "./utils/gridItems.ts";
 import {
@@ -87,6 +89,9 @@ export function App() {
   const collapseFolder = useFolderStore((s) => s.collapseFolder);
   const fetchFolders = useFolderStore((s) => s.fetchFolders);
 
+  const markedTrashIds = useTrashStore((s) => s.markedIds);
+  const pruneTrashToValid = useTrashStore((s) => s.pruneToValid);
+
   const lightboxIndex = useUIStore((s) => s.lightboxIndex);
   const saving = useUIStore((s) => s.saving);
   const error = useUIStore((s) => s.error);
@@ -94,6 +99,8 @@ export function App() {
   const showOrganize = useUIStore((s) => s.showOrganize);
   const showPaths = useUIStore((s) => s.showPaths);
   const showReview = useUIStore((s) => s.showReview);
+  const showTrashModal = useUIStore((s) => s.showTrashModal);
+  const setShowTrashModal = useUIStore((s) => s.setShowTrashModal);
   const slideshow = useUIStore((s) => s.slideshow);
   const closeSlideshow = useUIStore((s) => s.closeSlideshow);
   const targetDir = useUIStore((s) => s.targetDir);
@@ -224,6 +231,12 @@ export function App() {
     }
     checkUndo();
   }, []);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: markedTrashIds gates the work; including it would force the prune even when it's already empty
+  useEffect(() => {
+    if (folderModeEnabled || images.length === 0 || markedTrashIds.size === 0) return;
+    pruneTrashToValid(images.map((i) => i.filename));
+  }, [folderModeEnabled, images, pruneTrashToValid]);
 
   // Clean stale group entries when images change
   useEffect(() => {
@@ -555,6 +568,7 @@ export function App() {
                               }
                               isSearchMatch={searchState.matchIds.has(item.filename)}
                               isCurrentSearchMatch={searchState.currentMatchId === item.filename}
+                              isMarkedForTrash={markedTrashIds.has(item.filename)}
                               onCardClick={handleGridItemClick}
                             />
                           );
@@ -612,7 +626,12 @@ export function App() {
       )}
 
       {lightboxIndex !== null && (
-        <Lightbox images={images} initialIndex={lightboxIndex} onClose={closeLightbox} />
+        <Lightbox
+          images={images}
+          initialIndex={lightboxIndex}
+          onClose={closeLightbox}
+          enableTrashMark={!folderModeEnabled}
+        />
       )}
 
       {slideshow.open && (
@@ -651,6 +670,8 @@ export function App() {
       )}
 
       {showReview && <ReviewModal onClose={() => setShowReview(false)} />}
+
+      {showTrashModal && <TrashModal onClose={() => setShowTrashModal(false)} />}
     </SearchContext.Provider>
   );
 }

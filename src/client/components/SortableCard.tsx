@@ -3,6 +3,7 @@ import { CSS } from "@dnd-kit/utilities";
 import React from "react";
 import type { ImageInfo } from "../types.ts";
 import { cn, imageUrl, wasJustDragged } from "../utils/helpers.ts";
+import { TrashIcon } from "./TrashIcon.tsx";
 
 export const SortableCard = React.memo(function SortableCard({
   image,
@@ -11,6 +12,7 @@ export const SortableCard = React.memo(function SortableCard({
   isGhost,
   isSearchMatch,
   isCurrentSearchMatch,
+  isMarkedForTrash,
   onCardClick,
 }: {
   image: ImageInfo;
@@ -19,6 +21,7 @@ export const SortableCard = React.memo(function SortableCard({
   isGhost: boolean;
   isSearchMatch?: boolean;
   isCurrentSearchMatch?: boolean;
+  isMarkedForTrash?: boolean;
   onCardClick: (filename: string, e: React.MouseEvent) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -43,6 +46,7 @@ export const SortableCard = React.memo(function SortableCard({
         isGhost && "card-ghost",
         isSearchMatch && "card-search-match",
         isCurrentSearchMatch && "card-search-current",
+        isMarkedForTrash && "card-marked-trash",
       )}
       onClick={handleClick}
       {...attributes}
@@ -55,6 +59,15 @@ export const SortableCard = React.memo(function SortableCard({
         loading="lazy"
         draggable={false}
       />
+      {isMarkedForTrash && (
+        <span
+          className="card-trash-badge"
+          aria-label="Marked for deletion"
+          title="Marked for deletion"
+        >
+          <TrashIcon size={14} />
+        </span>
+      )}
       <div className="card-info">
         <span className="card-badge">{gridIndex + 1}</span>
         <span className="card-name" title={image.filename}>

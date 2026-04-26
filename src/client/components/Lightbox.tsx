@@ -1,16 +1,20 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTrashStore } from "../stores/trashStore.ts";
 import type { ImageInfo } from "../types.ts";
-import { fullImageUrl } from "../utils/helpers.ts";
+import { cn, fullImageUrl } from "../utils/helpers.ts";
+import { TrashIcon } from "./TrashIcon.tsx";
 
 export function Lightbox({
   images,
   initialIndex,
   onClose,
+  enableTrashMark = false,
 }: {
   images: ImageInfo[];
   initialIndex: number;
   onClose: () => void;
+  enableTrashMark?: boolean;
 }) {
   const [index, setIndex] = useState(initialIndex);
   const [scale, setScale] = useState(1);
@@ -23,6 +27,11 @@ export function Lightbox({
 
   const image = images[index]!;
   const isZoomed = scale > 1;
+
+  const markedIds = useTrashStore((s) => s.markedIds);
+  const toggleTrashMark = useTrashStore((s) => s.toggle);
+  const isMarked = enableTrashMark && markedIds.has(image.filename);
+  const trashButtonLabel = isMarked ? "Unmark for deletion" : "Mark for deletion";
 
   const handleImageLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
@@ -38,8 +47,10 @@ export function Lightbox({
   indexRef.current = index;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const trashEnabledRef = useRef(enableTrashMark);
+  trashEnabledRef.current = enableTrashMark;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only — uses refs for current index/onClose to avoid re-registering on every navigation
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only — uses refs for current index/onClose/trash to avoid re-registering on every navigation
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       switch (e.key) {
@@ -75,6 +86,13 @@ export function Lightbox({
           break;
         case "0":
           resetView();
+          break;
+        case "d":
+        case "D":
+          if (trashEnabledRef.current) {
+            const fn = images[indexRef.current]?.filename;
+            if (fn) useTrashStore.getState().toggle(fn);
+          }
           break;
       }
     }
@@ -164,6 +182,18 @@ export function Lightbox({
         />
       </div>
 
+      {enableTrashMark && (
+        <button
+          type="button"
+          className={cn("lightbox-trash", isMarked && "lightbox-trash-active")}
+          onClick={() => toggleTrashMark(image.filename)}
+          aria-label={trashButtonLabel}
+          title={`${trashButtonLabel} (D)`}
+        >
+          <TrashIcon size={22} />
+        </button>
+      )}
+
       <div className="lightbox-bar">
         <span className="lightbox-filename">
           {image.filename}
@@ -172,6 +202,7 @@ export function Lightbox({
               {dimensions.w} &times; {dimensions.h}
             </span>
           )}
+          {isMarked && <span className="lightbox-marked">marked for deletion</span>}
         </span>
         <span className="lightbox-counter">
           {index + 1} / {images.length}

@@ -593,15 +593,25 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
     }
 
     if (path === "/api/organize/preview" && req.method === "POST") {
-      const body = (await req.json()) as { groups: OrganizeGroup[]; order: string[] };
-      const mappings = computeOrganize(body.groups, body.order);
+      const body = (await req.json()) as {
+        groups: OrganizeGroup[];
+        order: string[];
+        numbered?: boolean;
+      };
+      const mappings = computeOrganize(body.groups, body.order, { numbered: body.numbered });
       return json({ mappings });
     }
 
     if (path === "/api/organize" && req.method === "POST") {
-      const body = (await req.json()) as { groups: OrganizeGroup[]; order: string[] };
+      const body = (await req.json()) as {
+        groups: OrganizeGroup[];
+        order: string[];
+        numbered?: boolean;
+      };
       return withRenameLock(async () => {
-        const mappings = await executeOrganize(targetDir, body.groups, body.order);
+        const mappings = await executeOrganize(targetDir, body.groups, body.order, {
+          numbered: body.numbered,
+        });
         return json({ success: true, mappings });
       });
     }

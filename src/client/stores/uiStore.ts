@@ -12,6 +12,7 @@ let _toastTimer: ReturnType<typeof setTimeout> | undefined;
 const SLIDESHOW_INTERVAL_KEY = "reorder-slideshow-interval";
 const SLIDESHOW_SHUFFLE_KEY = "reorder-slideshow-shuffle";
 const SLIDESHOW_TRANSITION_KEY = "reorder-slideshow-transition";
+const NUMBERED_FOLDER_PREFIX_KEY = "reorder-numbered-folder-prefix";
 const SLIDESHOW_INTERVAL_DEFAULT = 3000;
 const SLIDESHOW_INTERVAL_MIN = 250;
 const SLIDESHOW_INTERVAL_MAX = 60000;
@@ -64,6 +65,7 @@ interface UIState {
   previewRenames: RenameMapping[];
   organizeMappings: OrganizeMapping[];
   headerSubtitle: string;
+  numberedFolderPrefix: boolean;
 
   openLightbox: (index: number) => void;
   closeLightbox: () => void;
@@ -87,6 +89,7 @@ interface UIState {
   checkUndo: () => Promise<void>;
   fetchTargetDir: () => Promise<void>;
   setHeaderSubtitle: (s: string) => void;
+  setNumberedFolderPrefix: (v: boolean) => void;
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
@@ -113,6 +116,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   previewRenames: [],
   organizeMappings: [],
   headerSubtitle: "",
+  numberedFolderPrefix: localStorage.getItem(NUMBERED_FOLDER_PREFIX_KEY) !== "false",
 
   openLightbox: (index) => set({ lightboxIndex: index }),
   closeLightbox: () => set({ lightboxIndex: null }),
@@ -167,6 +171,11 @@ export const useUIStore = create<UIState>((set, get) => ({
 
   setHeaderSubtitle: (s) => {
     if (s !== get().headerSubtitle) set({ headerSubtitle: s });
+  },
+
+  setNumberedFolderPrefix: (v) => {
+    localStorage.setItem(NUMBERED_FOLDER_PREFIX_KEY, String(v));
+    set({ numberedFolderPrefix: v });
   },
 
   fetchTargetDir: async () => {

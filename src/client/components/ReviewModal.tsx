@@ -7,8 +7,10 @@ import { Lightbox } from "./Lightbox.tsx";
 import { Modal } from "./Modal.tsx";
 
 type ReviewStatus = "keep" | "maybe" | "delete";
+type SubStatus = "top" | "middle" | "bottom";
 
 const STATUS_ORDER: ReviewStatus[] = ["keep", "maybe", "delete"];
+const SUB_ORDER: SubStatus[] = ["top", "middle", "bottom"];
 
 const STATUS_LABELS: Record<ReviewStatus, string> = {
   keep: "Keep",
@@ -16,11 +18,29 @@ const STATUS_LABELS: Record<ReviewStatus, string> = {
   delete: "Delete",
 };
 
+const SUB_LABELS: Record<SubStatus, string> = {
+  top: "Top",
+  middle: "Middle",
+  bottom: "Bottom",
+};
+
 const STATUS_ACTIVE_CLASS: Record<ReviewStatus, string> = {
   keep: "review-status-keep-active",
   maybe: "review-status-maybe-active",
   delete: "review-status-delete-active",
 };
+
+const SUB_ACTIVE_CLASS: Record<SubStatus, string> = {
+  top: "review-sub-top-active",
+  middle: "review-sub-middle-active",
+  bottom: "review-sub-bottom-active",
+};
+
+const SUB_RANK: Record<SubStatus, number> = { top: 0, middle: 1, bottom: 2 };
+
+function effectiveStatus(statuses: Map<string, ReviewStatus>, id: string): ReviewStatus {
+  return statuses.get(id) ?? "maybe";
+}
 
 interface ReviewModalProps {
   onClose: () => void;
@@ -31,11 +51,20 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
     useGroupStore.getState().groups.map((g) => ({ ...g, images: g.images.slice() })),
   );
   const [statuses, setStatuses] = useState<Map<string, ReviewStatus>>(() => new Map());
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [subStatuses, setSubStatuses] = useState<Map<string, SubStatus>>(() => new Map());
+  const [bucket, setBucket] = useState<ReviewStatus | null>(null);
+  const [topIndex, setTopIndex] = useState(0);
+  const [subIndex, setSubIndex] = useState(0);
   const [lightbox, setLightbox] = useState<{ images: ImageInfo[]; index: number } | null>(null);
 
-  const current = snapshot[currentIndex];
-  const total = snapshot.length;
+  const filtered = useMemo(() => {
+    if (!bucket) return snapshot;
+    return snapshot.filter((g) => effectiveStatus(statuses, g.id) === bucket);
+  }, [snapshot, statuses, bucket]);
+
+  const total = filtered.length;
+  const currentIndex = bucket ? subIndex : topIndex;
+  const current = filtered[currentIndex];
 
   function setStatusFor(id: string, status: ReviewStatus) {
     setStatuses((prev) => {
@@ -46,23 +75,52 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
     });
   }
 
+  function setSubStatusFor(id: string, status: SubStatus) {
+    setSubStatuses((prev) => {
+      const next = new Map(prev);
+      if (prev.get(id) === status) next.delete(id);
+      else next.set(id, status);
+      return next;
+    });
+  }
+
   function advance(delta: number) {
-    setCurrentIndex((i) => Math.min(total - 1, Math.max(0, i + delta)));
+    const setter = bucket ? setSubIndex : setTopIndex;
+    setter((i) => Math.min(total - 1, Math.max(0, i + delta)));
   }
 
-  function chooseAndAdvance(status: ReviewStatus) {
+  function chooseAndAdvance(slot: number) {
     if (!current) return;
-    const wasSame = statuses.get(current.id) === status;
-    setStatusFor(current.id, status);
-    if (!wasSame) setCurrentIndex((i) => Math.min(total - 1, i + 1));
+    if (bucket) {
+      const s = SUB_ORDER[slot]!;
+      const wasSame = subStatuses.get(current.id) === s;
+      setSubStatusFor(current.id, s);
+      if (!wasSame) setSubIndex((i) => Math.min(total - 1, i + 1));
+    } else {
+      const s = STATUS_ORDER[slot]!;
+      const wasSame = statuses.get(current.id) === s;
+      setStatusFor(current.id, s);
+      if (!wasSame) setTopIndex((i) => Math.min(total - 1, i + 1));
+    }
   }
 
-  // Stash latest handlers so the keyboard effect can stay subscribed across renders
-  // without re-adding the listener every time statuses change.
-  const handlersRef = useRef({ chooseAndAdvance, advance, onClose });
-  handlersRef.current = { chooseAndAdvance, advance, onClose };
+  function enterBucket(b: ReviewStatus) {
+    if (bucket === b) {
+      setBucket(null);
+      return;
+    }
+    setBucket(b);
+    setSubIndex(0);
+  }
 
-  // Keyboard shortcuts — disabled while lightbox is open (it owns its own keys).
+  function exitBucket() {
+    setBucket(null);
+  }
+
+  // Stash latest handlers so the keyboard effect can stay subscribed across renders.
+  const handlersRef = useRef({ chooseAndAdvance, advance, onClose, exitBucket, bucket });
+  handlersRef.current = { chooseAndAdvance, advance, onClose, exitBucket, bucket };
+
   useEffect(() => {
     if (lightbox) return;
     function handleKey(e: KeyboardEvent) {
@@ -72,12 +130,13 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
       }
       const h = handlersRef.current;
       if (e.key === "Escape") {
-        h.onClose();
+        if (h.bucket !== null) h.exitBucket();
+        else h.onClose();
         return;
       }
-      if (e.key === "1") h.chooseAndAdvance("keep");
-      else if (e.key === "2") h.chooseAndAdvance("maybe");
-      else if (e.key === "3") h.chooseAndAdvance("delete");
+      if (e.key === "1") h.chooseAndAdvance(0);
+      else if (e.key === "2") h.chooseAndAdvance(1);
+      else if (e.key === "3") h.chooseAndAdvance(2);
       else if (e.key === "ArrowLeft" || e.key === "h") {
         e.preventDefault();
         h.advance(-1);
@@ -101,17 +160,21 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
     setLightbox({ images: items, index: Math.min(index, items.length - 1) });
   }
 
-  const counts = useMemo(() => {
-    let keep = 0;
-    let maybe = 0;
-    let del = 0;
-    for (const s of statuses.values()) {
-      if (s === "keep") keep++;
-      else if (s === "maybe") maybe++;
-      else if (s === "delete") del++;
-    }
-    return { keep, maybe, delete: del };
+  const topCounts = useMemo(() => {
+    const counts: Record<ReviewStatus, number> = { keep: 0, maybe: 0, delete: 0 };
+    for (const s of statuses.values()) counts[s]++;
+    return counts;
   }, [statuses]);
+
+  const subCounts = useMemo(() => {
+    const counts: Record<SubStatus, number> = { top: 0, middle: 0, bottom: 0 };
+    if (!bucket) return counts;
+    for (const g of filtered) {
+      const s = subStatuses.get(g.id);
+      if (s) counts[s]++;
+    }
+    return counts;
+  }, [filtered, subStatuses, bucket]);
 
   function handleApply() {
     if (snapshot.length === 0) {
@@ -119,16 +182,20 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
       return;
     }
     // Unreviewed groups default to "maybe" — keeps are explicit opt-ins.
-    const keeps: ImageGroup[] = [];
-    const maybes: ImageGroup[] = [];
-    const deletes: ImageGroup[] = [];
+    const buckets: Record<ReviewStatus, ImageGroup[]> = { keep: [], maybe: [], delete: [] };
     for (const g of snapshot) {
-      const s = statuses.get(g.id);
-      if (s === "keep") keeps.push(g);
-      else if (s === "delete") deletes.push(g);
-      else maybes.push(g);
+      buckets[effectiveStatus(statuses, g.id)].push(g);
     }
-    const newOrder = [...keeps, ...maybes, ...deletes];
+    const sortBucket = (gs: ImageGroup[]) =>
+      [...gs].sort(
+        (a, b) =>
+          SUB_RANK[subStatuses.get(a.id) ?? "middle"] - SUB_RANK[subStatuses.get(b.id) ?? "middle"],
+      );
+    const newOrder = [
+      ...sortBucket(buckets.keep),
+      ...sortBucket(buckets.maybe),
+      ...sortBucket(buckets.delete),
+    ];
 
     const { images, imageMap, setImages } = useImageStore.getState();
     setImages(reorderImagesByGroups(images, imageMap, newOrder));
@@ -138,26 +205,50 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
   }
 
   const currentStatus = current ? statuses.get(current.id) : undefined;
+  const currentSub = current ? subStatuses.get(current.id) : undefined;
 
   const title = (
     <>
-      <span>Review Groups</span>
+      <span>{bucket ? `Refine ${STATUS_LABELS[bucket]}` : "Review Groups"}</span>
       <span className="review-progress">
-        <span className="review-progress-chip review-progress-keep">{counts.keep} keep</span>
-        <span className="review-progress-chip review-progress-maybe">{counts.maybe} maybe</span>
-        <span className="review-progress-chip review-progress-delete">{counts.delete} delete</span>
+        {STATUS_ORDER.map((s) => (
+          <button
+            key={s}
+            type="button"
+            className={cn(
+              "review-progress-chip",
+              `review-progress-${s}`,
+              bucket === s && "review-progress-chip-active",
+            )}
+            onClick={() => enterBucket(s)}
+            title={
+              bucket === s
+                ? `Exit ${STATUS_LABELS[s]} refinement`
+                : `Refine ${STATUS_LABELS[s]} ordering`
+            }
+          >
+            {topCounts[s]} {s}
+          </button>
+        ))}
         <span className="review-progress-total">
-          {currentIndex + 1} / {total}
+          {total === 0 ? "0 / 0" : `${currentIndex + 1} / ${total}`}
         </span>
       </span>
     </>
   );
 
+  const footerHint = bucket
+    ? "1 top · 2 middle · 3 bottom · ← → navigate · Esc back"
+    : "1 keep · 2 maybe · 3 delete · ← → navigate · click chip to refine";
+
   const footer = (
     <>
-      <span className="review-footer-hint modal-footer-spacer">
-        1 keep · 2 maybe · 3 delete · ← → navigate
-      </span>
+      <span className="review-footer-hint modal-footer-spacer">{footerHint}</span>
+      {bucket && (
+        <button type="button" className="btn btn-secondary" onClick={exitBucket}>
+          ← Back
+        </button>
+      )}
       <button type="button" className="btn btn-secondary" onClick={onClose}>
         Cancel
       </button>
@@ -172,6 +263,16 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
     </>
   );
 
+  const activeSlot = bucket ? currentSub : currentStatus;
+  const singleClass = activeSlot && `review-single-${activeSlot}`;
+  const actionItems = bucket
+    ? SUB_ORDER.map((s) => ({ s, label: SUB_LABELS[s], activeClass: SUB_ACTIVE_CLASS[s] }))
+    : STATUS_ORDER.map((s) => ({
+        s,
+        label: STATUS_LABELS[s],
+        activeClass: STATUS_ACTIVE_CLASS[s],
+      }));
+
   return (
     <>
       <Modal
@@ -182,10 +283,27 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
         headerClassName="review-modal-header"
         bodyClassName="review-modal-body"
       >
+        {bucket && (
+          <div className="review-sub-banner">
+            <span className="review-sub-banner-label">
+              Refining <strong>{STATUS_LABELS[bucket]}</strong>
+            </span>
+            <span className="review-sub-banner-counts">
+              {SUB_ORDER.map((s) => (
+                <span key={s} className={cn("review-sub-chip", `review-sub-chip-${s}`)}>
+                  {subCounts[s]} {s}
+                </span>
+              ))}
+            </span>
+          </div>
+        )}
+
         {!current ? (
-          <div className="review-empty">No groups to review.</div>
+          <div className="review-empty">
+            {bucket ? `No groups in ${STATUS_LABELS[bucket]}.` : "No groups to review."}
+          </div>
         ) : (
-          <div className={cn("review-single", currentStatus && `review-single-${currentStatus}`)}>
+          <div className={cn("review-single", singleClass)}>
             <div className="review-single-header">
               <button
                 type="button"
@@ -200,6 +318,14 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
                 <span className="review-single-name">{current.name}</span>
                 <span className="review-single-count">
                   {current.images.length} image{current.images.length === 1 ? "" : "s"}
+                  {bucket && currentStatus && (
+                    <>
+                      {" · "}
+                      <span className={`review-single-tag review-single-tag-${currentStatus}`}>
+                        {STATUS_LABELS[currentStatus]}
+                      </span>
+                    </>
+                  )}
                 </span>
               </div>
               <button
@@ -228,23 +354,20 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
             </div>
 
             <div className="review-single-actions">
-              {STATUS_ORDER.map((s) => {
-                const active = currentStatus === s;
-                return (
-                  <button
-                    type="button"
-                    key={s}
-                    className={cn(
-                      "btn review-single-status-btn",
-                      active ? STATUS_ACTIVE_CLASS[s] : "btn-secondary",
-                    )}
-                    onClick={() => chooseAndAdvance(s)}
-                  >
-                    <span className="review-single-status-key">{STATUS_ORDER.indexOf(s) + 1}</span>
-                    {STATUS_LABELS[s]}
-                  </button>
-                );
-              })}
+              {actionItems.map(({ s, label, activeClass }, idx) => (
+                <button
+                  type="button"
+                  key={s}
+                  className={cn(
+                    "btn review-single-status-btn",
+                    activeSlot === s ? activeClass : "btn-secondary",
+                  )}
+                  onClick={() => chooseAndAdvance(idx)}
+                >
+                  <span className="review-single-status-key">{idx + 1}</span>
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
         )}

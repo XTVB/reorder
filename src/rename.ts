@@ -277,7 +277,16 @@ export interface OrganizeMapping {
   files: RenameMapping[];
 }
 
-export function computeOrganize(groups: OrganizeGroup[], imageOrder: string[]): OrganizeMapping[] {
+export interface OrganizeOptions {
+  numbered?: boolean;
+}
+
+export function computeOrganize(
+  groups: OrganizeGroup[],
+  imageOrder: string[],
+  opts: OrganizeOptions = {},
+): OrganizeMapping[] {
+  const numbered = opts.numbered ?? true;
   // Determine group order based on first appearance in imageOrder
   const posMap = new Map(imageOrder.map((fn, i) => [fn, i]));
   const sorted = [...groups].sort((a, b) => {
@@ -299,7 +308,7 @@ export function computeOrganize(groups: OrganizeGroup[], imageOrder: string[]): 
       };
     });
     return {
-      folder: `${folderNum} - ${g.name}`,
+      folder: numbered ? `${folderNum} - ${g.name}` : g.name,
       files,
     };
   });
@@ -309,6 +318,7 @@ export async function executeOrganize(
   dir: string,
   groups: OrganizeGroup[],
   imageOrder: string[],
+  opts: OrganizeOptions = {},
 ): Promise<OrganizeMapping[]> {
   try {
     await access(dir, constants.W_OK);
@@ -316,7 +326,7 @@ export async function executeOrganize(
     throw new Error(`No write permission for directory: ${dir}`);
   }
 
-  const mappings = computeOrganize(groups, imageOrder);
+  const mappings = computeOrganize(groups, imageOrder, opts);
 
   await Promise.all(
     mappings.map(async ({ folder, files }) => {
@@ -360,12 +370,23 @@ export async function executeDelete(dir: string, filenames: string[]): Promise<D
   if (present.length === 0) return { deleted: [], missing };
 
   // Use Finder via osascript so files land in Trash with "Put Back" support.
-  const args: string[] = ["osascript", "-e", 'tell application "Finder"'];
-  for (const fn of present) {
-    const abs = join(dir, fn).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    args.push("-e", `delete (POSIX file "${abs}")`);
-  }
-  args.push("-e", "end tell");
+  // Pass all paths in a single `delete {…}` call so Finder treats it as one
+  // operation (single undo, single Trash sound, no per-file progress flicker).
+  const fileList = present
+    .map((fn) => {
+      const abs = join(dir, fn).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      return `POSIX file "${abs}"`;
+    })
+    .join(", ");
+  const args: string[] = [
+    "osascript",
+    "-e",
+    'tell application "Finder"',
+    "-e",
+    `delete {${fileList}}`,
+    "-e",
+    "end tell",
+  ];
 
   const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
   const exitCode = await proc.exited;
@@ -561,6 +582,7 @@ export async function listFolderData(dir: string): Promise<FolderData> {
 export interface FolderSaveRequest {
   folders: { title: string; images: string[] }[]; // images are original compound paths
   rootImages: string[]; // original bare filenames
+  numbered?: boolean; // when false, target folders use bare title with no NNN- prefix (default true)
 }
 
 interface FolderMove {
@@ -601,8 +623,10 @@ export async function executeFolderSave(
   const _log = logFn ?? (() => {});
 
   // --- Compute target folder names ---
+  const numbered = req.numbered ?? true;
   const folderPadLen = Math.max(3, String(req.folders.length).length);
   const targetFolders = req.folders.map((f, i) => {
+    if (!numbered) return f.title;
     const num = String(i + 1).padStart(folderPadLen, "0");
     return `${num} - ${f.title}`;
   });

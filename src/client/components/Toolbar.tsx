@@ -37,6 +37,7 @@ export function Toolbar() {
 
   const saving = useUIStore((s) => s.saving);
   const canUndo = useUIStore((s) => s.canUndo);
+  const numberedFolderPrefix = useUIStore((s) => s.numberedFolderPrefix);
   const showToast = useUIStore((s) => s.showToast);
   const setSaving = useUIStore((s) => s.setSaving);
   const setShowPreview = useUIStore((s) => s.setShowPreview);
@@ -121,9 +122,9 @@ export function Toolbar() {
       const res = await postJson("/api/reorder-by-groups", {});
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error ?? "Reorder failed");
-      const effective = (data.renames ?? []).filter(
-        (r: { from: string; to: string }) => r.from !== r.to,
-      ).length;
+      const renames: { from: string; to: string }[] = data.renames ?? [];
+      useTrashStore.getState().remap(renames);
+      const effective = renames.filter((r) => r.from !== r.to).length;
       const warnings: string[] = data.warnings ?? [];
       if (warnings.length > 0) {
         showToast(
@@ -148,6 +149,7 @@ export function Toolbar() {
       const res = await postJson("/api/undo", {});
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+      useTrashStore.getState().remap(data.renames ?? []);
       showToast("Undo successful", "success");
       await refreshState();
     } catch (err) {
@@ -162,6 +164,7 @@ export function Toolbar() {
       const res = await postJson("/api/organize/preview", {
         groups: groups.map((g) => ({ name: g.name, images: g.images })),
         order: images.map((i) => i.filename),
+        numbered: useUIStore.getState().numberedFolderPrefix,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -186,6 +189,7 @@ export function Toolbar() {
           images: f.images,
         })),
         rootImages: currentRoot,
+        numbered: useUIStore.getState().numberedFolderPrefix,
       };
       const res = await postJson("/api/folders/save", body);
       const data = await res.json();
@@ -257,6 +261,13 @@ export function Toolbar() {
       showToast(getErrorMessage(err, "Save group order failed"), "error");
     }
   }
+
+  // In folder mode, toggling "numbered" alone is a meaningful change even when
+  // no folders were reordered/renamed — surface it via the Save button.
+  const folderNumberingMismatch =
+    folderModeEnabled &&
+    folders.length > 0 &&
+    folders.some((f) => (stripFolderNumber(f.name) !== f.name) !== numberedFolderPrefix);
 
   const hasSelectionActions = selectedIds.size > 0;
   const hasGroupManagement = !folderModeEnabled && groups.length > 0;
@@ -516,7 +527,7 @@ export function Toolbar() {
         <button
           className="btn btn-primary"
           onClick={handleFolderSave}
-          disabled={!folderHasChanges || saving}
+          disabled={(!folderHasChanges && !folderNumberingMismatch) || saving}
         >
           {saving ? "Saving..." : "Save Folders"}
         </button>
@@ -547,6 +558,9 @@ export function ToolbarOverflowMenu() {
 
   const fetchImages = useImageStore((s) => s.fetchImages);
   const clearSelection = useSelectionStore((s) => s.clearSelection);
+
+  const numberedFolderPrefix = useUIStore((s) => s.numberedFolderPrefix);
+  const setNumberedFolderPrefix = useUIStore((s) => s.setNumberedFolderPrefix);
 
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -602,6 +616,14 @@ export function ToolbarOverflowMenu() {
           >
             <span className="overflow-menu-check">{folderModeEnabled ? "✓" : ""}</span>
             Folder mode
+          </button>
+          <button
+            className="overflow-menu-item"
+            onClick={() => setNumberedFolderPrefix(!numberedFolderPrefix)}
+            title="When on, created folders are prefixed with a sequence number (e.g. 001 - Beach). When off, only the title is used."
+          >
+            <span className="overflow-menu-check">{numberedFolderPrefix ? "✓" : ""}</span>
+            Number folder names
           </button>
           {!folderModeEnabled && (
             <button className="overflow-menu-item" onClick={toggleGroups}>

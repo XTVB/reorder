@@ -317,6 +317,7 @@ export function App() {
       const res = await postJson("/api/save", { order: oldFilenames, groups: currentGroups });
       const data = await res.json();
       if (!data.success) throw new Error(data.error ?? "Rename failed");
+      useTrashStore.getState().remap(data.renames ?? []);
       if (data.warnings?.length > 0) {
         showToast(`Files renamed (${data.warnings.length} warning(s))`, "warning");
       } else {
@@ -341,6 +342,7 @@ export function App() {
       const res = await postJson("/api/organize", {
         groups: groups.map((g) => ({ name: g.name, images: g.images })),
         order: images.map((i) => i.filename),
+        numbered: useUIStore.getState().numberedFolderPrefix,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);

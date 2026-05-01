@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { RenameMapping } from "../types.ts";
 import { postJson } from "../utils/helpers.ts";
 import { useUIStore } from "./uiStore.ts";
 
@@ -18,6 +19,7 @@ interface TrashState {
   toggle: (filename: string) => void;
   clear: () => void;
   pruneToValid: (validFilenames: Iterable<string>) => void;
+  remap: (renames: RenameMapping[]) => void;
   confirmDelete: () => Promise<DeleteResponse>;
 }
 
@@ -67,6 +69,26 @@ export const useTrashStore = create<TrashState>((set, get) => ({
     const next = new Set<string>();
     for (const fn of markedIds) if (valid.has(fn)) next.add(fn);
     if (next.size !== markedIds.size) set({ markedIds: next });
+  },
+
+  remap: (renames) => {
+    const { markedIds } = get();
+    if (markedIds.size === 0 || renames.length === 0) return;
+    const map = new Map<string, string>();
+    for (const r of renames) if (r.from !== r.to) map.set(r.from, r.to);
+    if (map.size === 0) return;
+    const next = new Set<string>();
+    let changed = false;
+    for (const fn of markedIds) {
+      const mapped = map.get(fn);
+      if (mapped) {
+        next.add(mapped);
+        changed = true;
+      } else {
+        next.add(fn);
+      }
+    }
+    if (changed) set({ markedIds: next });
   },
 
   confirmDelete: async () => {

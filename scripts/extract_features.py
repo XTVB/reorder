@@ -97,6 +97,13 @@ def main():
     parser.add_argument("--required", default=None,
                         help="Comma-separated list of required models. Only these (if missing/outdated) "
                              "will be extracted; others are skipped even if missing.")
+    parser.add_argument("--pecore-g-backend", default="mlx", choices=["pytorch", "mlx"],
+                        help="Backend for PE-Core-G inference. mlx (default) uses our native "
+                             "MLX port (requires running scripts/mlx_pe_core/convert.py once); "
+                             "pytorch falls back to open_clip's MPS path in fp16.")
+    parser.add_argument("--pecore-g-mlx-dtype", default="float32", choices=["float16", "float32"],
+                        help="MLX dtype for PE-Core-G. fp32 is the default (best precision, ~1.27x "
+                             "faster than original PyTorch fp32); fp16 saves another ~4%% wall time.")
     args = parser.parse_args()
 
     # Parse set arguments once up front
@@ -366,6 +373,73 @@ def main():
 
         return np.vstack(results) if results else np.zeros((0, 0), dtype=np.float32)
 
+    def _run_pass_mlx(items, transform, fallback_hw, batch_size, label, mlx_model, mlx_dtype,
+                      on_checkpoint=None):
+        """MLX equivalent of _run_pass for PE-Core-G. PIL preprocess (CPU prefetch),
+        torch tensor -> NHWC numpy -> mx.array -> MLX model -> fp32 numpy.
+        Outputs are L2-normalized to match the PyTorch path."""
+        import mlx.core as mx
+        n = len(items)
+        if n == 0:
+            return np.zeros((0, 0), dtype=np.float32)
+
+        def _prepare_batch(indices):
+            tensors = []
+            for i in indices:
+                fname, _ = items[i]
+                path = os.path.join(image_dir, fname)
+                try:
+                    img = Image.open(path).convert("RGB")
+                    tensors.append(transform(img))
+                except Exception as e:
+                    print(f"  WARNING: skipping {fname}: {e}", file=sys.stderr)
+                    tensors.append(torch.zeros(3, fallback_hw, fallback_hw))
+            return torch.stack(tensors)
+
+        results = []
+        t0 = time.time()
+        prefetch_depth = 4
+
+        with ThreadPoolExecutor(max_workers=prefetch_depth) as pool:
+            futures = deque()
+            batch_starts = list(range(0, n, batch_size))
+            for bs in batch_starts[:prefetch_depth]:
+                be = min(bs + batch_size, n)
+                futures.append(pool.submit(_prepare_batch, range(bs, be)))
+
+            submitted = min(prefetch_depth, len(batch_starts))
+
+            for batch_start in batch_starts:
+                batch_end = min(batch_start + batch_size, n)
+                batch_torch = futures.popleft().result()  # (B, 3, 448, 448)
+
+                if submitted < len(batch_starts) and not _interrupted:
+                    bs = batch_starts[submitted]
+                    be = min(bs + batch_size, n)
+                    futures.append(pool.submit(_prepare_batch, range(bs, be)))
+                    submitted += 1
+
+                np_batch = batch_torch.numpy().transpose(0, 2, 3, 1)  # NHWC
+                mlx_batch = mx.array(np_batch).astype(mlx_dtype)
+                embs = mlx_model(mlx_batch)
+                mx.eval(embs)
+                embs_np = np.array(embs).astype(np.float32)
+                norms = np.linalg.norm(embs_np, axis=-1, keepdims=True)
+                embs_np = embs_np / np.maximum(norms, 1e-12)
+
+                results.append(embs_np)
+                _report_progress(label, batch_end, n, t0)
+
+                if on_checkpoint and _should_checkpoint():
+                    partial = np.vstack(results)
+                    on_checkpoint(partial, items[:batch_end])
+                    print(f"  Checkpoint saved: {batch_end}/{n}", file=sys.stderr)
+
+                if _interrupted:
+                    break
+
+        return np.vstack(results) if results else np.zeros((0, 0), dtype=np.float32)
+
     # For each model, decide what to extract:
     # - Model in models_to_extract → run on ALL images (all_items) [version mismatch]
     # - Model with zero-fill or new images → run on just those (incremental)
@@ -522,19 +596,63 @@ def main():
         if model_items and not _interrupted:
             pass_num += 1
             print(f"  [Pass {pass_num}/{total_passes}] {label} ({len(model_items)} images)", file=sys.stderr)
-            model, _, preprocess = open_clip.create_model_and_transforms(
-                model_name, pretrained=pretrained, device=device
-            )
-            model.eval()
 
             def _make_ckpt(k):
                 def _fn(partial_embs, partial_items):
                     _save_model_to_cache(k, partial_embs, partial_items)
                 return _fn
 
+            use_mlx_pecore_g = key == "pecore_g" and args.pecore_g_backend == "mlx"
+            if use_mlx_pecore_g:
+                # MLX backend for PE-Core-G. Builds the open_clip preprocess via
+                # pretrained=None (fast — no weight download), uses our MLX port for inference.
+                import mlx.core as mx
+                mlx_pe_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mlx_pe_core")
+                if mlx_pe_dir not in sys.path:
+                    sys.path.insert(0, mlx_pe_dir)
+                from model import PECoreBigG
+
+                weights_path = os.path.expanduser("~/.cache/mlx-pe-core-bigg.safetensors")
+                if not os.path.exists(weights_path):
+                    print(f"  MLX weights not found at {weights_path}", file=sys.stderr)
+                    print(f"  Running one-time conversion (~5 min, writes ~7.5GB)...", file=sys.stderr)
+                    from convert import convert as _mlx_convert
+                    _mlx_convert(weights_path, dtype="float32")
+
+                _, _, preprocess = open_clip.create_model_and_transforms(model_name, pretrained=None)
+                mlx_dtype = getattr(mx, args.pecore_g_mlx_dtype)
+                mlx_model = PECoreBigG()
+                mlx_model.load_weights(weights_path, strict=False)
+                mlx_model.set_dtype(mlx_dtype)
+                mlx_model.eval()
+                mx.eval(mlx_model.parameters())
+
+                embs = _run_pass_mlx(
+                    model_items, preprocess, hw, max(1, args.batch_size * batch_mult // batch_div),
+                    label, mlx_model, mlx_dtype, on_checkpoint=_make_ckpt(key),
+                )
+                n_done = embs.shape[0]
+                items_done = model_items[:n_done]
+                new_arrays[key] = embs
+                _save_model_to_cache(key, embs, items_done)
+                _free_model(mlx_model)
+                continue
+
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                model_name, pretrained=pretrained, device=device
+            )
+            model.eval()
+
+            # PE-Core-G runs in fp16 on MPS: ~2x faster, embeddings re-cast to
+            # fp32 before save so downstream clustering is unaffected.
+            is_fp16 = key == "pecore_g"
+            if is_fp16:
+                model = model.half()
+            encode_fn = (lambda x, _m=model: _m.encode_image(x.half())) if is_fp16 else model.encode_image
+
             embs = _run_pass(
                 model_items, preprocess, hw, max(1, args.batch_size * batch_mult // batch_div),
-                label, model.encode_image,
+                label, encode_fn,
                 on_checkpoint=_make_ckpt(key),
             )
             n_done = embs.shape[0]

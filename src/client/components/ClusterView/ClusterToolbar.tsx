@@ -44,6 +44,8 @@ interface Props {
   distanceProfile: DistanceProfile | null;
   weights: WeightConfig;
   usePatches: boolean;
+  useRerank: boolean;
+  rerankBlend: number;
   inScope: boolean;
   onRun: (n?: number) => void;
   onRecut: (n: number) => void;
@@ -51,6 +53,8 @@ interface Props {
   onRecutAdaptive: (minClusterSize: number) => void;
   onWeightsChange: (w: WeightConfig) => void;
   onUsePatchesChange: (v: boolean) => void;
+  onUseRerankChange: (v: boolean) => void;
+  onRerankBlendChange: (v: number) => void;
   onExpandAll: () => void;
   onCollapseAll: () => void;
   onAcceptAll: (minSize: number) => void;
@@ -74,6 +78,10 @@ export function ClusterToolbar({
   onWeightsChange,
   usePatches,
   onUsePatchesChange,
+  useRerank,
+  rerankBlend,
+  onUseRerankChange,
+  onRerankBlendChange,
   onExpandAll,
   onCollapseAll,
   onAcceptAll,
@@ -243,11 +251,41 @@ export function ClusterToolbar({
 
         <label
           className="cluster-patches-toggle"
-          title="Use DINOv3 patch-level distances instead of global embeddings (better for distinguishing specific outfits/locations, ~30s extra)"
+          title="k-reciprocal re-ranking — uses kNN graph structure on top of cosine for more accurate clustering (~3s precompute, recommended)"
+        >
+          <input
+            type="checkbox"
+            checked={useRerank}
+            onChange={(e) => onUseRerankChange(e.target.checked)}
+          />
+          Re-rank
+        </label>
+        {useRerank && (
+          <label
+            className="cluster-patches-toggle"
+            title="Re-rank blend: 0 = cosine only, 1 = re-rank only. Default 0.7."
+          >
+            <span className="cluster-rerank-blend__hint">blend</span>
+            <input
+              className="cluster-rerank-blend__slider"
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={rerankBlend}
+              onChange={(e) => onRerankBlendChange(parseFloat(e.target.value))}
+            />
+            <span className="cluster-rerank-blend__value">{rerankBlend.toFixed(2)}</span>
+          </label>
+        )}
+        <label
+          className="cluster-patches-toggle"
+          title="Use DINOv3 patch-level distances (mutually exclusive with re-rank — re-rank wins if both enabled)"
         >
           <input
             type="checkbox"
             checked={usePatches}
+            disabled={useRerank}
             onChange={(e) => onUsePatchesChange(e.target.checked)}
           />
           Patches

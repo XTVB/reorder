@@ -74,8 +74,12 @@ function ClusterActions() {
   const progress = useClusterStore((s) => s.progress);
   const weights = useClusterStore((s) => s.weights);
   const usePatches = useClusterStore((s) => s.usePatches);
+  const useRerank = useClusterStore((s) => s.useRerank);
+  const rerankBlend = useClusterStore((s) => s.rerankBlend);
   const setWeights = useClusterStore((s) => s.setWeights);
   const setUsePatches = useClusterStore((s) => s.setUsePatches);
+  const setUseRerank = useClusterStore((s) => s.setUseRerank);
+  const setRerankBlend = useClusterStore((s) => s.setRerankBlend);
   const fetchClusters = useClusterStore((s) => s.fetchClusters);
   const recutClusters = useClusterStore((s) => s.recutClusters);
   const recutByThreshold = useClusterStore((s) => s.recutByThreshold);
@@ -112,6 +116,8 @@ function ClusterActions() {
       distanceProfile={clusterData?.distanceProfile ?? null}
       weights={weights}
       usePatches={usePatches}
+      useRerank={useRerank}
+      rerankBlend={rerankBlend}
       inScope={inScope}
       onRun={onRun}
       onRecut={onRecut}
@@ -119,6 +125,8 @@ function ClusterActions() {
       onRecutAdaptive={onRecutAdaptive}
       onWeightsChange={setWeights}
       onUsePatchesChange={setUsePatches}
+      onUseRerankChange={setUseRerank}
+      onRerankBlendChange={setRerankBlend}
       onExpandAll={expandAll}
       onCollapseAll={collapseAll}
       onAcceptAll={acceptAllClusters}

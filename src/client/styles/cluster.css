@@ -538,6 +538,19 @@
   accent-color: var(--accent);
 }
 
+.cluster-rerank-blend__hint {
+  opacity: 0.7;
+  font-size: 0.85em;
+}
+.cluster-rerank-blend__slider {
+  width: 60px;
+}
+.cluster-rerank-blend__value {
+  font-family: monospace;
+  font-size: 0.85em;
+  min-width: 28px;
+}
+
 /* Compact threshold controls for the header toolbar */
 .cluster-threshold-control {
   display: flex;

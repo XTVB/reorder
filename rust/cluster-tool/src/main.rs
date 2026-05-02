@@ -12,11 +12,17 @@ use std::path::PathBuf;
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(about = "Ward's linkage clustering with pre-seeded groups")]
+#[command(about = "Hierarchical agglomerative clustering with pre-seeded groups")]
 struct Cli {
     /// Path to hash-keyed cache .npz (clip_hash_cache.npz)
     #[arg(long)]
     hash_cache: PathBuf,
+
+    /// Linkage method: ward | average | complete. Default: average.
+    /// Average linkage works best with the re-ranking distance matrix; ward is
+    /// the historical default for raw cosine.
+    #[arg(long, default_value = "average")]
+    linkage: String,
 
     /// Path to content_hashes.json (filename → content hash)
     #[arg(long)]
@@ -115,6 +121,54 @@ struct MergeStep {
     cluster_b: u32,
     distance: f32,
     new_size: u32,
+}
+
+/// Hierarchical linkage method (Lance-Williams family).
+#[derive(Clone, Copy, Debug)]
+enum Linkage {
+    Ward,
+    Average,
+    Complete,
+}
+
+impl Linkage {
+    fn parse(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "ward" => Self::Ward,
+            "average" | "upgma" => Self::Average,
+            "complete" => Self::Complete,
+            other => panic!("unknown linkage method: '{}' (expected ward|average|complete)", other),
+        }
+    }
+}
+
+/// Lance-Williams update: distance from cluster i to merged (x ∪ y), given
+/// existing distances and cluster sizes. Returns the new d(i, xy).
+#[inline(always)]
+fn lance_williams(
+    linkage: Linkage,
+    d_ix: f64,
+    d_iy: f64,
+    d_xy: f64,
+    ni: f64,
+    nx: f64,
+    ny: f64,
+) -> f64 {
+    match linkage {
+        Linkage::Ward => {
+            let t = 1.0 / (ni + nx + ny);
+            ((ni + nx) * t * d_ix * d_ix
+                + (ni + ny) * t * d_iy * d_iy
+                - ni * t * d_xy * d_xy)
+                .max(0.0)
+                .sqrt()
+        }
+        Linkage::Average => {
+            // UPGMA: weighted by cluster size
+            (nx * d_ix + ny * d_iy) / (nx + ny)
+        }
+        Linkage::Complete => d_ix.max(d_iy),
+    }
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -297,11 +351,12 @@ fn main() {
         None
     };
 
-    // Run Ward's linkage
-    eprintln!("Running Ward's linkage...");
-    let merge_steps = wards_linkage_cosine(
+    // Run hierarchical agglomerative linkage
+    let linkage = Linkage::parse(&cli.linkage);
+    eprintln!("Running {:?} linkage...", linkage);
+    let merge_steps = linkage_cosine(
         &features_flat, feat_dim, n_images, &groups, &ungrouped_img_indices,
-        precomputed_dist,
+        precomputed_dist, linkage,
     );
     eprintln!("Linkage complete: {} merge steps", merge_steps.len());
 
@@ -472,23 +527,27 @@ fn set_dist(dist: &mut [f64], i: usize, j: usize, n: usize, val: f64) {
     }
 }
 
-// ── Ward's linkage with cosine distances and pre-seeded groups ───────────────
+// ── Hierarchical agglomerative linkage with cosine distances and pre-seeded groups ───
 //
-// Matches scipy's `linkage(pdist(X, metric='cosine'), method='ward')`:
+// Matches scipy's `linkage(pdist(X, metric='cosine'), method=<linkage>)`:
 // 1. Compute pairwise cosine distances between ALL individual images
+//    (or use a precomputed distance matrix, optionally blended with cosine).
 // 2. For pre-seeded groups: simulate the merges using Lance-Williams to get
-//    correct distances from each group to everything else
-// 3. Run NNC + Lance-Williams on the resulting distance matrix
+//    correct distances from each group to everything else.
+// 3. Run NNC + Lance-Williams on the resulting distance matrix.
 //
-// This ensures the clustering results match the validated scipy approach.
+// `linkage` selects the Lance-Williams variant (Ward / Average / Complete).
+// Average linkage works best with the re-ranking distance matrix; Ward is the
+// historical default for raw cosine.
 
-fn wards_linkage_cosine(
+fn linkage_cosine(
     features: &[f32],       // flat row-major, shape [n_images × feat_dim]
     feat_dim: usize,
     n_images: usize,
     groups: &[LoadedGroup],
     ungrouped: &[usize],
     precomputed_dist: Option<(Vec<f64>, f32)>, // (distances, weight)
+    linkage: Linkage,
 ) -> Vec<MergeStep> {
     let n_groups = groups.len();
     let n_ungrouped = ungrouped.len();
@@ -610,7 +669,6 @@ fn wards_linkage_cosine(
             let ny = size[y];
             let new_size = nx + ny;
 
-            // Ward update into slot y for all other active clusters
             for &i in &active_indices {
                 if i == x || i == y {
                     continue;
@@ -618,12 +676,7 @@ fn wards_linkage_cosine(
                 let ni = size[i];
                 let d_ix = get_dist(&dist, i, x, n_images);
                 let d_iy = get_dist(&dist, i, y, n_images);
-                let t = 1.0 / (ni + new_size);
-                let d_new = ((ni + nx) * t * d_ix * d_ix
-                    + (ni + ny) * t * d_iy * d_iy
-                    - ni * t * merge_dist * merge_dist)
-                    .max(0.0)
-                    .sqrt();
+                let d_new = lance_williams(linkage, d_ix, d_iy, merge_dist, ni, nx, ny);
                 set_dist(&mut dist, i, y, n_images, d_new);
             }
 
@@ -650,8 +703,8 @@ fn wards_linkage_cosine(
     );
 
     // ── Prevent confirmed groups from ever being merged with each other ───
-    // We use 1e18 rather than f64::MAX because the Ward update formula squares
-    // distances — MAX² overflows to infinity and the subtraction produces NaN.
+    // We use 1e18 rather than f64::MAX because Ward's update squares distances —
+    // f64::MAX² overflows. 1e18 is safe across all linkage methods.
     const GROUP_BARRIER: f64 = 1e18;
     let group_reps: Vec<usize> = group_sorted.iter().map(|m| *m.last().unwrap()).collect();
     for i in 0..group_reps.len() {
@@ -735,7 +788,6 @@ fn wards_linkage_cosine(
                     new_size: new_size as u32,
                 });
 
-                // Ward update into slot y for all remaining active clusters
                 for &i in &active_indices {
                     if i == x || i == y {
                         continue;
@@ -743,12 +795,7 @@ fn wards_linkage_cosine(
                     let ni = size[i];
                     let d_ix = get_dist(&dist, i, x, n_images);
                     let d_iy = get_dist(&dist, i, y, n_images);
-                    let t = 1.0 / (ni + new_size);
-                    let d_new = ((ni + nx) * t * d_ix * d_ix
-                        + (ni + ny) * t * d_iy * d_iy
-                        - ni * t * current_min * current_min)
-                        .max(0.0)
-                        .sqrt();
+                    let d_new = lance_williams(linkage, d_ix, d_iy, current_min, ni, nx, ny);
                     set_dist(&mut dist, i, y, n_images, d_new);
                 }
 

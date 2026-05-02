@@ -649,16 +649,22 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
         nClusters?: number;
         weights?: WeightConfig;
         usePatches?: boolean;
+        useRerank?: boolean;
+        rerankBlend?: number;
       };
       const nClusters = body.nClusters ?? 200;
       const weights = body.weights;
-      const usePatches = body.usePatches ?? false;
+      const options = {
+        usePatches: body.usePatches,
+        useRerank: body.useRerank ?? true,
+        rerankBlend: body.rerankBlend,
+      };
 
       if (isClusterJobRunning()) {
         return json({ error: "Clustering already in progress" }, 409);
       }
       setClusterJobRunning(true);
-      log("cluster", `Full cluster request (SSE): n=${nClusters} usePatches=${usePatches}`);
+      log("cluster", `Full cluster request (SSE): n=${nClusters} ${JSON.stringify(options)}`);
 
       return sseResponse(async (send) => {
         try {
@@ -671,7 +677,7 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
               send("progress", { message: line });
             },
             weights,
-            usePatches,
+            options,
           );
           invalidateClusterCache();
           log("cluster", `Returned ${result.clusters.length} clusters`);
@@ -850,13 +856,20 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
         nClusters?: number;
         weights?: WeightConfig;
         usePatches?: boolean;
+        useRerank?: boolean;
+        rerankBlend?: number;
       };
       const nClusters = body.nClusters ?? 200;
+      const opts = {
+        usePatches: body.usePatches,
+        useRerank: body.useRerank ?? true,
+        rerankBlend: body.rerankBlend,
+      };
       log(
         "cluster",
-        `Test linkage: n=${nClusters} weights=${JSON.stringify(body.weights)} usePatches=${body.usePatches}`,
+        `Test linkage: n=${nClusters} weights=${JSON.stringify(body.weights)} opts=${JSON.stringify(opts)}`,
       );
-      const result = await runLinkageOnly(targetDir, nClusters, body.weights, body.usePatches);
+      const result = await runLinkageOnly(targetDir, nClusters, body.weights, opts);
       return json(result);
     }
 

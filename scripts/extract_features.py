@@ -102,8 +102,7 @@ def main():
                              "MLX port (requires running scripts/mlx_pe_core/convert.py once); "
                              "pytorch falls back to open_clip's MPS path in fp16.")
     parser.add_argument("--pecore-g-mlx-dtype", default="float32", choices=["float16", "float32"],
-                        help="MLX dtype for PE-Core-G. fp32 is the default (best precision, ~1.27x "
-                             "faster than original PyTorch fp32); fp16 saves another ~4%% wall time.")
+                        help="MLX dtype for PE-Core-G. fp32 default, fp16 saves a small amount of time")
     args = parser.parse_args()
 
     # Parse set arguments once up front
@@ -462,7 +461,6 @@ def main():
     _neural_keys = {"clip", "pecore_l", "pecore_g", "dino", "dinov3"}
     if any(items_map[k] for k in _neural_keys):
         import torch
-        import open_clip
         from concurrent.futures import ThreadPoolExecutor
         device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
         print(f"  Using device: {device}", file=sys.stderr)
@@ -604,9 +602,8 @@ def main():
 
             use_mlx_pecore_g = key == "pecore_g" and args.pecore_g_backend == "mlx"
             if use_mlx_pecore_g:
-                # MLX backend for PE-Core-G. Builds the open_clip preprocess via
-                # pretrained=None (fast — no weight download), uses our MLX port for inference.
                 import mlx.core as mx
+                from torchvision import transforms
                 mlx_pe_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mlx_pe_core")
                 if mlx_pe_dir not in sys.path:
                     sys.path.insert(0, mlx_pe_dir)
@@ -619,7 +616,16 @@ def main():
                     from convert import convert as _mlx_convert
                     _mlx_convert(weights_path, dtype="float32")
 
-                _, _, preprocess = open_clip.create_model_and_transforms(model_name, pretrained=None)
+                # Verified bit-exact vs open_clip.create_model_and_transforms('PE-Core-bigG-14-448').
+                preprocess = transforms.Compose([
+                    transforms.Resize(hw, interpolation=transforms.InterpolationMode.BICUBIC, antialias=True),
+                    transforms.CenterCrop(hw),
+                    transforms.ToTensor(),
+                    transforms.Normalize(
+                        mean=(0.48145466, 0.4578275, 0.40821073),
+                        std=(0.26862954, 0.26130258, 0.27577711),
+                    ),
+                ])
                 mlx_dtype = getattr(mx, args.pecore_g_mlx_dtype)
                 mlx_model = PECoreBigG()
                 mlx_model.load_weights(weights_path, strict=False)
@@ -638,6 +644,7 @@ def main():
                 _free_model(mlx_model)
                 continue
 
+            import open_clip
             model, _, preprocess = open_clip.create_model_and_transforms(
                 model_name, pretrained=pretrained, device=device
             )

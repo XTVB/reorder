@@ -13,11 +13,14 @@ import { unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import sharp from "sharp";
 import {
+  computeCacheSignature,
   ensureHashOrderJson,
   type HashMapping,
   loadHashMapping,
   parseNpyFromNpz,
+  readSidecarSignature,
   reindexToFilenameOrder,
+  writeSidecarSignature,
 } from "./cache-utils.ts";
 import type {
   ClusterData,
@@ -251,7 +254,93 @@ export function patchDistMatrixPath(targetDir: string): string {
   return join(cacheDir(targetDir), "patch_dist_matrix.bin");
 }
 
-/** Ensure the DINOv3 patch distance matrix exists; recompute via group-similarity if stale/missing. */
+export function rerankDistMatrixPath(targetDir: string): string {
+  return join(cacheDir(targetDir), "rerank_dist_matrix.bin");
+}
+
+// k-reciprocal re-ranking parameters. Hardcoded — the benchmark sweep showed
+// these are robust across datasets (ARI plateau over k1∈[60,80], k2∈[4,8]).
+const RERANK_K1 = 65;
+const RERANK_K2 = 4;
+const RERANK_VERSION = "v1-jaccard-kernel"; // bump to invalidate all caches
+
+// Bump to invalidate all existing patch_dist_matrix caches (e.g. after an
+// algorithmic change in rust/group-similarity).
+const PATCH_DIST_VERSION = "v1";
+
+function sidecarPath(matrixPath: string): string {
+  return `${matrixPath}.meta.json`;
+}
+
+/** Ensure the k-reciprocal re-ranking distance matrix exists and is current.
+ *
+ * Uses a content-derived signature (sorted content-hash pairs + active model
+ * versions + rerank params) — never mtime — so we don't false-invalidate when
+ * extract_features.py rewrites content_hashes.json on every run, and we don't
+ * false-validate when images are deleted (which leaves the NPZ untouched but
+ * shrinks content_hashes.json).
+ */
+export async function ensureRerankDistMatrix(
+  targetDir: string,
+  weights: WeightConfig,
+  onProgress?: (line: string) => void,
+): Promise<string> {
+  const cache = cacheDir(targetDir);
+  const hashCachePath = join(cache, "clip_hash_cache.npz");
+  const matrixPath = rerankDistMatrixPath(targetDir);
+  const sidecar = sidecarPath(matrixPath);
+
+  if (!existsSync(hashCachePath)) {
+    throw new Error("Embedding cache not found. Run feature extraction first.");
+  }
+  if (!existsSync(PYTHON)) {
+    throw new Error(`Python not found at ${PYTHON}. See README for venv setup.`);
+  }
+
+  const currentSignature = computeCacheSignature({
+    cacheDir: cache,
+    weights: weights as Record<string, number | undefined>,
+    extra: { k1: RERANK_K1, k2: RERANK_K2, rerank_version: RERANK_VERSION },
+  });
+
+  if (existsSync(matrixPath) && readSidecarSignature(sidecar) === currentSignature) {
+    log("cluster", "Using cached re-rank distance matrix");
+    return matrixPath;
+  }
+
+  log("cluster", `Precomputing re-rank distance matrix (k1=${RERANK_K1}, k2=${RERANK_K2})...`);
+  onProgress?.("Computing re-rank distance matrix...");
+
+  const script = join(SCRIPTS_DIR, "precompute_rerank_distance.py");
+  await runRustBinary(
+    PYTHON,
+    [
+      script,
+      "--cache-dir",
+      cache,
+      "--output",
+      matrixPath,
+      "--weights",
+      JSON.stringify(weights ?? {}),
+      "--k1",
+      String(RERANK_K1),
+      "--k2",
+      String(RERANK_K2),
+    ],
+    "rerank-dist-matrix",
+    onProgress,
+  );
+  writeSidecarSignature(sidecar, currentSignature);
+  return matrixPath;
+}
+
+/** Ensure the DINOv3 patch distance matrix exists; recompute via group-similarity if stale/missing.
+ *
+ * Cache validity uses a content-derived signature (sorted content-hash pairs +
+ * `_v_dinov3` version + algorithm version) — same approach as the rerank
+ * matrix, so we don't false-invalidate when content_hashes.json is rewritten
+ * unconditionally on every extract run.
+ */
 export async function ensurePatchDistMatrix(
   targetDir: string,
   onProgress?: (line: string) => void,
@@ -261,6 +350,7 @@ export async function ensurePatchDistMatrix(
   const patchesCachePath = join(cache, "dinov3_patches_hash_cache.npy");
   const patchesHashesPath = join(cache, "dinov3_patches_hashes.json");
   const distMatrixPath = patchDistMatrixPath(targetDir);
+  const sidecar = sidecarPath(distMatrixPath);
 
   if (!existsSync(patchesCachePath)) {
     throw new Error(
@@ -273,18 +363,16 @@ export async function ensurePatchDistMatrix(
     );
   }
 
-  let cacheValid = false;
-  if (existsSync(distMatrixPath)) {
-    const matMtime = Bun.file(distMatrixPath).lastModified;
-    if (
-      matMtime > Bun.file(patchesCachePath).lastModified &&
-      matMtime > Bun.file(contentHashesPath).lastModified
-    ) {
-      cacheValid = true;
-    }
-  }
+  // Patches use only DINOv3 features, so we mark dinov3 as the active model
+  // for the signature — this picks up its `_v_dinov3` version string so a
+  // re-extracted DINOv3 invalidates the matrix.
+  const currentSignature = computeCacheSignature({
+    cacheDir: cache,
+    weights: { dinov3: 1.0 },
+    extra: { algo: "patch-dist-matrix", patch_dist_version: PATCH_DIST_VERSION },
+  });
 
-  if (cacheValid) {
+  if (existsSync(distMatrixPath) && readSidecarSignature(sidecar) === currentSignature) {
     log("cluster", "Using cached patch-based distance matrix");
     return distMatrixPath;
   }
@@ -310,6 +398,7 @@ export async function ensurePatchDistMatrix(
     "patch-dist-matrix",
     onProgress,
   );
+  writeSidecarSignature(sidecar, currentSignature);
   return distMatrixPath;
 }
 
@@ -343,11 +432,23 @@ export function loadPatchDistMatrix(targetDir: string): { n: number; distances: 
   return { n, distances };
 }
 
+export type LinkageMethod = "ward" | "average" | "complete";
+
+const DEFAULT_RERANK_BLEND = 0.7;
+
+export interface LinkageOptions {
+  usePatches?: boolean;
+  useRerank?: boolean;
+  /** Blend strength for re-rank matrix vs raw cosine. 0=cosine only, 1=rerank only. Default 0.7. */
+  rerankBlend?: number;
+}
+
 export async function runLinkage(
   targetDir: string,
   nClusters: number,
   weights?: WeightConfig,
-  usePatches?: boolean,
+  options?: LinkageOptions,
+  onProgress?: (line: string) => void,
 ): Promise<RustOutput> {
   const cache = cacheDir(targetDir);
   const hashCachePath = join(cache, "clip_hash_cache.npz");
@@ -355,14 +456,29 @@ export async function runLinkage(
   const hashOrderPath = join(cache, "hash_cache_order.json");
   const groupsFile = join(targetDir, ".reorder-groups.json");
   const treePath = join(cache, "linkage_tree.bin");
-  const distMatrixPath = patchDistMatrixPath(targetDir);
 
-  if (usePatches) {
-    await ensurePatchDistMatrix(targetDir);
+  // Re-rank takes precedence over patches when both are enabled.
+  const useRerank = options?.useRerank ?? false;
+  const usePatches = !useRerank && (options?.usePatches ?? false);
+  const rerankBlend = options?.rerankBlend ?? DEFAULT_RERANK_BLEND;
+
+  let distMatrixPath: string | null = null;
+  let distMatrixWeight: number | null = null;
+  if (useRerank) {
+    distMatrixPath = await ensureRerankDistMatrix(targetDir, weights ?? {}, onProgress);
+    distMatrixWeight = rerankBlend;
+  } else if (usePatches) {
+    distMatrixPath = await ensurePatchDistMatrix(targetDir);
+    const hasEmbWeights = weights && Object.values(weights).some((v) => (v ?? 0) > 0);
+    distMatrixWeight = hasEmbWeights ? 0.5 : 1.0;
   }
 
   // Ensure the JSON sidecar exists (regenerate from NPZ if needed)
   ensureHashOrderJson(cache);
+
+  // Linkage method: average works best with re-rank distance; ward is the
+  // historical default for raw cosine.
+  const linkageMethod: LinkageMethod = useRerank ? "average" : "ward";
 
   const args = [
     "--hash-cache",
@@ -375,16 +491,15 @@ export async function runLinkage(
     String(nClusters),
     "--output-tree",
     treePath,
+    "--linkage",
+    linkageMethod,
   ];
   if (existsSync(groupsFile)) {
     args.push("--groups", groupsFile);
   }
-  if (usePatches) {
+  if (distMatrixPath && distMatrixWeight != null) {
     args.push("--dist-matrix", distMatrixPath);
-    const hasEmbWeights = weights && Object.values(weights).some((v) => (v ?? 0) > 0);
-    if (hasEmbWeights) {
-      args.push("--dist-matrix-weight", "0.5");
-    }
+    args.push("--dist-matrix-weight", String(distMatrixWeight));
   }
   if (weights) {
     for (const [key, val] of Object.entries(weights)) {
@@ -398,7 +513,7 @@ export async function runLinkage(
     );
   }
 
-  log("cluster", `Running Rust linkage: ${RUST_BINARY} ${args.join(" ")}`);
+  log("cluster", `Running ${linkageMethod} linkage: ${RUST_BINARY} ${args.join(" ")}`);
   const stdout = await runRustBinary(RUST_BINARY, args, "cluster-tool");
   return JSON.parse(stdout);
 }
@@ -1227,9 +1342,10 @@ export async function runFullCluster(
   nClusters: number,
   onProgress?: (line: string) => void,
   weights?: WeightConfig,
-  usePatches?: boolean,
+  options?: LinkageOptions,
 ): Promise<ClusterData> {
   const required = modelsForWeights(weights);
+  const usePatches = options?.usePatches ?? false;
   if (usePatches && required && !required.includes("dinov3")) {
     required.push("dinov3");
   }
@@ -1245,7 +1361,7 @@ export async function runFullCluster(
   ];
   log("cluster", `Extraction: ${extraction.extracted} new, ${extraction.cached} cached`);
 
-  const rustOutput = await runLinkage(targetDir, nClusters, weights, usePatches);
+  const rustOutput = await runLinkage(targetDir, nClusters, weights, options, onProgress);
   log("cluster", `Linkage complete: ${rustOutput.clusters.length} clusters`);
 
   const clusters = hasClip
@@ -1261,9 +1377,9 @@ export async function runLinkageOnly(
   targetDir: string,
   nClusters: number,
   weights?: WeightConfig,
-  usePatches?: boolean,
+  options?: LinkageOptions,
 ): Promise<ClusterData> {
-  const rustOutput = await runLinkage(targetDir, nClusters, weights, usePatches);
+  const rustOutput = await runLinkage(targetDir, nClusters, weights, options);
   const clusters = computeAutoNames(targetDir, rustOutput.clusters);
   const nImages = clusters.reduce((n, c) => n + c.images.length, 0);
   return { clusters, suggestedCounts: computeSuggestedCounts(nImages), nClusters };
@@ -1521,6 +1637,9 @@ export async function runScopedLinkage(
 
   ensureHashOrderJson(cache);
 
+  // Scoped clustering operates on a filename subset (--filenames). The Rust
+  // tool disallows combining that with --dist-matrix, so re-ranking isn't
+  // available here in v1. Use ward linkage on raw cosine distances.
   const args = [
     "--hash-cache",
     hashCachePath,
@@ -1534,6 +1653,8 @@ export async function runScopedLinkage(
     String(nClusters),
     "--output-tree",
     treePath,
+    "--linkage",
+    "ward",
   ];
   if (existsSync(groupsFile)) args.push("--groups", groupsFile);
   if (weights) {

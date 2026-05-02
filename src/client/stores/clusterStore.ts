@@ -23,9 +23,14 @@ interface ClusterState {
   focusedClusterId: string | null;
   weights: WeightConfig;
   usePatches: boolean;
+  useRerank: boolean;
+  /** Blend strength for re-rank distance (0=cosine only, 1=rerank only). */
+  rerankBlend: number;
 
   setWeights: (w: WeightConfig) => void;
   setUsePatches: (v: boolean) => void;
+  setUseRerank: (v: boolean) => void;
+  setRerankBlend: (v: number) => void;
   fetchClusters: (nClusters?: number) => Promise<void>;
   recutClusters: (nClusters: number) => Promise<void>;
   recutByThreshold: (threshold: number) => Promise<void>;
@@ -134,18 +139,31 @@ export const useClusterStore = create<ClusterState>((set, get) => {
     focusedClusterId: null,
     weights: { pecore_g: 1.0, color: 0.5 },
     usePatches: false,
+    useRerank: true,
+    rerankBlend: 0.7,
 
     setWeights: (w) => set({ weights: w, treeStale: true }),
-    setUsePatches: (v) => set({ usePatches: v, treeStale: true }),
+    setUsePatches: (v) => {
+      if (get().usePatches === v) return;
+      set({ usePatches: v, treeStale: true });
+    },
+    setUseRerank: (v) => {
+      if (get().useRerank === v) return;
+      set({ useRerank: v, treeStale: true });
+    },
+    setRerankBlend: (v) => {
+      if (get().rerankBlend === v) return;
+      set({ rerankBlend: v, treeStale: true });
+    },
 
     fetchClusters: async (nClusters = 200) => {
       set({ loading: true, progress: "Starting clustering..." });
       try {
-        const { weights, usePatches } = get();
+        const { weights, usePatches, useRerank, rerankBlend } = get();
         const response = await fetch("/api/cluster", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ nClusters, weights, usePatches }),
+          body: JSON.stringify({ nClusters, weights, usePatches, useRerank, rerankBlend }),
         });
 
         if (response.status === 409) {

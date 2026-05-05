@@ -2,7 +2,7 @@ import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useClusterStore } from "../../stores/clusterStore.ts";
 import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
-import type { ClusterResultData } from "../../types.ts";
+import type { ClusterMetrics, ClusterResultData } from "../../types.ts";
 import { cn, imageUrl } from "../../utils/helpers.ts";
 import { AskClaudeButton } from "../AskClaudeButton.tsx";
 
@@ -14,6 +14,10 @@ interface Props {
   selectedImages: Set<string>;
   isCurrentSearchMatch?: boolean;
   searchMatchFilenames?: Set<string>;
+  metrics?: ClusterMetrics;
+  splitExpanded?: boolean;
+  /** Visual nesting depth from the parent (0 = top-level). */
+  depth?: number;
   onToggleCollapse: () => void;
   onMergeSelect: (e: React.MouseEvent) => void;
   onImageSelect: (filename: string) => void;
@@ -22,6 +26,21 @@ interface Props {
   onAddToGroup: () => void;
   onDismiss: () => void;
   onOpenLightbox: (index: number) => void;
+  onOpenCompare: () => void;
+  onToggleSplit: () => void;
+  onOpenExpand: () => void;
+}
+
+function fmtDistance(v: number | undefined): string {
+  if (v === undefined) return "—";
+  if (!Number.isFinite(v) || v < 0) return "∞";
+  if (v === 0) return "0";
+  return v < 0.01 ? v.toFixed(3) : v.toFixed(2);
+}
+
+function fmtStability(v: number | undefined): string {
+  if (v === undefined || !Number.isFinite(v) || v <= 0) return "—";
+  return v.toFixed(2);
 }
 
 export function ClusterCard({
@@ -32,6 +51,9 @@ export function ClusterCard({
   selectedImages,
   isCurrentSearchMatch,
   searchMatchFilenames,
+  metrics,
+  splitExpanded,
+  depth = 0,
   onToggleCollapse,
   onMergeSelect,
   onImageSelect,
@@ -40,6 +62,9 @@ export function ClusterCard({
   onAddToGroup,
   onDismiss,
   onOpenLightbox,
+  onOpenCompare,
+  onToggleSplit,
+  onOpenExpand,
 }: Props) {
   const hasGroup = !!cluster.confirmedGroup;
 
@@ -65,7 +90,11 @@ export function ClusterCard({
     focused && "focused",
     isFullyGrouped && "fully-grouped",
     isCurrentSearchMatch && "is-search-match",
+    depth > 0 && "cluster-card-child",
+    splitExpanded && "cluster-card-split-open",
   );
+
+  const splitDisabled = cluster.images.length < 3;
 
   function renderThumbs(files: string[], confirmed: boolean) {
     return files.map((f) => (
@@ -84,7 +113,11 @@ export function ClusterCard({
   }
 
   return (
-    <div className={cardClass} onClick={onMergeSelect}>
+    <div
+      className={cardClass}
+      onClick={onMergeSelect}
+      style={depth > 0 ? { marginLeft: `${Math.min(depth, 4) * 24}px` } : undefined}
+    >
       <div
         className="cluster-header"
         onClick={(e) => {
@@ -108,6 +141,24 @@ export function ClusterCard({
 
         <span className="cluster-count">{cluster.images.length} images</span>
 
+        <div className="cluster-metrics" onClick={(e) => e.stopPropagation()}>
+          <span className="cluster-metric" title="Cohesion — max intra-pair distance">
+            c:<span className="cluster-metric-val">{fmtDistance(metrics?.cohesion)}</span>
+          </span>
+          <span className="cluster-metric-sep">·</span>
+          <span
+            className="cluster-metric"
+            title="Isolation — distance at which it would merge into its parent"
+          >
+            i:
+            <span className="cluster-metric-val">{fmtDistance(metrics?.isolation)}</span>
+          </span>
+          <span className="cluster-metric-sep">·</span>
+          <span className="cluster-metric" title="Stability — (death − birth) / death">
+            s:<span className="cluster-metric-val">{fmtStability(metrics?.stability)}</span>
+          </span>
+        </div>
+
         {!collapsed &&
           cluster.autoTags.slice(0, 4).map((t) => (
             <span key={t.term} className="cluster-tag" title={`z=${t.z.toFixed(1)}`}>
@@ -126,6 +177,34 @@ export function ClusterCard({
               Add {suggestedImages.length} to Group
             </button>
           )}
+          <button
+            className="btn btn-small btn-tree-nav"
+            onClick={onOpenCompare}
+            title="Open compare-mode to merge with similar clusters"
+          >
+            merge…
+          </button>
+          <button
+            className="btn btn-small btn-tree-nav"
+            onClick={onToggleSplit}
+            disabled={splitDisabled}
+            title={
+              splitDisabled
+                ? "Need at least 3 images to split"
+                : splitExpanded
+                  ? "Collapse split"
+                  : "Split into two children"
+            }
+          >
+            {splitExpanded ? "collapse" : "split"}
+          </button>
+          <button
+            className="btn btn-small btn-tree-nav"
+            onClick={onOpenExpand}
+            title="Pull in nearby images from outside this cluster"
+          >
+            expand…
+          </button>
           <button
             className="btn btn-small"
             onClick={() => useNNQueryStore.getState().openForCluster(cluster)}

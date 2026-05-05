@@ -128,6 +128,30 @@ export interface ImportClusterInput {
   images: string[];
 }
 
+// Tree-navigation operation types
+
+export interface ClusterMetrics {
+  cohesion: number;
+  isolation: number; // -1 sentinel from server when Infinity
+  stability: number;
+}
+
+export interface ExpandCandidate {
+  filename: string;
+  distance: number;
+}
+
+export interface ExpandResult {
+  candidates: ExpandCandidate[];
+  p90Intra: number;
+  maxDistance: number;
+}
+
+export interface SplitChildren {
+  childA: ClusterResultData;
+  childB: ClusterResultData;
+}
+
 // Nearest-neighbor query types
 
 export type NNAggregation = "centroid" | "min";

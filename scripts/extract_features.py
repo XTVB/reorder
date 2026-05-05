@@ -8,7 +8,7 @@ Models:
   - CLIP ViT-B/32 (512-dim) — kept for TF-IDF auto-naming
   - PE-Core-L-14-336 (1024-dim) — Meta Perception Encoder, large variant
   - PE-Core-bigG-14-448 (1280-dim) — Meta Perception Encoder, giant variant
-  - Color histograms (77-dim) — HSV + RGB moments
+  - Color histograms (693-dim) — 3x3 spatial grid of HSV + RGB moments (77 per cell)
 
 Usage:
     python3 extract_features.py <image_dir> [--cache-dir <dir>] [--batch-size N]
@@ -35,12 +35,18 @@ MODEL_VERSIONS = {
     "dino": "dinov2-vitl14-v1",
     "pecore_l": "PE-Core-L-14-336-meta-v1",
     "pecore_g": "PE-Core-bigG-14-448-meta-v1",
-    "color": "hsv-rgb-77d-v1",
+    "color": "hsv-rgb-3x3-693d-v1",
     "dinov3": "dinov3-vitb16-7x7pool-v2",
 }
 
 # All embedding arrays stored in the npz
 EMB_KEYS = list(MODEL_VERSIONS.keys())
+
+# Color feature constants
+COLOR_GRID = 3                    # 3x3 spatial grid
+COLOR_CELL_DIM = 36 + 16 + 16 + 9 # HSV histogram (H/S/V) + RGB moments (mean/std/skew per channel)
+COLOR_DIM = COLOR_GRID * COLOR_GRID * COLOR_CELL_DIM  # 693
+COLOR_THUMB_SIZE = 144            # divisible by COLOR_GRID; 48x48 per cell
 
 # DINOv3 constants
 DINOV3_CLS_DIM = 768
@@ -63,26 +69,49 @@ def content_hash(filepath: str) -> str:
     return hashlib.blake2b(head, digest_size=16, key=size.to_bytes(8, "big")).hexdigest()
 
 
-def extract_color_features(img_rgb, thumb_size=128):
-    """Extract HSV histogram + RGB color moments (77 dimensions)."""
-    thumb = img_rgb.resize((thumb_size, thumb_size))
-    arr = np.array(thumb, dtype=np.float32)
-    hsv = np.array(thumb.convert("HSV"), dtype=np.float32)
-
+def _cell_color_features(arr_cell, hsv_cell):
+    """Per-cell 77-dim HSV histogram + RGB color moments."""
     feats = []
     for ch, bins in [(0, 36), (1, 16), (2, 16)]:
-        h, _ = np.histogram(hsv[:, :, ch], bins=bins, range=(0, 256))
+        h, _ = np.histogram(hsv_cell[:, :, ch], bins=bins, range=(0, 256))
         h = h.astype(np.float32) / (h.sum() + 1e-10)
         feats.extend(h)
     for ch in range(3):
-        d = arr[:, :, ch]
+        d = arr_cell[:, :, ch]
         mu, sigma = d.mean(), d.std()
         feats.extend([
             mu / 256.0,
             sigma / 128.0,
             float(np.mean(((d - mu) / max(sigma, 1.0)) ** 3)) / 5.0,
         ])
+    return feats
+
+
+def extract_color_features(img_rgb, thumb_size=COLOR_THUMB_SIZE):
+    """Spatial 3x3 grid of HSV + RGB color features (693 dimensions, row-major top-left → bottom-right)."""
+    thumb = img_rgb.resize((thumb_size, thumb_size))
+    arr = np.array(thumb, dtype=np.float32)
+    hsv = np.array(thumb.convert("HSV"), dtype=np.float32)
+
+    cell = thumb_size // COLOR_GRID
+    feats = []
+    for gy in range(COLOR_GRID):
+        for gx in range(COLOR_GRID):
+            y0, x0 = gy * cell, gx * cell
+            y1, x1 = y0 + cell, x0 + cell
+            feats.extend(_cell_color_features(arr[y0:y1, x0:x1], hsv[y0:y1, x0:x1]))
     return np.array(feats, dtype=np.float32)
+
+
+def _color_extract_worker(args):
+    """Module-level worker for ProcessPoolExecutor — must be picklable.
+    Returns (feature_array, error_message_or_None)."""
+    image_dir, fname = args
+    try:
+        from PIL import Image
+        return (extract_color_features(Image.open(os.path.join(image_dir, fname)).convert("RGB")), None)
+    except Exception as e:
+        return (None, repr(e))
 
 
 def main():
@@ -556,29 +585,42 @@ def main():
     total_passes = sum(1 for k in EMB_KEYS if items_map[k])
 
     new_arrays = {}
-    new_color = np.zeros((0, 77), dtype=np.float32)
+    new_color = np.zeros((0, COLOR_DIM), dtype=np.float32)
 
     if items_map["color"] and not _interrupted:
+        from concurrent.futures import ProcessPoolExecutor
         color_items = items_map["color"]
         pass_num += 1
-        print(f"  [Pass {pass_num}/{total_passes}] Color histograms ({len(color_items)} images)", file=sys.stderr)
+        n = len(color_items)
+        n_workers = os.cpu_count() or 4
+        print(f"  [Pass {pass_num}/{total_passes}] Color histograms "
+              f"({n} images, {n_workers} workers)", file=sys.stderr)
         color_results = []
         t0 = time.time()
-        n = len(color_items)
-        for i, (fname, h) in enumerate(color_items):
-            path = os.path.join(image_dir, fname)
-            try:
-                img = Image.open(path).convert("RGB")
-                color_results.append(extract_color_features(img))
-            except Exception as e:
-                print(f"  WARNING: skipping {fname}: {e}", file=sys.stderr)
-                color_results.append(np.zeros(77, dtype=np.float32))
-            if (i + 1) % 200 == 0 or i == n - 1:
-                _report_progress("Color", i + 1, n, t0)
-            if _interrupted:
-                break
+
+        # Submit upfront and iterate in input order so color_results stays aligned with color_items.
+        # Workers are processes (sidesteps the GIL); each handles one image at a time.
+        ex = ProcessPoolExecutor(max_workers=n_workers)
+        try:
+            futures = [ex.submit(_color_extract_worker, (image_dir, f)) for f, _ in color_items]
+            for i, fut in enumerate(futures):
+                if _interrupted:
+                    for pending in futures[i:]:
+                        pending.cancel()
+                    break
+                feat, err = fut.result()
+                if err is not None:
+                    print(f"  WARNING: skipping {color_items[i][0]}: {err}", file=sys.stderr)
+                    color_results.append(np.zeros(COLOR_DIM, dtype=np.float32))
+                else:
+                    color_results.append(feat)
+                if (i + 1) % 200 == 0 or i == n - 1:
+                    _report_progress("Color", i + 1, n, t0)
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
+
         n_done = len(color_results)
-        new_color = np.array(color_results, dtype=np.float32) if color_results else np.zeros((0, 77), dtype=np.float32)
+        new_color = np.array(color_results, dtype=np.float32) if color_results else np.zeros((0, COLOR_DIM), dtype=np.float32)
         _save_model_to_cache("color", new_color, color_items[:n_done])
 
     # ── open_clip models (data-driven) ───────────────────────────────────────

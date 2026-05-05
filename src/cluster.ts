@@ -85,7 +85,7 @@ interface RustOutput {
   tree_path: string;
 }
 
-interface LinkageTree {
+export interface LinkageTree {
   nImages: number;
   nPreMerges: number;
   nGroups: number;
@@ -552,12 +552,18 @@ function parseLinkageTree(path: string): LinkageTree {
 
 // ── Re-cut (Bun-side, instant) ───────────────────────────────────────────────
 
-function loadTree(targetDir: string): LinkageTree {
+export function loadTree(targetDir: string): LinkageTree {
   const treePath = join(cacheDir(targetDir), "linkage_tree.bin");
   if (!existsSync(treePath)) {
     throw new Error("No linkage tree found. Run full clustering first.");
   }
-  return parseLinkageTree(treePath);
+  const mtime = statSync(treePath).mtimeMs;
+  if (_treeCache && _treeCache.targetDir === targetDir && _treeCache.mtime === mtime) {
+    return _treeCache.tree;
+  }
+  const tree = parseLinkageTree(treePath);
+  _treeCache = { targetDir, mtime, tree };
+  return tree;
 }
 
 /** Apply pre-merges, then main merges up to `maxMainMerges`, return labels. */
@@ -951,6 +957,7 @@ let _textEmbCache: TextEmbeddings | null = null;
 const _modelEmbCaches = new Map<string, ModelEmbedding>();
 let _tfidfStatsCache: { globalAvg: Float64Array; globalStd: Float64Array } | null = null;
 let _hashMappingCache: { targetDir: string; mtime: number; mapping: HashMapping } | null = null;
+let _treeCache: { targetDir: string; mtime: number; tree: LinkageTree } | null = null;
 
 function loadTextEmbeddings(targetDir: string): TextEmbeddings {
   if (_textEmbCache) return _textEmbCache;
@@ -1526,6 +1533,7 @@ export function invalidateClusterCache() {
   _modelEmbCaches.clear();
   _tfidfStatsCache = null;
   _hashMappingCache = null;
+  _treeCache = null;
   _patchDistMatrixCache = null;
 }
 

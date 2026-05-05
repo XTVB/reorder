@@ -5,13 +5,37 @@ import { filenamesFromSelectedImages, useClusterStore } from "../../stores/clust
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
 import { useUIStore } from "../../stores/uiStore.ts";
-import type { ClusterData, ClusterResultData } from "../../types.ts";
+import type { ClusterData, ClusterResultData, SplitChildren } from "../../types.ts";
 import { Lightbox } from "../Lightbox.tsx";
 import { SearchOverlay, useSearchOverlayState } from "../SearchBar.tsx";
 import { ClusterCard } from "./ClusterCard.tsx";
+import { ComparePanel } from "./ComparePanel.tsx";
+import { ExpandModal } from "./ExpandModal.tsx";
 import { MergeBar } from "./MergeBar.tsx";
 import { NNResultsModal } from "./NNResultsModal.tsx";
 import { ScopeBanner } from "./ScopeBanner.tsx";
+
+interface DisplayEntry {
+  cluster: ClusterResultData;
+  depth: number;
+}
+
+function flattenWithSplits(
+  clusters: ClusterResultData[],
+  splitChildren: Record<string, SplitChildren>,
+): DisplayEntry[] {
+  const out: DisplayEntry[] = [];
+  function visit(c: ClusterResultData, depth: number) {
+    out.push({ cluster: c, depth });
+    const kids = splitChildren[c.id];
+    if (kids) {
+      visit(kids.childA, depth + 1);
+      visit(kids.childB, depth + 1);
+    }
+  }
+  for (const c of clusters) visit(c, 0);
+  return out;
+}
 
 function getClusterSubtitle(
   clusterData: ClusterData | null,
@@ -38,6 +62,10 @@ export function ClusterView() {
   const lightbox = useClusterStore((s) => s.lightbox);
   const treeStale = useClusterStore((s) => s.treeStale);
   const focusedClusterId = useClusterStore((s) => s.focusedClusterId);
+  const splitChildren = useClusterStore((s) => s.splitChildren);
+  const metrics = useClusterStore((s) => s.metrics);
+  const compare = useClusterStore((s) => s.compare);
+  const expand = useClusterStore((s) => s.expand);
   const fetchClusters = useClusterStore((s) => s.fetchClusters);
   const runScopedCluster = useClusterStore((s) => s.runScopedCluster);
   const toggleMergeSelect = useClusterStore((s) => s.toggleMergeSelect);
@@ -55,6 +83,10 @@ export function ClusterView() {
   const addToGroup = useClusterStore((s) => s.addToGroup);
   const loadCachedClusters = useClusterStore((s) => s.loadCachedClusters);
   const moveFocus = useClusterStore((s) => s.moveFocus);
+  const refreshMetrics = useClusterStore((s) => s.refreshMetrics);
+  const openCompare = useClusterStore((s) => s.openCompare);
+  const toggleSplit = useClusterStore((s) => s.toggleSplit);
+  const openExpand = useClusterStore((s) => s.openExpand);
 
   const groups = useGroupStore((s) => s.groups);
   const fetchGroups = useGroupStore((s) => s.fetchGroups);
@@ -63,7 +95,7 @@ export function ClusterView() {
   const unsortedClusters = clusterData?.clusters ?? EMPTY_CLUSTERS;
 
   // Sort: suggestions to existing groups first, then by original order
-  const visibleClusters = React.useMemo(() => {
+  const sortedTopLevel = React.useMemo(() => {
     if (unsortedClusters.length === 0) return unsortedClusters;
     const withGroup: ClusterResultData[] = [];
     const withoutGroup: ClusterResultData[] = [];
@@ -79,6 +111,15 @@ export function ClusterView() {
     return [...withGroup, ...withoutGroup];
   }, [unsortedClusters]);
 
+  const displayEntries = React.useMemo(
+    () => flattenWithSplits(sortedTopLevel, splitChildren),
+    [sortedTopLevel, splitChildren],
+  );
+  const visibleClusters = React.useMemo(
+    () => displayEntries.map((e) => e.cluster),
+    [displayEntries],
+  );
+
   // Ensure groups are loaded before any cluster operations can modify them
   // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only — fetchGroups is a stable Zustand action
   useEffect(() => {
@@ -90,6 +131,13 @@ export function ClusterView() {
   useEffect(() => {
     loadCachedClusters();
   }, []);
+
+  // Refresh metrics whenever the cluster set changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshMetrics is a stable Zustand action; we want it to trigger only when the underlying cluster set changes
+  useEffect(() => {
+    if (!clusterData) return;
+    refreshMetrics();
+  }, [clusterData, splitChildren]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: setHeaderSubtitle is a stable Zustand action
   useEffect(() => {
@@ -321,6 +369,8 @@ export function ClusterView() {
             {virtualItems.map((virtualItem) => {
               const cluster = visibleClusters[virtualItem.index];
               if (!cluster) return null;
+              const entry = displayEntries[virtualItem.index];
+              const depth = entry?.depth ?? 0;
               return (
                 <div
                   key={cluster.id}
@@ -344,6 +394,9 @@ export function ClusterView() {
                     searchMatchFilenames={
                       cluster.id === currentMatchClusterId ? currentMatchFilenames : undefined
                     }
+                    metrics={metrics[cluster.id]}
+                    splitExpanded={!!splitChildren[cluster.id]}
+                    depth={depth}
                     onToggleCollapse={() => toggleCollapsed(cluster.id)}
                     onMergeSelect={(e) => {
                       if (e.metaKey || e.ctrlKey) toggleMergeSelect(cluster.id);
@@ -354,6 +407,9 @@ export function ClusterView() {
                     onAddToGroup={() => addToGroup(cluster)}
                     onDismiss={() => dismissCluster(cluster.id)}
                     onOpenLightbox={(index) => openLightbox(cluster.id, index)}
+                    onOpenCompare={() => openCompare(cluster.id)}
+                    onToggleSplit={() => toggleSplit(cluster.id)}
+                    onOpenExpand={() => openExpand(cluster.id)}
                   />
                 </div>
               );
@@ -406,6 +462,8 @@ export function ClusterView() {
 
       {renderLightbox()}
       <NNResultsModal />
+      {compare && <ComparePanel />}
+      {expand && <ExpandModal />}
     </div>
   );
 }

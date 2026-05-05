@@ -19,7 +19,7 @@ const WEIGHT_KEYS: { key: keyof Weights; label: string; desc: string }[] = [
   { key: "dinov3", label: "DINOv3", desc: "ViT-B/16 (768d, instance)" },
   { key: "pecore_l", label: "PE-Core L", desc: "L-14-336 (1024d)" },
   { key: "pecore_g", label: "PE-Core G", desc: "bigG-14-448 (1280d)" },
-  { key: "color", label: "Color", desc: "HSV+RGB (77d)" },
+  { key: "color", label: "Color", desc: "HSV+RGB 3x3 spatial (693d)" },
 ];
 
 const ZERO_WEIGHTS: Weights = { clip: 0, dino: 0, dinov3: 0, pecore_l: 0, pecore_g: 0, color: 0 };

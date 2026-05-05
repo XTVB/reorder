@@ -10,14 +10,14 @@
 import type { NNAggregation, NNFilter, NNResult, WeightConfig } from "./client/types.ts";
 import {
   cachedHashMapping,
-  loadGroups,
   loadModelEmbedding,
   MODEL_KEYS,
   type ModelEmbedding,
   type ModelKey,
-} from "./cluster.ts";
+} from "./cluster/index.ts";
+import { loadGroups } from "./fs/groups.ts";
 
-export { ModelMissingError } from "./cluster.ts";
+export { ModelMissingError } from "./cluster/index.ts";
 
 export interface NNQueryOpts {
   topN: number;

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { consumeSSE, startSSE } from "../api/sse.ts";
 import type {
   ClusterResultData,
   NNAggregation,
@@ -7,10 +8,10 @@ import type {
   NNResult,
 } from "../types.ts";
 import { getErrorMessage } from "../utils/helpers.ts";
-import { consumeSSE } from "../utils/sse.ts";
-import { useClusterStore } from "./clusterStore.ts";
-import { flushGroupPersist, useGroupStore } from "./groupStore.ts";
-import { useUIStore } from "./uiStore.ts";
+import { useSelectionStore } from "./core/selectionStore.ts";
+import { useToastStore } from "./core/toastStore.ts";
+import { useGroupStore } from "./groupStore.ts";
+import { useListStore } from "./modes/cluster/listStore.ts";
 
 type QuerySource =
   | { kind: "cluster"; clusterId: string; images: string[] }
@@ -31,8 +32,6 @@ interface NNQueryState {
   results: NNResult[];
   usedModels: string[];
   patchesBlended: boolean;
-
-  modalSelection: Set<string>;
 
   openForCluster: (cluster: ClusterResultData) => void;
   openForSelection: (filenames: string[]) => void;
@@ -74,32 +73,31 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
   results: [],
   usedModels: [],
   patchesBlended: false,
-  modalSelection: new Set(),
 
   openForCluster: (cluster) => {
     const label = cluster.autoName
       ? `Cluster "${cluster.autoName}" (${cluster.images.length})`
       : `${cluster.images.length} images`;
+    useSelectionStore.getState().clear("nn");
     set({
       open: true,
       queryLabel: label,
       querySource: { kind: "cluster", clusterId: cluster.id, images: cluster.images },
       results: [],
       error: null,
-      modalSelection: new Set(),
     });
     get().fetch();
   },
 
   openForSelection: (filenames) => {
     const deduped = [...new Set(filenames)];
+    useSelectionStore.getState().clear("nn");
     set({
       open: true,
       queryLabel: `${deduped.length} selected image${deduped.length === 1 ? "" : "s"}`,
       querySource: { kind: "selection", images: deduped },
       results: [],
       error: null,
-      modalSelection: new Set(),
     });
     get().fetch();
   },
@@ -109,6 +107,7 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
       clearTimeout(_debounceTimer);
       _debounceTimer = null;
     }
+    useSelectionStore.getState().clear("nn");
     set({
       open: false,
       querySource: null,
@@ -117,7 +116,6 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
       error: null,
       loading: false,
       progress: "",
-      modalSelection: new Set(),
     });
   },
 
@@ -138,32 +136,28 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
     const { querySource, filter, topN, aggregation } = get();
     if (!querySource || querySource.images.length === 0) return;
 
-    const { weights, usePatches, clusterData } = useClusterStore.getState();
+    const { weights, usePatches, clusterData } = useListStore.getState();
     const restrictToFilenames = clusterData?.scope?.subsetFilenames;
 
     set({ loading: true, progress: "Running NN query...", error: null });
     try {
-      const response = await fetch("/api/cluster/nn-query", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          queryFilenames: querySource.images,
-          topN,
-          filter,
-          aggregation,
-          weights,
-          usePatches,
-          restrictToFilenames,
-        }),
+      const start = await startSSE("/api/cluster/nn-query", {
+        queryFilenames: querySource.images,
+        topN,
+        filter,
+        aggregation,
+        weights,
+        usePatches,
+        restrictToFilenames,
       });
-      if (response.status === 409) {
+      if (start.kind === "conflict") {
         set({ loading: false, progress: "", error: "Clustering in progress — retry shortly" });
         return;
       }
 
       let result: NNQueryResponse | null = null;
       let errMsg: string | null = null;
-      await consumeSSE(response, {
+      await consumeSSE(start.response, {
         onProgress: (message) => set({ progress: message }),
         onResult: (data) => {
           result = data as NNQueryResponse;
@@ -200,31 +194,31 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
   },
 
   toggleResultSelected: (filename) => {
-    const sel = new Set(get().modalSelection);
-    if (sel.has(filename)) sel.delete(filename);
-    else sel.add(filename);
-    set({ modalSelection: sel });
+    useSelectionStore.getState().toggle("nn", filename);
   },
 
-  clearModalSelection: () => set({ modalSelection: new Set() }),
+  clearModalSelection: () => {
+    useSelectionStore.getState().clear("nn");
+  },
 
   createClusterFromSelected: () => {
-    const { modalSelection, queryLabel } = get();
+    const modalSelection = useSelectionStore.getState().contexts.nn;
+    const { queryLabel } = get();
     if (modalSelection.size === 0) return;
-    const insertClusterFromFilenames = useClusterStore.getState().insertClusterFromFilenames;
+    const insertClusterFromFilenames = useListStore.getState().insertClusterFromFilenames;
     const label = `NN: ${queryLabel}`.slice(0, 60);
     insertClusterFromFilenames(label, [...modalSelection]);
-    useUIStore
+    useToastStore
       .getState()
       .showToast(`Created cluster with ${modalSelection.size} images`, "success");
     get().close();
   },
 
   addSelectedToGroup: async (groupId) => {
-    const { modalSelection } = get();
+    const modalSelection = useSelectionStore.getState().contexts.nn;
     if (modalSelection.size === 0) return;
     const { groups, updateGroups, groupsLoaded } = useGroupStore.getState();
-    const { showToast } = useUIStore.getState();
+    const { showToast } = useToastStore.getState();
 
     if (!groupsLoaded) {
       showToast("Groups still loading — please wait", "warning");
@@ -249,8 +243,8 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
     showToast(`Added ${toAdd.length} to "${group.name}"`, "success");
 
     // Flush so subsequent badge lookups see the new membership.
-    await flushGroupPersist();
-    set({ modalSelection: new Set() });
+    await useGroupStore.getState().flushPending();
+    useSelectionStore.getState().clear("nn");
     await get().fetch();
   },
 }));

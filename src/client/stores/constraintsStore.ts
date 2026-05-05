@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { postJson } from "../utils/helpers.ts";
-import { useClusterStore } from "./clusterStore.ts";
+import { getJson, postJson } from "../api/client.ts";
+import { useListStore } from "./modes/cluster/listStore.ts";
 
 interface ResolvedCannotLink {
   imageHash: string;
@@ -45,19 +45,41 @@ function buildIndex(resolved: ResolvedCannotLink[]): Map<string, Set<string>> {
   return idx;
 }
 
-function applyServer(payload: ServerResponse) {
+function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
+  if (a.size !== b.size) return false;
+  for (const x of a) if (!b.has(x)) return false;
+  return true;
+}
+
+function reconcileLocked(prev: Set<string>, next: Set<string>): Set<string> {
+  return setsEqual(prev, next) ? prev : next;
+}
+
+function reconcileIndex(
+  prev: Map<string, Set<string>>,
+  next: Map<string, Set<string>>,
+): Map<string, Set<string>> {
+  if (prev.size !== next.size) return next;
+  for (const [k, prevSet] of prev) {
+    const nextSet = next.get(k);
+    if (!nextSet || !setsEqual(prevSet, nextSet)) return next;
+  }
+  return prev;
+}
+
+function applyServer(payload: ServerResponse, prev: ConstraintsState) {
+  const nextLocked = new Set(payload.lockedGroupIds);
+  const nextIndex = buildIndex(payload.imageGroupCannotLinkResolved ?? []);
   return {
-    lockedGroupIds: new Set(payload.lockedGroupIds),
-    index: buildIndex(payload.imageGroupCannotLinkResolved ?? []),
+    lockedGroupIds: reconcileLocked(prev.lockedGroupIds, nextLocked),
+    index: reconcileIndex(prev.index, nextIndex),
     loaded: true,
   };
 }
 
-async function applyMutationResponse(res: Response) {
-  if (!res.ok) return;
-  const payload = (await res.json()) as ServerResponse;
-  useConstraintsStore.setState(applyServer(payload));
-  if (payload.treeStale) useClusterStore.getState().markTreeStale();
+function applyMutationPayload(payload: ServerResponse) {
+  useConstraintsStore.setState((prev) => applyServer(payload, prev));
+  if (payload.treeStale) useListStore.getState().markTreeStale();
 }
 
 export const useConstraintsStore = create<ConstraintsState>((set, get) => ({
@@ -67,9 +89,8 @@ export const useConstraintsStore = create<ConstraintsState>((set, get) => ({
 
   loadConstraints: async () => {
     try {
-      const res = await fetch("/api/constraints");
-      const payload = (await res.json()) as ServerResponse;
-      set(applyServer(payload));
+      const payload = await getJson<ServerResponse>("/api/constraints");
+      set((prev) => applyServer(payload, prev));
     } catch {
       set({ loaded: true });
     }
@@ -77,31 +98,37 @@ export const useConstraintsStore = create<ConstraintsState>((set, get) => ({
 
   addImageGroupCannotLink: async (filename, groupId) => {
     if (get().isCannotLinked(filename, groupId)) return;
-    await applyMutationResponse(
-      await postJson("/api/constraints/cannot-link", {
+    try {
+      const payload = await postJson<ServerResponse>("/api/constraints/cannot-link", {
         imageFilename: filename,
         groupId,
         action: "add",
-      }),
-    );
+      });
+      applyMutationPayload(payload);
+    } catch {}
   },
 
   removeImageGroupCannotLink: async (filename, groupId) => {
     if (!get().isCannotLinked(filename, groupId)) return;
-    await applyMutationResponse(
-      await postJson("/api/constraints/cannot-link", {
+    try {
+      const payload = await postJson<ServerResponse>("/api/constraints/cannot-link", {
         imageFilename: filename,
         groupId,
         action: "remove",
-      }),
-    );
+      });
+      applyMutationPayload(payload);
+    } catch {}
   },
 
   toggleGroupLock: async (groupId) => {
     const wasLocked = get().lockedGroupIds.has(groupId);
-    await applyMutationResponse(
-      await postJson("/api/constraints/group-lock", { groupId, locked: !wasLocked }),
-    );
+    try {
+      const payload = await postJson<ServerResponse>("/api/constraints/group-lock", {
+        groupId,
+        locked: !wasLocked,
+      });
+      applyMutationPayload(payload);
+    } catch {}
   },
 
   isCannotLinked: (filename, groupId) => {

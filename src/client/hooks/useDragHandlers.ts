@@ -1,11 +1,11 @@
 import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
 import { useCallback, useEffect, useRef } from "react";
+import { useSelectionStore } from "../stores/core/selectionStore.ts";
 import { useDndStore } from "../stores/dndStore.ts";
 import { useFolderStore } from "../stores/folderStore.ts";
 import { useGroupStore } from "../stores/groupStore.ts";
 import { useImageStore } from "../stores/imageStore.ts";
-import { useSelectionStore } from "../stores/selectionStore.ts";
 import { computeGridItems, gridItemId } from "../utils/gridItems.ts";
 import {
   fromFolderSortId,
@@ -100,11 +100,12 @@ export function useDragHandlers({ addImagesToGroup, handleGroupReorder }: DragHa
   // Drag start
   const handleDragStartImpl = (event: DragStartEvent) => {
     const { setActiveId } = useDndStore.getState();
-    const { selectedIds, clearSelection } = useSelectionStore.getState();
+    const sel = useSelectionStore.getState();
+    const selectedIds = sel.contexts.reorder;
     const id = event.active.id as string;
     setActiveId(id);
     if (selectedIds.size > 0 && !selectedIds.has(id)) {
-      clearSelection();
+      sel.clear("reorder");
     }
   };
   const dragStartRef = useRef(handleDragStartImpl);
@@ -114,7 +115,9 @@ export function useDragHandlers({ addImagesToGroup, handleGroupReorder }: DragHa
   // Drag end
   const handleDragEndImpl = (event: DragEndEvent) => {
     const { dragOverGroupId, clearDrag } = useDndStore.getState();
-    const { selectedIds, removeFromSelection } = useSelectionStore.getState();
+    const sel = useSelectionStore.getState();
+    const selectedIds = sel.contexts.reorder;
+    const removeFromSelection = (ids: string[]) => sel.remove("reorder", ids);
     const { images, setImages } = useImageStore.getState();
     const { groups, groupsEnabled, expandedGroupId, groupMap, updateGroups, collapseGroup } =
       useGroupStore.getState();

@@ -1,0 +1,255 @@
+import type React from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useGroupStore } from "../../stores/groupStore.ts";
+import type { GridItem } from "../../types.ts";
+import { gridItemId } from "../../utils/gridItems.ts";
+
+// Context to share search state between SearchBar and App
+type SearchContextType = ReturnType<typeof useSearchState>;
+export const SearchContext = createContext<SearchContextType | null>(null);
+export const useSearchContext = () => useContext(SearchContext);
+
+interface SearchBarProps {
+  gridItems: GridItem[];
+  onScrollToRow: (rowIndex: number) => void;
+  columnCount: number;
+}
+
+export function useSearchState() {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [matchIds, setMatchIds] = useState<Set<string>>(new Set());
+  const [currentMatchId, setCurrentMatchId] = useState<string | null>(null);
+
+  const close = useCallback(() => {
+    setIsOpen(false);
+    setQuery("");
+    setMatchIds(new Set());
+    setCurrentMatchId(null);
+  }, []);
+
+  const open = useCallback(() => setIsOpen(true), []);
+
+  return {
+    isOpen,
+    query,
+    setQuery,
+    matchIds,
+    setMatchIds,
+    currentMatchId,
+    setCurrentMatchId,
+    open,
+    close,
+  };
+}
+
+// Minimal local state for callers that don't need to share matches via context.
+export function useSearchOverlayState() {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const open = useCallback(() => setIsOpen(true), []);
+  const close = useCallback(() => {
+    setIsOpen(false);
+    setQuery("");
+  }, []);
+  return { isOpen, query, setQuery, open, close };
+}
+
+interface SearchOverlayProps {
+  isOpen: boolean;
+  query: string;
+  setQuery: (q: string) => void;
+  open: () => void;
+  close: () => void;
+  matchCount: number;
+  currentMatchIndex: number;
+  onNext: () => void;
+  onPrev: () => void;
+  placeholder?: string;
+}
+
+/**
+ * Presentational search overlay: input + counter + prev/next/close.
+ * Owns the Cmd/Ctrl+F opener, Esc-to-close, and Enter/Shift+Enter cycling.
+ * Callers supply the match count and navigation callbacks.
+ */
+export function SearchOverlay({
+  isOpen,
+  query,
+  setQuery,
+  open,
+  close,
+  matchCount,
+  currentMatchIndex,
+  onNext,
+  onPrev,
+  placeholder = "Search...",
+}: SearchOverlayProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        e.preventDefault();
+        open();
+      }
+    }
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [open]);
+
+  useEffect(() => {
+    if (isOpen) inputRef.current?.focus();
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Escape") {
+      close();
+    } else if (e.key === "Enter") {
+      if (e.shiftKey) onPrev();
+      else onNext();
+    }
+  }
+
+  return (
+    <div className="search-bar">
+      <input
+        ref={inputRef}
+        type="text"
+        className="search-input"
+        placeholder={placeholder}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={handleKeyDown}
+      />
+      <span className="search-count">
+        {query.trim()
+          ? matchCount > 0
+            ? `${currentMatchIndex + 1} of ${matchCount}`
+            : "No matches"
+          : ""}
+      </span>
+      <button
+        className="search-nav-btn"
+        onClick={onPrev}
+        disabled={matchCount === 0}
+        title="Previous (Shift+Enter)"
+      >
+        &#8593;
+      </button>
+      <button
+        className="search-nav-btn"
+        onClick={onNext}
+        disabled={matchCount === 0}
+        title="Next (Enter)"
+      >
+        &#8595;
+      </button>
+      <button className="search-close-btn" onClick={close} title="Close (Esc)">
+        &times;
+      </button>
+    </div>
+  );
+}
+
+export function SearchBar({ gridItems, onScrollToRow, columnCount }: SearchBarProps) {
+  const { isOpen, query, setQuery, setMatchIds, setCurrentMatchId, open, close } =
+    useSearchContext()!;
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+  const groupMap = useGroupStore((s) => s.groupMap);
+
+  // Compute matches (pure — no state updates)
+  const {
+    gridIndices: matches,
+    orderedIds,
+    ids,
+  } = useMemo(() => {
+    if (!query.trim()) {
+      return { gridIndices: [] as number[], orderedIds: [] as string[], ids: new Set<string>() };
+    }
+    const q = query.toLowerCase();
+    const gridIndices: number[] = [];
+    const orderedIds: string[] = [];
+    const ids = new Set<string>();
+    for (let i = 0; i < gridItems.length; i++) {
+      const item = gridItems[i]!;
+      if (item.type === "group-image") continue;
+      if (item.type === "image") {
+        if (item.filename.toLowerCase().includes(q)) {
+          gridIndices.push(i);
+          orderedIds.push(item.filename);
+          ids.add(item.filename);
+        }
+      } else if (item.type === "group") {
+        const group = groupMap.get(item.groupId);
+        if (group?.name.toLowerCase().includes(q)) {
+          const id = gridItemId(item);
+          gridIndices.push(i);
+          orderedIds.push(id);
+          ids.add(id);
+        }
+      }
+    }
+    return { gridIndices, orderedIds, ids };
+  }, [query, gridItems, groupMap]);
+
+  // Sync shared state after matches change
+  useEffect(() => {
+    setMatchIds(ids);
+    setCurrentMatchIndex(0);
+  }, [ids, setMatchIds]);
+
+  // Update currentMatchId when index or matches change
+  useEffect(() => {
+    setCurrentMatchId(orderedIds[currentMatchIndex] ?? null);
+  }, [currentMatchIndex, orderedIds, setCurrentMatchId]);
+
+  // Scroll to current match
+  useEffect(() => {
+    if (matches.length === 0) return;
+    const gridIndex = matches[currentMatchIndex];
+    if (gridIndex === undefined) return;
+    // Compute which visible row this is (excluding group-image items)
+    let visibleIdx = 0;
+    for (let i = 0; i < gridIndex; i++) {
+      if (gridItems[i]!.type !== "group-image") visibleIdx++;
+    }
+    const rowIndex = Math.floor(visibleIdx / columnCount);
+    onScrollToRow(rowIndex);
+  }, [currentMatchIndex, matches, columnCount, gridItems, onScrollToRow]);
+
+  const goNext = useCallback(() => {
+    if (matches.length === 0) return;
+    setCurrentMatchIndex((i) => (i + 1) % matches.length);
+  }, [matches.length]);
+
+  const goPrev = useCallback(() => {
+    if (matches.length === 0) return;
+    setCurrentMatchIndex((i) => (i - 1 + matches.length) % matches.length);
+  }, [matches.length]);
+
+  return (
+    <SearchOverlay
+      isOpen={isOpen}
+      query={query}
+      setQuery={setQuery}
+      open={open}
+      close={close}
+      matchCount={matches.length}
+      currentMatchIndex={currentMatchIndex}
+      onNext={goNext}
+      onPrev={goPrev}
+      placeholder="Search images..."
+    />
+  );
+}

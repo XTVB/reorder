@@ -65,6 +65,12 @@ export interface HashMapping {
   nImages: number;
   hashOrder: string[];
   hashToRow: Map<string, number>;
+  /** Lazy: filename → content hash. Built once per cache entry on first access. */
+  readonly filenameToHash: Map<string, string>;
+  /** Lazy: content hash → filename. Built once per cache entry on first access. */
+  readonly hashToFilename: Map<string, string>;
+  /** Lazy: filename → its index in the sorted `filenames` array. */
+  readonly fnToIdx: Map<string, number>;
 }
 
 /** Extract a numpy Unicode string array (<U*) from an .npz entry as string[]. */
@@ -124,20 +130,6 @@ export function loadContentHashes(cacheDir: string): Record<string, string> {
   }
 }
 
-/** Hash → current filename, derived from `content_hashes.json`. */
-export function loadHashToFilenameMap(cacheDir: string): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const [fname, hash] of Object.entries(loadContentHashes(cacheDir))) {
-    out.set(hash, fname);
-  }
-  return out;
-}
-
-/** Filename → content hash, derived from `content_hashes.json`. */
-export function loadFilenameToHashMap(cacheDir: string): Map<string, string> {
-  return new Map(Object.entries(loadContentHashes(cacheDir)));
-}
-
 /** Load content_hashes.json + hash_cache_order.json and build the hash→row mapping. */
 export function loadHashMapping(cacheDir: string): HashMapping {
   ensureHashOrderJson(cacheDir);
@@ -149,7 +141,36 @@ export function loadHashMapping(cacheDir: string): HashMapping {
     readFileSync(join(cacheDir, "hash_cache_order.json"), "utf-8"),
   );
   const hashToRow = new Map(hashOrder.map((h, i) => [h, i]));
-  return { contentHashes, filenames, nImages: filenames.length, hashOrder, hashToRow };
+
+  // Lazy maps: built once on first access, cached on the object so they share
+  // the lifetime of the mtime-keyed HashMapping cache entry in embeddings.ts.
+  let filenameToHash: Map<string, string> | null = null;
+  let hashToFilename: Map<string, string> | null = null;
+  let fnToIdx: Map<string, number> | null = null;
+
+  return {
+    contentHashes,
+    filenames,
+    nImages: filenames.length,
+    hashOrder,
+    hashToRow,
+    get filenameToHash() {
+      if (!filenameToHash) filenameToHash = new Map(Object.entries(contentHashes));
+      return filenameToHash;
+    },
+    get hashToFilename() {
+      if (!hashToFilename) {
+        const m = new Map<string, string>();
+        for (const [fname, hash] of Object.entries(contentHashes)) m.set(hash, fname);
+        hashToFilename = m;
+      }
+      return hashToFilename;
+    },
+    get fnToIdx() {
+      if (!fnToIdx) fnToIdx = new Map(filenames.map((f, i) => [f, i]));
+      return fnToIdx;
+    },
+  };
 }
 
 /**

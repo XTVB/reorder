@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+reorder-common = { path = "../reorder-common" }
 ndarray = "0.16"
 ndarray-npy = "0.9"
 serde = { version = "1", features = ["derive"] }

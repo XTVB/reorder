@@ -1,8 +1,8 @@
 import { access, constants, copyFile, mkdir, readdir, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type { Server } from "bun";
-import { listImages } from "./src/rename.ts";
-import { createServer } from "./src/server.ts";
+import { listImages } from "./src/fs/index.ts";
+import { createServer } from "./src/server/index.ts";
 import { clearCache, preGenerateThumbnails } from "./src/thumbnails.ts";
 
 const DEFAULT_PORT = 4928;

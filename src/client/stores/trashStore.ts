@@ -1,7 +1,12 @@
+// Trash actions facade. Selected filenames live in selectionStore "trash"
+// context; this store provides the action surface (mark/unmark/clear/remap/
+// confirmDelete).
+
 import { create } from "zustand";
+import { postJson } from "../api/client.ts";
 import type { RenameMapping } from "../types.ts";
-import { postJson } from "../utils/helpers.ts";
-import { useUIStore } from "./uiStore.ts";
+import { useModalStore } from "./core/modalStore.ts";
+import { useSelectionStore } from "./core/selectionStore.ts";
 
 interface DeleteResponse {
   success: boolean;
@@ -12,8 +17,6 @@ interface DeleteResponse {
 }
 
 interface TrashState {
-  markedIds: Set<string>;
-
   mark: (filenames: string[]) => void;
   unmark: (filenames: string[]) => void;
   toggle: (filename: string) => void;
@@ -23,86 +26,49 @@ interface TrashState {
   confirmDelete: () => Promise<DeleteResponse>;
 }
 
-export const useTrashStore = create<TrashState>((set, get) => ({
-  markedIds: new Set(),
-
+export const useTrashStore = create<TrashState>(() => ({
   mark: (filenames) => {
     if (filenames.length === 0) return;
-    const current = get().markedIds;
-    const next = new Set(current);
-    let changed = false;
-    for (const fn of filenames) {
-      if (!next.has(fn)) {
-        next.add(fn);
-        changed = true;
-      }
-    }
-    if (changed) set({ markedIds: next });
+    useSelectionStore.getState().add("trash", filenames);
   },
 
   unmark: (filenames) => {
     if (filenames.length === 0) return;
-    const next = new Set(get().markedIds);
-    let changed = false;
-    for (const fn of filenames) {
-      if (next.delete(fn)) changed = true;
-    }
-    if (changed) set({ markedIds: next });
+    useSelectionStore.getState().remove("trash", filenames);
   },
 
   toggle: (filename) => {
-    const next = new Set(get().markedIds);
-    if (next.has(filename)) next.delete(filename);
-    else next.add(filename);
-    set({ markedIds: next });
+    useSelectionStore.getState().toggle("trash", filename);
   },
 
   clear: () => {
-    if (get().markedIds.size === 0) return;
-    set({ markedIds: new Set() });
+    useSelectionStore.getState().clear("trash");
   },
 
   pruneToValid: (validFilenames) => {
-    const { markedIds } = get();
-    if (markedIds.size === 0) return;
     const valid = validFilenames instanceof Set ? validFilenames : new Set(validFilenames);
-    const next = new Set<string>();
-    for (const fn of markedIds) if (valid.has(fn)) next.add(fn);
-    if (next.size !== markedIds.size) set({ markedIds: next });
+    useSelectionStore.getState().pruneToValid("trash", valid as Set<string>);
   },
 
   remap: (renames) => {
-    const { markedIds } = get();
-    if (markedIds.size === 0 || renames.length === 0) return;
+    if (renames.length === 0) return;
     const map = new Map<string, string>();
     for (const r of renames) if (r.from !== r.to) map.set(r.from, r.to);
     if (map.size === 0) return;
-    const next = new Set<string>();
-    let changed = false;
-    for (const fn of markedIds) {
-      const mapped = map.get(fn);
-      if (mapped) {
-        next.add(mapped);
-        changed = true;
-      } else {
-        next.add(fn);
-      }
-    }
-    if (changed) set({ markedIds: next });
+    useSelectionStore.getState().remap("trash", map);
   },
 
   confirmDelete: async () => {
-    const filenames = [...get().markedIds];
+    const filenames = [...useSelectionStore.getState().contexts.trash];
     if (filenames.length === 0) {
       return { success: true, deleted: [], missing: [] };
     }
-    const res = await postJson("/api/delete", { filenames });
-    const data = (await res.json()) as DeleteResponse;
-    if (!res.ok || !data.success) {
+    const data = await postJson<DeleteResponse>("/api/delete", { filenames });
+    if (!data.success) {
       throw new Error(data.error ?? "Delete failed");
     }
-    set({ markedIds: new Set() });
-    useUIStore.getState().setShowTrashModal(false);
+    useSelectionStore.getState().clear("trash");
+    useModalStore.getState().closeModal("trash");
     return data;
   },
 }));

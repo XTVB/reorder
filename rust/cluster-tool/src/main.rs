@@ -1,202 +1,21 @@
-use byteorder::{LittleEndian, WriteBytesExt};
 use clap::Parser;
 use ndarray::Array2;
 use ndarray_npy::NpzReader;
-use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::Path;
 
-// ── CLI ──────────────────────────────────────────────────────────────────────
+mod cli;
+mod distances;
+mod io;
+mod linkage;
+mod tree;
 
-#[derive(Parser)]
-#[command(about = "Hierarchical agglomerative clustering with pre-seeded groups")]
-struct Cli {
-    /// Path to hash-keyed cache .npz (clip_hash_cache.npz)
-    #[arg(long)]
-    hash_cache: PathBuf,
-
-    /// Linkage method: ward | average | complete. Default: average.
-    /// Average linkage works best with the re-ranking distance matrix; ward is
-    /// the historical default for raw cosine.
-    #[arg(long, default_value = "average")]
-    linkage: String,
-
-    /// Path to content_hashes.json (filename → content hash)
-    #[arg(long)]
-    content_hashes: String,
-
-    /// Path to hash_cache_order.json (hash list in NPZ row order)
-    #[arg(long)]
-    hash_order: String,
-
-    /// Path to .reorder-groups.json
-    #[arg(long, default_value = "")]
-    groups: String,
-
-    /// Number of clusters to produce
-    #[arg(long, default_value_t = 200)]
-    n_clusters: usize,
-
-    /// Output path for linkage tree binary
-    #[arg(long, default_value = "")]
-    output_tree: String,
-
-    /// CLIP feature weight
-    #[arg(long, default_value_t = 0.0)]
-    clip_weight: f32,
-
-    /// Color feature weight
-    #[arg(long, default_value_t = 0.0)]
-    color_weight: f32,
-
-    /// DINOv2 feature weight
-    #[arg(long, default_value_t = 0.0)]
-    dino_weight: f32,
-
-    /// DINOv3 CLS token weight
-    #[arg(long, default_value_t = 0.0)]
-    dinov3_weight: f32,
-
-    /// PE-Core-L feature weight
-    #[arg(long, default_value_t = 0.0)]
-    pecore_l_weight: f32,
-
-    /// PE-Core-bigG feature weight
-    #[arg(long, default_value_t = 0.0)]
-    pecore_g_weight: f32,
-
-    /// Path to precomputed condensed distance matrix binary
-    #[arg(long, default_value = "")]
-    dist_matrix: String,
-
-    /// Weight for the precomputed distance matrix when blending with embedding distances.
-    /// 1.0 = patches only, 0.0 = embeddings only, 0.5 = equal blend.
-    #[arg(long, default_value_t = 1.0)]
-    dist_matrix_weight: f32,
-
-    /// Optional path to a JSON array of filenames. When provided, clustering is
-    /// restricted to this subset (applied before group loading and embedding load).
-    /// Incompatible with --dist-matrix for now (matrix is indexed on the full set).
-    #[arg(long, default_value = "")]
-    filenames: String,
-
-    /// Path to JSON `[{ "image_filename": "...", "group_id": "..." }, ...]`
-    /// of image↔group cannot-link constraints. Each pair becomes a 1e18
-    /// distance sentinel between the image and the group's representative,
-    /// preventing the image from ever joining that group during NNC.
-    #[arg(long, default_value = "")]
-    cannot_link: String,
-
-    /// Path to JSON `[{ "group_id": "..." }, ...]` of locked groups.
-    /// For each locked group G, sets dist(i, G_rep) = 1e18 for every active
-    /// index i ≠ G_rep, fully isolating G from further merges. Locked groups'
-    /// clusters reproduce exactly at any tree cut.
-    #[arg(long, default_value = "")]
-    locked_groups: String,
-}
-
-// ── Data types ───────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct ReorderGroup {
-    id: String,
-    name: String,
-    images: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct CannotLinkInput {
-    image_filename: String,
-    group_id: String,
-}
-
-#[derive(Deserialize)]
-struct LockedGroupInput {
-    group_id: String,
-}
-
-#[derive(Serialize)]
-struct OutputCluster {
-    id: String,
-    images: Vec<String>,
-    confirmed_group: Option<ConfirmedGroupInfo>,
-}
-
-#[derive(Serialize)]
-struct ConfirmedGroupInfo {
-    id: String,
-    name: String,
-    images: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct Output {
-    clusters: Vec<OutputCluster>,
-    n_clusters: usize,
-    tree_path: String,
-}
-
-/// A merge step in the linkage tree.
-#[derive(Clone, Copy)]
-struct MergeStep {
-    cluster_a: u32,
-    cluster_b: u32,
-    distance: f32,
-    new_size: u32,
-}
-
-/// Hierarchical linkage method (Lance-Williams family).
-#[derive(Clone, Copy, Debug)]
-enum Linkage {
-    Ward,
-    Average,
-    Complete,
-}
-
-impl Linkage {
-    fn parse(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "ward" => Self::Ward,
-            "average" | "upgma" => Self::Average,
-            "complete" => Self::Complete,
-            other => panic!("unknown linkage method: '{}' (expected ward|average|complete)", other),
-        }
-    }
-}
-
-/// Lance-Williams update: distance from cluster i to merged (x ∪ y), given
-/// existing distances and cluster sizes. Returns the new d(i, xy).
-#[inline(always)]
-fn lance_williams(
-    linkage: Linkage,
-    d_ix: f64,
-    d_iy: f64,
-    d_xy: f64,
-    ni: f64,
-    nx: f64,
-    ny: f64,
-) -> f64 {
-    match linkage {
-        Linkage::Ward => {
-            let t = 1.0 / (ni + nx + ny);
-            ((ni + nx) * t * d_ix * d_ix
-                + (ni + ny) * t * d_iy * d_iy
-                - ni * t * d_xy * d_xy)
-                .max(0.0)
-                .sqrt()
-        }
-        Linkage::Average => {
-            // UPGMA: weighted by cluster size
-            (nx * d_ix + ny * d_iy) / (nx + ny)
-        }
-        Linkage::Complete => d_ix.max(d_iy),
-    }
-}
-
-// ── Main ─────────────────────────────────────────────────────────────────────
+use crate::cli::Cli;
+use crate::distances::build_combined_features_flat;
+use crate::io::{load_cannot_link_pairs, load_groups, load_locked_group_ids};
+use crate::linkage::{linkage_cosine, Linkage};
+use crate::tree::{build_output_from_image_labels, cut_tree, save_linkage_tree};
 
 fn main() {
     let cli = Cli::parse();
@@ -210,14 +29,8 @@ fn main() {
     }
 
     // Load content_hashes.json → sorted filenames + hash lookup
-    let content_hashes: HashMap<String, String> = {
-        let content = std::fs::read_to_string(&cli.content_hashes)
-            .unwrap_or_else(|_| panic!("Missing content_hashes.json: {}", cli.content_hashes));
-        serde_json::from_str(&content)
-            .unwrap_or_else(|_| panic!("Invalid content_hashes.json: {}", cli.content_hashes))
-    };
-    let mut filenames: Vec<String> = content_hashes.keys().cloned().collect();
-    filenames.sort();
+    let (content_hashes, mut filenames, _) =
+        reorder_common::load_content_hashes_sorted(Path::new(&cli.content_hashes));
 
     // Narrow to the subset-of-filenames if requested. Applied before group
     // loading and embedding reindex so the rest of the pipeline is unchanged.
@@ -266,9 +79,15 @@ fn main() {
     let fname_to_cache_row: Vec<usize> = filenames
         .iter()
         .map(|f| {
-            let hash = content_hashes.get(f).unwrap_or_else(|| panic!("No hash for {}", f));
-            *hash_to_cache_row.get(hash.as_str())
-                .unwrap_or_else(|| panic!("Hash {} (file {}) not found in cache — re-run extraction", hash, f))
+            let hash = content_hashes
+                .get(f)
+                .unwrap_or_else(|| panic!("No hash for {}", f));
+            *hash_to_cache_row.get(hash.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "Hash {} (file {}) not found in cache — re-run extraction",
+                    hash, f
+                )
+            })
         })
         .collect();
 
@@ -312,7 +131,10 @@ fn main() {
                         Some((arr, *w, *norm))
                     }
                     Err(_) => {
-                        eprintln!("WARNING: '{}' array not found in hash cache (weight={:.1}), skipping", name, w);
+                        eprintln!(
+                            "WARNING: '{}' array not found in hash cache (weight={:.1}), skipping",
+                            name, w
+                        );
                         None
                     }
                 }
@@ -327,7 +149,8 @@ fn main() {
             .collect();
         eprintln!("Loaded {} images, active: {}", n_images, active_desc.join(", "));
 
-        let emb_arrays: Vec<(&Array2<f32>, f32, bool)> = loaded.iter().map(|(a, w, n)| (a, *w, *n)).collect();
+        let emb_arrays: Vec<(&Array2<f32>, f32, bool)> =
+            loaded.iter().map(|(a, w, n)| (a, *w, *n)).collect();
         let (ff, fd) = build_combined_features_flat(&emb_arrays, n_images);
         features_flat = ff;
         feat_dim = fd;
@@ -361,14 +184,22 @@ fn main() {
         eprintln!("Loading precomputed distance matrix from {}...", cli.dist_matrix);
         let bytes = std::fs::read(&cli.dist_matrix).expect("read dist matrix");
         let stored_n = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
-        assert_eq!(stored_n, n_images,
-            "Distance matrix has {} images but embeddings has {}", stored_n, n_images);
+        assert_eq!(
+            stored_n, n_images,
+            "Distance matrix has {} images but embeddings has {}",
+            stored_n, n_images
+        );
         let n_pairs = n_images * (n_images - 1) / 2;
         let data_bytes = &bytes[8..];
-        assert_eq!(data_bytes.len(), n_pairs * 8, "Distance matrix data size mismatch");
+        assert_eq!(
+            data_bytes.len(),
+            n_pairs * 8,
+            "Distance matrix data size mismatch"
+        );
         let dist: Vec<f64> = unsafe {
             std::slice::from_raw_parts(data_bytes.as_ptr() as *const f64, n_pairs)
-        }.to_vec();
+        }
+        .to_vec();
         let w = cli.dist_matrix_weight;
         eprintln!("  Loaded {} distances (weight={})", n_pairs, w);
         Some((dist, w))
@@ -379,7 +210,10 @@ fn main() {
     let cannot_link_pairs = load_cannot_link_pairs(&cli.cannot_link, &fname_to_idx);
     let locked_group_ids = load_locked_group_ids(&cli.locked_groups);
     if !cannot_link_pairs.is_empty() {
-        eprintln!("Loaded {} image↔group cannot-link constraints", cannot_link_pairs.len());
+        eprintln!(
+            "Loaded {} image↔group cannot-link constraints",
+            cannot_link_pairs.len()
+        );
     }
     if !locked_group_ids.is_empty() {
         eprintln!("Loaded {} group-lock constraints", locked_group_ids.len());
@@ -389,9 +223,15 @@ fn main() {
     let linkage = Linkage::parse(&cli.linkage);
     eprintln!("Running {:?} linkage...", linkage);
     let merge_steps = linkage_cosine(
-        &features_flat, feat_dim, n_images, &groups, &ungrouped_img_indices,
-        precomputed_dist, linkage,
-        &cannot_link_pairs, &locked_group_ids,
+        &features_flat,
+        feat_dim,
+        n_images,
+        &groups,
+        &ungrouped_img_indices,
+        precomputed_dist,
+        linkage,
+        &cannot_link_pairs,
+        &locked_group_ids,
     );
     eprintln!("Linkage complete: {} merge steps", merge_steps.len());
 
@@ -434,660 +274,4 @@ fn main() {
     );
 
     serde_json::to_writer(std::io::stdout().lock(), &output).expect("Failed to write JSON");
-}
-
-// ── Feature combination ──────────────────────────────────────────────────────
-
-/// Returns a flat row-major Vec<f32> and the feature dimension.
-/// Using a flat Vec instead of ndarray removes ndarray indexing overhead in
-/// the hot distance-computation loop.
-/// Build combined feature vector from multiple embedding arrays.
-/// Each entry is (array, weight, needs_l2_norm). Arrays already L2-normalized
-/// from Python have needs_l2_norm=false; color features need per-row normalization.
-fn build_combined_features_flat(
-    arrays: &[(&Array2<f32>, f32, bool)],
-    n: usize,
-) -> (Vec<f32>, usize) {
-    let combined_dim: usize = arrays.iter().map(|(a, _, _)| a.ncols()).sum();
-    let mut features = vec![0.0f32; n * combined_dim];
-
-    // Pre-extract contiguous slices and dims
-    let slices: Vec<(&[f32], usize, f32, bool)> = arrays
-        .iter()
-        .map(|(a, w, norm)| {
-            let data = a.as_slice().expect("array must be contiguous");
-            (data, a.ncols(), *w, *norm)
-        })
-        .collect();
-
-    for i in 0..n {
-        let out = &mut features[i * combined_dim..][..combined_dim];
-        let mut offset = 0;
-
-        for &(data, dim, weight, needs_norm) in &slices {
-            let row = &data[i * dim..][..dim];
-            if needs_norm {
-                let norm_sq: f32 = row.iter().map(|&x| x * x).sum();
-                let norm = norm_sq.sqrt().max(1e-10);
-                for (o, &v) in out[offset..offset + dim].iter_mut().zip(row) {
-                    *o = (v / norm) * weight;
-                }
-            } else {
-                for (o, &v) in out[offset..offset + dim].iter_mut().zip(row) {
-                    *o = v * weight;
-                }
-            }
-            offset += dim;
-        }
-    }
-
-    (features, combined_dim)
-}
-
-// ── Group loading ────────────────────────────────────────────────────────────
-
-struct LoadedGroup {
-    id: String,
-    name: String,
-    member_indices: Vec<usize>,
-    member_filenames: Vec<String>,
-}
-
-fn load_groups(groups_path: &str, fname_to_idx: &HashMap<&str, usize>) -> Vec<LoadedGroup> {
-    if groups_path.is_empty() {
-        return vec![];
-    }
-    let Ok(content) = std::fs::read_to_string(groups_path) else {
-        return vec![];
-    };
-    let Ok(raw_groups): Result<Vec<ReorderGroup>, _> = serde_json::from_str(&content) else {
-        return vec![];
-    };
-
-    raw_groups
-        .into_iter()
-        .filter_map(|g| {
-            let mut indices = Vec::new();
-            let mut fnames = Vec::new();
-            for f in &g.images {
-                if let Some(&idx) = fname_to_idx.get(f.as_str()) {
-                    indices.push(idx);
-                    fnames.push(f.clone());
-                }
-            }
-            if indices.len() < 2 {
-                return None;
-            }
-            Some(LoadedGroup {
-                id: g.id,
-                name: g.name,
-                member_indices: indices,
-                member_filenames: fnames,
-            })
-        })
-        .collect()
-}
-
-/// Parse a JSON array file as `Vec<T>`, returning an empty vec on missing
-/// path, unreadable file, or parse failure (all treated as "no constraints").
-fn load_json_array<T: serde::de::DeserializeOwned>(path: &str) -> Vec<T> {
-    if path.is_empty() {
-        return vec![];
-    }
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return vec![];
-    };
-    serde_json::from_str(&content).unwrap_or_default()
-}
-
-/// Resolve cannot-link pairs to indices, dropping entries with unknown filenames.
-fn load_cannot_link_pairs(
-    path: &str,
-    fname_to_idx: &HashMap<&str, usize>,
-) -> Vec<(usize, String)> {
-    load_json_array::<CannotLinkInput>(path)
-        .into_iter()
-        .filter_map(|c| {
-            fname_to_idx
-                .get(c.image_filename.as_str())
-                .map(|&idx| (idx, c.group_id))
-        })
-        .collect()
-}
-
-fn load_locked_group_ids(path: &str) -> Vec<String> {
-    load_json_array::<LockedGroupInput>(path)
-        .into_iter()
-        .map(|l| l.group_id)
-        .collect()
-}
-
-// ── Flat condensed distance matrix ───────────────────────────────────────────
-//
-// We store the upper-triangle of the n×n distance matrix as a flat Vec<f64>
-// using the standard condensed index formula. This replaces both the old
-// `img_dist` array and the `dist_row: Vec<Vec<f64>>` — eliminating the O(n²)
-// copy and halving peak memory.
-//
-// condensed_idx(i, j, n) gives the offset for i < j.
-
-#[inline(always)]
-fn condensed_idx(i: usize, j: usize, n: usize) -> usize {
-    debug_assert!(i < j, "condensed_idx requires i < j, got i={} j={}", i, j);
-    // Row i has (n - i - 1) entries, starting at offset: i*n - i*(i+1)/2
-    i * n - i * (i + 1) / 2 + j - i - 1
-}
-
-#[inline(always)]
-fn get_dist(dist: &[f64], i: usize, j: usize, n: usize) -> f64 {
-    if i < j {
-        dist[condensed_idx(i, j, n)]
-    } else {
-        dist[condensed_idx(j, i, n)]
-    }
-}
-
-#[inline(always)]
-fn set_dist(dist: &mut [f64], i: usize, j: usize, n: usize, val: f64) {
-    if i < j {
-        dist[condensed_idx(i, j, n)] = val;
-    } else {
-        dist[condensed_idx(j, i, n)] = val;
-    }
-}
-
-// ── Hierarchical agglomerative linkage with cosine distances and pre-seeded groups ───
-//
-// Matches scipy's `linkage(pdist(X, metric='cosine'), method=<linkage>)`:
-// 1. Compute pairwise cosine distances between ALL individual images
-//    (or use a precomputed distance matrix, optionally blended with cosine).
-// 2. For pre-seeded groups: simulate the merges using Lance-Williams to get
-//    correct distances from each group to everything else.
-// 3. Run NNC + Lance-Williams on the resulting distance matrix.
-//
-// `linkage` selects the Lance-Williams variant (Ward / Average / Complete).
-// Average linkage works best with the re-ranking distance matrix; Ward is the
-// historical default for raw cosine.
-
-fn linkage_cosine(
-    features: &[f32],       // flat row-major, shape [n_images × feat_dim]
-    feat_dim: usize,
-    n_images: usize,
-    groups: &[LoadedGroup],
-    ungrouped: &[usize],
-    precomputed_dist: Option<(Vec<f64>, f32)>, // (distances, weight)
-    linkage: Linkage,
-    cannot_link: &[(usize, String)], // (image_idx, group_id) — barrier between image and group's rep
-    locked_groups: &[String],        // group_ids that are sealed: nothing else may merge in
-) -> Vec<MergeStep> {
-    let n_groups = groups.len();
-    let n_ungrouped = ungrouped.len();
-
-    let n_pairs = n_images * (n_images - 1) / 2;
-
-    // ── Step 1: Get pairwise distances ───────────────────────────────────
-    let has_features = feat_dim > 0;
-
-    let skip_cosine = match &precomputed_dist {
-        Some((_, w)) => !has_features || *w >= 1.0,
-        None => !has_features,
-    };
-
-    let mut dist: Vec<f64> = if skip_cosine {
-        let (precomp, _) = precomputed_dist.expect("skip_cosine implies precomputed");
-        eprintln!("  Using precomputed distance matrix only ({} pairs)", precomp.len());
-        precomp
-    } else {
-        eprintln!("  Computing cosine distances for {} images...", n_images);
-
-        let norms: Vec<f64> = (0..n_images)
-            .map(|i| {
-                features[i * feat_dim..][..feat_dim]
-                    .iter()
-                    .map(|&x| (x as f64) * (x as f64))
-                    .sum::<f64>()
-                    .sqrt()
-            })
-            .collect();
-
-        let mut dist: Vec<f64> = vec![0.0f64; n_pairs];
-        let mut row_slices: Vec<(usize, &mut [f64])> = Vec::with_capacity(n_images - 1);
-        {
-            let mut remaining = dist.as_mut_slice();
-            for i in 0..n_images - 1 {
-                let count = n_images - i - 1;
-                let (chunk, rest) = remaining.split_at_mut(count);
-                row_slices.push((i, chunk));
-                remaining = rest;
-            }
-        }
-
-        row_slices.par_iter_mut().for_each(|(i, slice)| {
-            let i = *i;
-            let row_i = &features[i * feat_dim..][..feat_dim];
-            let ni = norms[i];
-
-            for (k, slot) in slice.iter_mut().enumerate() {
-                let j = i + 1 + k;
-                let row_j = &features[j * feat_dim..][..feat_dim];
-                let nj = norms[j];
-
-                let dot: f64 = row_i
-                    .iter()
-                    .zip(row_j.iter())
-                    .map(|(&a, &b)| (a as f64) * (b as f64))
-                    .sum();
-
-                let denom = ni * nj;
-                let cos_sim = if denom > 1e-20 { dot / denom } else { 0.0 };
-                *slot = (1.0 - cos_sim).max(0.0);
-            }
-        });
-
-        // Blend in precomputed distances if provided: dist = w*precomp + (1-w)*cos
-        if let Some((precomp, weight)) = precomputed_dist {
-            eprintln!("  Blending precomputed (weight={}) with cosine distances...", weight);
-            let w = weight as f64;
-            dist.par_iter_mut().zip(precomp.par_iter()).for_each(|(d, &p)| {
-                *d = w * p + (1.0 - w) * *d;
-            });
-        }
-
-        eprintln!("  Distances computed.");
-        dist
-    };
-
-    // ── Step 2: Pre-merge groups using Lance-Williams updates ─────────────
-    //
-    // We work directly in `dist` (the condensed flat array). The Ward update
-    // formula is unchanged — only the access pattern differs: instead of
-    // dist_row[i][j-i-1] we use dist[condensed_idx(...)].
-    //
-    // The active_indices list avoids scanning deactivated slots in both the
-    // Ward update and the NNC inner loop.
-
-    let _n_initial = n_groups + n_ungrouped;
-
-    let mut size = vec![1.0f64; n_images];
-
-    // Maintain a sorted list of active indices for fast NN scanning.
-    // Using a Vec rather than a BTreeSet keeps iteration cache-friendly.
-    let mut active_indices: Vec<usize> = (0..n_images).collect();
-
-    // Pre-compute sorted members and representative (highest index) for each group
-    let group_sorted: Vec<Vec<usize>> = groups
-        .iter()
-        .filter(|g| g.member_indices.len() >= 2)
-        .map(|g| {
-            let mut m = g.member_indices.clone();
-            m.sort();
-            m
-        })
-        .collect();
-
-    eprintln!("  Pre-merging {} groups...", n_groups);
-    let mut pre_merge_steps: Vec<MergeStep> = Vec::new();
-
-    for members in &group_sorted {
-        let target = *members.last().unwrap();
-
-        for &member in &members[..members.len() - 1] {
-            let x = member; // x < target always (sorted)
-            let y = target;
-            let merge_dist = get_dist(&dist, x, y, n_images);
-
-            let nx = size[x];
-            let ny = size[y];
-            let new_size = nx + ny;
-
-            for &i in &active_indices {
-                if i == x || i == y {
-                    continue;
-                }
-                let ni = size[i];
-                let d_ix = get_dist(&dist, i, x, n_images);
-                let d_iy = get_dist(&dist, i, y, n_images);
-                let d_new = lance_williams(linkage, d_ix, d_iy, merge_dist, ni, nx, ny);
-                set_dist(&mut dist, i, y, n_images, d_new);
-            }
-
-            size[x] = 0.0;
-            size[y] = new_size;
-
-            // Remove x from active_indices (it's sorted, binary search is O(log n))
-            if let Ok(pos) = active_indices.binary_search(&x) {
-                active_indices.remove(pos);
-            }
-
-            pre_merge_steps.push(MergeStep {
-                cluster_a: x as u32,
-                cluster_b: y as u32,
-                distance: merge_dist as f32,
-                new_size: new_size as u32,
-            });
-        }
-    }
-    eprintln!(
-        "  Pre-merged {} steps, {} active clusters remain",
-        pre_merge_steps.len(),
-        active_indices.len()
-    );
-
-    // ── Prevent confirmed groups from ever being merged with each other ───
-    // We use 1e18 rather than f64::MAX because Ward's update squares distances —
-    // f64::MAX² overflows. 1e18 is safe across all linkage methods.
-    const GROUP_BARRIER: f64 = 1e18;
-    let group_reps: Vec<usize> = group_sorted.iter().map(|m| *m.last().unwrap()).collect();
-    for i in 0..group_reps.len() {
-        for j in (i + 1)..group_reps.len() {
-            set_dist(&mut dist, group_reps[i], group_reps[j], n_images, GROUP_BARRIER);
-        }
-    }
-
-    // ── Apply user cannot-link / group-lock constraints ───────────────────
-    // Same 1e18 sentinel; the inter-group barrier above guarantees Ward's
-    // squared-distance update can't overflow, and Lance-Williams safely
-    // propagates the barrier through any subsequent merges.
-    if !cannot_link.is_empty() || !locked_groups.is_empty() {
-        // Build group_id → rep_idx map. group_sorted parallels
-        // groups.iter().filter(|g| g.member_indices.len() >= 2), so we zip
-        // that filtered iterator with group_reps to recover the IDs.
-        let group_id_to_rep: HashMap<&str, usize> = groups
-            .iter()
-            .filter(|g| g.member_indices.len() >= 2)
-            .zip(group_reps.iter())
-            .map(|(g, &rep)| (g.id.as_str(), rep))
-            .collect();
-
-        let mut applied_cl = 0usize;
-        for (img_idx, group_id) in cannot_link {
-            let Some(&rep_idx) = group_id_to_rep.get(group_id.as_str()) else {
-                continue; // group no longer exists
-            };
-            if *img_idx == rep_idx {
-                continue; // image is itself the rep — nothing sensible to do
-            }
-            set_dist(&mut dist, *img_idx, rep_idx, n_images, GROUP_BARRIER);
-            applied_cl += 1;
-        }
-        if applied_cl > 0 {
-            eprintln!("  Applied {} cannot-link barriers", applied_cl);
-        }
-
-        let mut applied_lock = 0usize;
-        for group_id in locked_groups {
-            let Some(&rep_idx) = group_id_to_rep.get(group_id.as_str()) else {
-                continue;
-            };
-            for &i in &active_indices {
-                if i == rep_idx {
-                    continue;
-                }
-                set_dist(&mut dist, i, rep_idx, n_images, GROUP_BARRIER);
-            }
-            applied_lock += 1;
-        }
-        if applied_lock > 0 {
-            eprintln!("  Applied {} group-lock barriers", applied_lock);
-        }
-    }
-
-    // ── Step 3: NNC (nearest-neighbor chain) Ward's linkage ──────────────
-    //
-    // Same algorithm as before; key improvements:
-    //   - NN scan iterates active_indices (shrinking list) instead of 0..n_images
-    //   - Ward update also iterates active_indices
-    //   - active_indices.remove() is O(n) but called only n times total
-    //
-    // The O(n) scan per NN search is unavoidable without a different data
-    // structure (e.g. ball-tree), which would require fundamental changes to
-    // the Ward update semantics.
-
-    let n_remaining = active_indices.len();
-    eprintln!("  Running NNC on {} clusters...", n_remaining);
-
-    let mut merge_steps: Vec<MergeStep> = Vec::with_capacity(n_remaining - 1);
-    let mut chain: Vec<usize> = Vec::with_capacity(n_remaining);
-
-    for step in 0..(n_remaining - 1) {
-        if step % 2000 == 0 && step > 0 {
-            eprintln!("  merge step {}/{}", step, n_remaining - 1);
-        }
-
-        // If chain is empty, seed with first active cluster
-        if chain.is_empty() {
-            chain.push(active_indices[0]);
-        }
-
-        loop {
-            let x = *chain.last().unwrap();
-
-            // Scipy tie-breaking: prefer previous chain element as the
-            // initial candidate (only replaced on strictly-less-than).
-            let mut y;
-            let mut current_min;
-            if chain.len() >= 2 {
-                y = chain[chain.len() - 2];
-                current_min = get_dist(&dist, x, y, n_images);
-            } else {
-                y = usize::MAX; // sentinel — will be overwritten on first valid candidate
-                current_min = f64::MAX;
-            }
-
-            // Scan active clusters for the nearest neighbor of x.
-            // active_indices shrinks monotonically, so this loop gets faster
-            // as the algorithm progresses (average size n/2 over all merges).
-            for &i in &active_indices {
-                if i == x {
-                    continue;
-                }
-                let d = get_dist(&dist, x, i, n_images);
-                if d < current_min {
-                    current_min = d;
-                    y = i;
-                }
-            }
-
-            // Check if y is the previous chain element (reciprocal NN pair)
-            if chain.len() >= 2 && y == chain[chain.len() - 2] {
-                chain.pop();
-                chain.pop();
-
-                // Convention: x = min, y = max. Deactivate x, reuse y.
-                let (x, y) = if x < y { (x, y) } else { (y, x) };
-
-                let nx = size[x];
-                let ny = size[y];
-                let new_size = nx + ny;
-
-                merge_steps.push(MergeStep {
-                    cluster_a: x as u32,
-                    cluster_b: y as u32,
-                    distance: current_min as f32,
-                    new_size: new_size as u32,
-                });
-
-                for &i in &active_indices {
-                    if i == x || i == y {
-                        continue;
-                    }
-                    let ni = size[i];
-                    let d_ix = get_dist(&dist, i, x, n_images);
-                    let d_iy = get_dist(&dist, i, y, n_images);
-                    let d_new = lance_williams(linkage, d_ix, d_iy, current_min, ni, nx, ny);
-                    set_dist(&mut dist, i, y, n_images, d_new);
-                }
-
-                size[x] = 0.0;
-                size[y] = new_size;
-
-                if let Ok(pos) = active_indices.binary_search(&x) {
-                    active_indices.remove(pos);
-                }
-
-                break;
-            } else {
-                chain.push(y);
-            }
-        }
-    }
-
-    // Combine pre-merge steps + main merge steps
-    let mut all_steps = pre_merge_steps;
-    all_steps.extend(merge_steps);
-    all_steps
-}
-
-// ── Tree cutting ─────────────────────────────────────────────────────────────
-
-fn cut_tree(
-    merge_steps: &[MergeStep], // already sorted from main()
-    n_images: usize,
-    n_after_premerge: usize,
-    n_clusters: usize,
-    n_pre_merges: usize,
-    n_groups: usize,
-) -> Vec<u32> {
-    // Union-find over original image indices.
-    // The input steps are already sorted by distance (done in main() before
-    // saving the tree), so we don't re-sort here.
-    let mut parent = vec![0u32; n_images];
-    for i in 0..n_images {
-        parent[i] = i as u32;
-    }
-
-    fn find(parent: &mut [u32], mut x: u32) -> u32 {
-        while parent[x as usize] != x {
-            let p = parent[x as usize];
-            parent[x as usize] = parent[p as usize];
-            x = p;
-        }
-        x
-    }
-
-    // Apply all pre-merge steps (first n_pre_merges entries — forced)
-    for step in merge_steps.iter().take(n_pre_merges) {
-        let ra = find(&mut parent, step.cluster_a);
-        let rb = find(&mut parent, step.cluster_b);
-        if ra != rb {
-            parent[ra as usize] = rb;
-        }
-    }
-
-    // Main steps are already sorted by distance in the input slice.
-    // Apply sorted main steps until we reach n_clusters.
-    // Never go below n_groups clusters — confirmed groups must stay separate.
-    let min_clusters = n_clusters.max(n_groups);
-    let main_merges_needed = if min_clusters >= n_after_premerge {
-        0
-    } else {
-        n_after_premerge - min_clusters
-    };
-
-    for step in merge_steps[n_pre_merges..].iter().take(main_merges_needed) {
-        let ra = find(&mut parent, step.cluster_a);
-        let rb = find(&mut parent, step.cluster_b);
-        if ra != rb {
-            parent[ra as usize] = rb;
-        }
-    }
-
-    // Get cluster label for each image
-    let roots: Vec<u32> = (0..n_images).map(|i| find(&mut parent, i as u32)).collect();
-
-    // Renumber contiguously
-    let mut seen: HashMap<u32, u32> = HashMap::new();
-    let mut next_label = 0u32;
-    roots
-        .iter()
-        .map(|&r| {
-            *seen.entry(r).or_insert_with(|| {
-                let l = next_label;
-                next_label += 1;
-                l
-            })
-        })
-        .collect()
-}
-
-// ── Linkage tree I/O ─────────────────────────────────────────────────────────
-
-fn save_linkage_tree(steps: &[MergeStep], n_images: usize, n_pre_merges: usize, n_groups: usize, path: &str) {
-    let file = File::create(path).expect("Failed to create tree file");
-    let mut w = BufWriter::new(file);
-
-    // Header: n_images, n_pre_merges, n_groups, n_total_steps
-    w.write_u32::<LittleEndian>(n_images as u32).unwrap();
-    w.write_u32::<LittleEndian>(n_pre_merges as u32).unwrap();
-    w.write_u32::<LittleEndian>(n_groups as u32).unwrap();
-    w.write_u32::<LittleEndian>(steps.len() as u32).unwrap();
-
-    for step in steps {
-        w.write_u32::<LittleEndian>(step.cluster_a).unwrap();
-        w.write_u32::<LittleEndian>(step.cluster_b).unwrap();
-        w.write_f32::<LittleEndian>(step.distance).unwrap();
-        w.write_u32::<LittleEndian>(step.new_size).unwrap();
-    }
-    w.flush().unwrap();
-}
-
-// ── Output construction ──────────────────────────────────────────────────────
-
-fn build_output_from_image_labels(
-    labels: &[u32], // one label per original image
-    filenames: &[String],
-    groups: &[LoadedGroup],
-    n_clusters: usize,
-    tree_path: &str,
-) -> Output {
-    // Group images by cluster label
-    let mut cluster_images: HashMap<u32, Vec<usize>> = HashMap::new();
-    for (img_idx, &label) in labels.iter().enumerate() {
-        cluster_images.entry(label).or_default().push(img_idx);
-    }
-
-    // Build index of which images belong to which confirmed group
-    let mut img_to_group: HashMap<usize, usize> = HashMap::new();
-    for (gi, group) in groups.iter().enumerate() {
-        for &idx in &group.member_indices {
-            img_to_group.insert(idx, gi);
-        }
-    }
-
-    let mut output_clusters = Vec::new();
-    let mut sorted_labels: Vec<u32> = cluster_images.keys().copied().collect();
-    sorted_labels.sort();
-
-    for (ci, &label) in sorted_labels.iter().enumerate() {
-        let members = &cluster_images[&label];
-
-        let image_filenames: Vec<String> = members.iter().map(|&i| filenames[i].clone()).collect();
-
-        // Check if this cluster contains any confirmed group
-        let confirmed = members
-            .iter()
-            .find_map(|&idx| img_to_group.get(&idx))
-            .map(|&gi| &groups[gi]);
-
-        let mut sorted_filenames = image_filenames;
-        sorted_filenames.sort();
-
-        output_clusters.push(OutputCluster {
-            id: format!("cluster_{}", ci),
-            images: sorted_filenames,
-            confirmed_group: confirmed.map(|g| ConfirmedGroupInfo {
-                id: g.id.clone(),
-                name: g.name.clone(),
-                images: g.member_filenames.clone(),
-            }),
-        });
-    }
-
-    output_clusters.sort_by(|a, b| b.images.len().cmp(&a.images.len()));
-
-    Output {
-        clusters: output_clusters,
-        n_clusters,
-        tree_path: tree_path.to_string(),
-    }
 }

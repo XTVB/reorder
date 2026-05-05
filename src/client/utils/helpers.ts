@@ -1,3 +1,4 @@
+import { postJson } from "../api/client.ts";
 import { useImageStore } from "../stores/imageStore.ts";
 import type { ImageGroup, ImageInfo } from "../types.ts";
 export const GROUP_PREFIX = "group:";
@@ -66,15 +67,6 @@ export function wasJustDragged(): boolean {
   return Date.now() - dragEndTimeMs < 100;
 }
 
-/** Shorthand for JSON POST fetch calls. */
-export function postJson(url: string, body: unknown): Promise<Response> {
-  return fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
-
 /**
  * Copy a JPEG contact sheet (served from /api/contact-sheet/:filename) alongside
  * some text via the async Clipboard API. Transcodes JPEG→PNG because the
@@ -113,10 +105,12 @@ export async function generateContactSheetsBatch(
 ): Promise<ContactSheetResult[]> {
   return Promise.all(
     requests.map(async (req, i) => {
-      const res = await postJson("/api/cluster/contact-sheet", req);
-      const data = (await res.json()) as { path?: string; filename?: string; error?: string };
-      if (!res.ok || !data.path || !data.filename) {
-        throw new Error(data.error ?? `Failed batch ${i + 1}`);
+      const data = await postJson<{ path: string; filename: string }>(
+        "/api/cluster/contact-sheet",
+        req,
+      );
+      if (!data.path || !data.filename) {
+        throw new Error(`Failed batch ${i + 1}`);
       }
       return { path: data.path, filename: data.filename };
     }),

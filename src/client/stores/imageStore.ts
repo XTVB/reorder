@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { getJson } from "../api/client.ts";
 import type { ImageInfo, ImagesResponse } from "../types.ts";
 
 interface ImageState {
@@ -39,9 +40,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
 
   fetchImages: async () => {
     try {
-      const res = await fetch("/api/images");
-      if (!res.ok) throw new Error("Failed to load images");
-      const { images: data }: ImagesResponse = await res.json();
+      const { images: data } = await getJson<ImagesResponse>("/api/images");
       const order = data.map((d) => d.filename);
       const imageMap = new Map(data.map((i) => [i.filename, i]));
       set({

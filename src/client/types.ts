@@ -1,11 +1,35 @@
-export interface ImageInfo {
-  filename: string;
-}
+// Client-only types. Cross-cutting shapes live in src/shared/types.ts and
+// are re-exported here so existing client imports keep working.
 
-export interface RenameMapping {
-  from: string;
-  to: string;
-}
+export type {
+  CanUndoResponse,
+  ClusterData,
+  ClusterMetrics,
+  ClusterResultData,
+  ClusterScope,
+  DirResponse,
+  DistanceProfile,
+  ExpandCandidate,
+  ExpandResult,
+  FolderData,
+  FolderGroup,
+  ImageGroup,
+  ImageInfo,
+  ImagesResponse,
+  ImportClusterInput,
+  MergeSuggestionRow,
+  MergeSuggestionSimilar,
+  MergeSuggestionsResponse,
+  NNAggregation,
+  NNFilter,
+  NNQueryRequest,
+  NNQueryResponse,
+  NNResult,
+  RenameMapping,
+  SaveResponse,
+  SplitChildren,
+  WeightConfig,
+} from "../shared/types.ts";
 
 export interface Toast {
   message: string;
@@ -14,41 +38,7 @@ export interface Toast {
 
 export interface OrganizeMapping {
   folder: string;
-  files: RenameMapping[];
-}
-
-export interface ImageGroup {
-  id: string;
-  name: string;
-  images: string[];
-}
-
-export interface DirResponse {
-  dir: string;
-}
-
-export interface ImagesResponse {
-  images: ImageInfo[];
-}
-
-export interface CanUndoResponse {
-  canUndo: boolean;
-}
-
-export interface SaveResponse {
-  success: boolean;
-  renames: RenameMapping[];
-  warnings?: string[];
-}
-
-export interface FolderGroup {
-  name: string;
-  images: string[];
-}
-
-export interface FolderData {
-  folders: FolderGroup[];
-  rootImages: string[];
+  files: import("../shared/types.ts").RenameMapping[];
 }
 
 export type GridItem =
@@ -59,125 +49,3 @@ export type GridItem =
   | { type: "folder-image"; folderName: string; filename: string };
 
 export type AppMode = "reorder" | "cluster" | "cluster-compare" | "merge-suggestions";
-
-// Merge suggestion types
-
-export interface MergeSuggestionSimilar {
-  groupId: string;
-  groupName: string;
-  groupImages: string[];
-  distance: number;
-}
-
-export interface MergeSuggestionRow {
-  refGroupId: string;
-  refGroupName: string;
-  refGroupImages: string[];
-  similar: MergeSuggestionSimilar[];
-}
-
-export interface MergeSuggestionsResponse {
-  suggestions: MergeSuggestionRow[];
-  computeTimeMs: number;
-}
-
-// Cluster types
-
-export interface WeightConfig {
-  clip?: number;
-  color?: number;
-  dino?: number;
-  dinov3?: number;
-  pecore_l?: number;
-  pecore_g?: number;
-}
-
-export interface ClusterResultData {
-  id: string;
-  autoName: string;
-  autoTags: { term: string; z: number }[];
-  images: string[];
-  confirmedGroup: { id: string; name: string; images: string[] } | null;
-  splitFrom?: string;
-}
-
-export interface DistanceProfile {
-  distances: number[];
-  nAfterPremerge: number;
-  nGroups: number;
-}
-
-export interface ClusterScope {
-  scopeKey: string;
-  groupIds: string[];
-  groupNames: string[];
-  nImages: number;
-  subsetFilenames: string[];
-}
-
-export interface ClusterData {
-  clusters: ClusterResultData[];
-  suggestedCounts: number[];
-  nClusters: number;
-  distanceProfile?: DistanceProfile;
-  scope?: ClusterScope;
-}
-
-export interface ImportClusterInput {
-  name: string;
-  images: string[];
-}
-
-// Tree-navigation operation types
-
-export interface ClusterMetrics {
-  cohesion: number;
-  isolation: number; // -1 sentinel from server when Infinity
-  stability: number;
-}
-
-export interface ExpandCandidate {
-  filename: string;
-  distance: number;
-}
-
-export interface ExpandResult {
-  candidates: ExpandCandidate[];
-  p90Intra: number;
-  maxDistance: number;
-}
-
-export interface SplitChildren {
-  childA: ClusterResultData;
-  childB: ClusterResultData;
-}
-
-// Nearest-neighbor query types
-
-export type NNAggregation = "centroid" | "min";
-export type NNFilter = "any" | "in-group" | "not-in-group";
-
-export interface NNResult {
-  filename: string;
-  distance: number;
-  inGroupId: string | null;
-  inGroupName: string | null;
-}
-
-export interface NNQueryRequest {
-  queryFilenames: string[];
-  topN?: number;
-  filter?: NNFilter;
-  aggregation?: NNAggregation;
-  weights: WeightConfig;
-  usePatches: boolean;
-  restrictToFilenames?: string[];
-  excludeQuery?: boolean;
-}
-
-export interface NNQueryResponse {
-  results: NNResult[];
-  usedModels: string[];
-  queryCount: number;
-  patchesBlended: boolean;
-}

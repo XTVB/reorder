@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { getJson } from "../api/client.ts";
 import type { FolderData, FolderGroup, ImageInfo } from "../types.ts";
 import { useImageStore } from "./imageStore.ts";
 
@@ -119,8 +120,7 @@ export const useFolderStore = create<FolderState>((set, get) => ({
 
   fetchFolders: async () => {
     try {
-      const res = await fetch("/api/folders");
-      const data: FolderData = await res.json();
+      const data = await getJson<FolderData>("/api/folders");
       const folders: FolderGroup[] = data.folders.map((f) => ({
         name: f.name,
         images: f.images.map((fn) => `${f.name}/${fn}`),

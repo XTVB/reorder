@@ -1,0 +1,353 @@
+// Cluster orchestration: extraction → linkage → auto-naming. The cluster-tool
+// Rust binary handles linkage; we drive it from here, weave in re-rank or
+// patch matrices when requested, and apply TF-IDF naming on top.
+
+import { existsSync } from "node:fs";
+import { rename } from "node:fs/promises";
+import { join } from "node:path";
+import { ensureHashOrderJson } from "../cache-utils.ts";
+import { loadGroups } from "../fs/groups.ts";
+import { withRenameLock } from "../fs/lock.ts";
+import {
+  cacheDir,
+  contentHashesPath,
+  contentHashesTmpPath,
+  groupsPath,
+  HASH_CACHE_FILE,
+  linkageTreePath,
+} from "../fs/paths.ts";
+import { log } from "../log.ts";
+import type {
+  ClusterData,
+  ClusterResultData,
+  DistanceProfile,
+  ImageGroup,
+  WeightConfig,
+} from "../shared/types.ts";
+import { PYTHON, RUST_BINARY, SCRIPTS_DIR } from "./binaries.ts";
+import { writeResolvedConstraintFiles } from "./constraints.ts";
+import { ensurePatchDistMatrix, ensureRerankDistMatrix } from "./distance-matrices.ts";
+import { cachedHashMapping, MODEL_KEYS } from "./embeddings.ts";
+import { getClusterAbortSignal } from "./job-mutex.ts";
+import {
+  getDistanceProfile,
+  recutTree,
+  recutTreeAdaptive,
+  recutTreeByThreshold,
+} from "./linkage.ts";
+import { spawnJSON } from "./subprocess.ts";
+import {
+  clustersWithoutAutoNames,
+  computeAutoNames,
+  ensureTextEmbeddings,
+  type NamedClusterInput,
+} from "./tfidf.ts";
+
+// Internal type matching the cluster-tool stdout shape.
+export interface RustOutput {
+  clusters: NamedClusterInput[];
+  nClusters: number;
+  treePath: string;
+}
+
+/**
+ * Run feature extraction (Python). The pipeline writes content_hashes.json
+ * via a temp-then-rename atomic step under withRenameLock so concurrent
+ * /api/save calls can't observe a half-rewritten file.
+ */
+export async function extractFeatures(
+  targetDir: string,
+  onProgress?: (line: string) => void,
+  opts?: { force?: string[]; required?: string[]; signal?: AbortSignal },
+): Promise<{ total: number; cached: number; extracted: number }> {
+  const script = join(SCRIPTS_DIR, "extract_features.py");
+  const cache = cacheDir(targetDir);
+
+  if (!existsSync(PYTHON)) {
+    throw new Error(
+      `Python not found at ${PYTHON}. Create venv with: uv venv ~/.venvs/imgcluster-env && source ~/.venvs/imgcluster-env/bin/activate && uv pip install torch torchvision open-clip-torch pillow numpy transformers`,
+    );
+  }
+
+  const args = [PYTHON, script, targetDir, "--cache-dir", cache];
+  if (opts?.force && opts.force.length > 0) {
+    args.push("--models", opts.force.join(","));
+  }
+  if (opts?.required && opts.required.length > 0) {
+    args.push("--required", opts.required.join(","));
+  }
+
+  log("cluster", `Extracting features: ${args.join(" ")}`);
+  const result = await spawnJSON<{
+    total: number;
+    cached: number;
+    extracted: number;
+    interrupted?: boolean;
+    cachePath?: string;
+  }>(args, {
+    label: "extract-features",
+    progressPrefix: "", // Python emits free-form stderr; every non-empty line is progress
+    onProgress,
+    signal: opts?.signal,
+  });
+
+  if (result.interrupted) {
+    throw new Error(
+      "Feature extraction was interrupted. Partial results were saved — re-run to continue from where it left off.",
+    );
+  }
+
+  // Atomically promote content_hashes.json.tmp → content_hashes.json under the
+  // FS lock. extract_features.py writes the tmp file, and we rename it to the
+  // final path here so concurrent /api/save calls can't observe a half-written
+  // cache mid-rewrite.
+  const tmpPath = contentHashesTmpPath(targetDir);
+  if (existsSync(tmpPath)) {
+    await withRenameLock(async () => {
+      await rename(tmpPath, contentHashesPath(targetDir));
+    });
+  }
+
+  return result;
+}
+
+export type LinkageMethod = "ward" | "average" | "complete";
+
+const DEFAULT_RERANK_BLEND = 0.7;
+
+export interface LinkageOptions {
+  usePatches?: boolean;
+  useRerank?: boolean;
+  /** Blend strength for re-rank matrix vs raw cosine. 0=cosine only, 1=rerank only. Default 0.7. */
+  rerankBlend?: number;
+}
+
+export async function runLinkage(
+  targetDir: string,
+  nClusters: number,
+  weights?: WeightConfig,
+  options?: LinkageOptions,
+  onProgress?: (line: string) => void,
+): Promise<RustOutput> {
+  const cache = cacheDir(targetDir);
+  const hashCachePath = join(cache, HASH_CACHE_FILE);
+  const contentHashesP = contentHashesPath(targetDir);
+  const hashOrderPath = join(cache, "hash_cache_order.json");
+  const groupsFile = groupsPath(targetDir);
+  const treePath = linkageTreePath(targetDir);
+
+  // Re-rank takes precedence over patches when both are enabled.
+  const useRerank = options?.useRerank ?? false;
+  const usePatches = !useRerank && (options?.usePatches ?? false);
+  const rerankBlend = options?.rerankBlend ?? DEFAULT_RERANK_BLEND;
+
+  let distMatrixPath: string | null = null;
+  let distMatrixWeight: number | null = null;
+  if (useRerank) {
+    distMatrixPath = await ensureRerankDistMatrix(targetDir, weights ?? {}, onProgress);
+    distMatrixWeight = rerankBlend;
+  } else if (usePatches) {
+    distMatrixPath = await ensurePatchDistMatrix(targetDir);
+    const hasEmbWeights = weights && Object.values(weights).some((v) => (v ?? 0) > 0);
+    distMatrixWeight = hasEmbWeights ? 0.5 : 1.0;
+  }
+
+  // Ensure the JSON sidecar exists (regenerate from NPZ if needed)
+  ensureHashOrderJson(cache);
+
+  // Linkage method: average works best with re-rank distance; ward is the
+  // historical default for raw cosine.
+  const linkageMethod: LinkageMethod = useRerank ? "average" : "ward";
+
+  const args = [
+    RUST_BINARY,
+    "--hash-cache",
+    hashCachePath,
+    "--content-hashes",
+    contentHashesP,
+    "--hash-order",
+    hashOrderPath,
+    "--n-clusters",
+    String(nClusters),
+    "--output-tree",
+    treePath,
+    "--linkage",
+    linkageMethod,
+  ];
+  if (existsSync(groupsFile)) {
+    args.push("--groups", groupsFile);
+  }
+  if (distMatrixPath && distMatrixWeight != null) {
+    args.push("--dist-matrix", distMatrixPath);
+    args.push("--dist-matrix-weight", String(distMatrixWeight));
+  }
+  const constraintFiles = await writeResolvedConstraintFiles(targetDir);
+  if (constraintFiles.cannotLinkPath) {
+    args.push("--cannot-link", constraintFiles.cannotLinkPath);
+  }
+  if (constraintFiles.lockedGroupsPath) {
+    args.push("--locked-groups", constraintFiles.lockedGroupsPath);
+  }
+  if (weights) {
+    for (const [key, val] of Object.entries(weights)) {
+      if (val !== undefined) args.push(`--${key.replace(/_/g, "-")}-weight`, String(val));
+    }
+  }
+
+  if (!existsSync(RUST_BINARY)) {
+    throw new Error(
+      `Rust binary not found at ${RUST_BINARY}. Build with: cd rust/cluster-tool && cargo build --release`,
+    );
+  }
+
+  log("cluster", `Running ${linkageMethod} linkage: ${args.join(" ")}`);
+  return spawnJSON<RustOutput>(args, { label: "cluster-tool" });
+}
+
+function suggestedCounts(nImages: number): number[] {
+  return [
+    ...new Set([
+      Math.max(10, Math.floor(nImages / 100)),
+      Math.max(20, Math.floor(nImages / 50)),
+      Math.max(50, Math.floor(nImages / 30)),
+      Math.max(75, Math.floor(nImages / 20)),
+      100,
+      150,
+      200,
+      300,
+    ]),
+  ].sort((a, b) => a - b);
+}
+
+export { suggestedCounts as computeSuggestedCounts };
+
+/** Derive the set of model keys needed for a given weight config.
+ * Only models explicitly given a positive weight are extracted — missing keys
+ * mean "don't extract", so CLIP etc. are never pulled unless the user asked for them. */
+export function modelsForWeights(weights?: WeightConfig): string[] | undefined {
+  if (!weights) return undefined; // no config → extract all (auto mode)
+  return MODEL_KEYS.filter((k) => (weights[k] ?? 0) > 0);
+}
+
+export async function runFullCluster(
+  targetDir: string,
+  nClusters: number,
+  onProgress?: (line: string) => void,
+  weights?: WeightConfig,
+  options?: LinkageOptions,
+): Promise<ClusterData> {
+  const required = modelsForWeights(weights);
+  const usePatches = options?.usePatches ?? false;
+  if (usePatches && required && !required.includes("dinov3")) {
+    required.push("dinov3");
+  }
+  const signal = getClusterAbortSignal();
+  const hasClip = !required || required.includes("clip");
+  const extractionPromises: Promise<unknown>[] = [
+    extractFeatures(targetDir, onProgress, required ? { required, signal } : { signal }),
+  ];
+  if (hasClip) extractionPromises.push(ensureTextEmbeddings(targetDir));
+  const [extraction] = (await Promise.all(extractionPromises)) as [
+    Awaited<ReturnType<typeof extractFeatures>>,
+    ...unknown[],
+  ];
+  log("cluster", `Extraction: ${extraction.extracted} new, ${extraction.cached} cached`);
+
+  const rustOutput = await runLinkage(targetDir, nClusters, weights, options, onProgress);
+  log("cluster", `Linkage complete: ${rustOutput.clusters.length} clusters`);
+
+  const clusters = hasClip
+    ? computeAutoNames(targetDir, rustOutput.clusters)
+    : clustersWithoutAutoNames(rustOutput.clusters);
+
+  const nImages = clusters.reduce((n, c) => n + c.images.length, 0);
+  const distanceProfile = getDistanceProfile(targetDir);
+  return { clusters, suggestedCounts: suggestedCounts(nImages), nClusters, distanceProfile };
+}
+
+export async function runLinkageOnly(
+  targetDir: string,
+  nClusters: number,
+  weights?: WeightConfig,
+  options?: LinkageOptions,
+): Promise<ClusterData> {
+  const rustOutput = await runLinkage(targetDir, nClusters, weights, options);
+  const clusters = computeAutoNames(targetDir, rustOutput.clusters);
+  const nImages = clusters.reduce((n, c) => n + c.images.length, 0);
+  return { clusters, suggestedCounts: suggestedCounts(nImages), nClusters };
+}
+
+export async function runRecut(targetDir: string, nClusters: number): Promise<ClusterData> {
+  const { labels, distanceProfile } = recutTree(targetDir, nClusters);
+  return buildRecutResult(targetDir, labels, nClusters, distanceProfile);
+}
+
+export async function runRecutByThreshold(
+  targetDir: string,
+  threshold: number,
+): Promise<ClusterData> {
+  const { labels, nClusters, distanceProfile } = recutTreeByThreshold(targetDir, threshold);
+  return buildRecutResult(targetDir, labels, nClusters, distanceProfile);
+}
+
+export async function runRecutAdaptive(
+  targetDir: string,
+  minClusterSize: number,
+): Promise<ClusterData> {
+  const { labels, nClusters, distanceProfile } = recutTreeAdaptive(targetDir, minClusterSize);
+  return buildRecutResult(targetDir, labels, nClusters, distanceProfile);
+}
+
+/** Group labels[] into clusters, attach confirmed-group info, auto-name, sort by size. */
+export function buildClustersFromLabels(
+  targetDir: string,
+  filenames: string[],
+  labels: number[],
+  opts: { idPrefix: string },
+): ClusterResultData[] {
+  const imgToGroup = new Map<string, ImageGroup>();
+  for (const g of loadGroups(targetDir)) {
+    for (const f of g.images) imgToGroup.set(f, g);
+  }
+
+  const clusterMembers = new Map<number, string[]>();
+  for (let i = 0; i < labels.length; i++) {
+    const label = labels[i]!;
+    if (!clusterMembers.has(label)) clusterMembers.set(label, []);
+    clusterMembers.get(label)!.push(filenames[i]!);
+  }
+
+  const rawClusters = [...clusterMembers.entries()]
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([, images], ci): NamedClusterInput => {
+      const confirmed = images.find((f) => imgToGroup.has(f));
+      const group = confirmed ? (imgToGroup.get(confirmed) ?? null) : null;
+      return {
+        id: `${opts.idPrefix}${ci}`,
+        images: images.sort(),
+        confirmedGroup: group ? { id: group.id, name: group.name, images: group.images } : null,
+      };
+    });
+
+  try {
+    return computeAutoNames(targetDir, rawClusters);
+  } catch {
+    return clustersWithoutAutoNames(rawClusters);
+  }
+}
+
+async function buildRecutResult(
+  targetDir: string,
+  labels: number[],
+  nClusters: number,
+  distanceProfile: DistanceProfile,
+): Promise<ClusterData> {
+  const { filenames } = cachedHashMapping(targetDir);
+  const clusters = buildClustersFromLabels(targetDir, filenames, labels, { idPrefix: "cluster_" });
+  return {
+    clusters,
+    suggestedCounts: suggestedCounts(filenames.length),
+    nClusters,
+    distanceProfile,
+  };
+}

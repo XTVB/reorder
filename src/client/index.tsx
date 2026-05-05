@@ -1,23 +1,38 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App.tsx";
-import { AppShellHeader, DEFAULT_MODE, MODES, modeFromPath } from "./components/AppShellHeader.tsx";
-import { ClusterCompare } from "./components/ClusterCompare/ClusterCompare.tsx";
-import { ClusterToolbar } from "./components/ClusterView/ClusterToolbar.tsx";
-import { ClusterView } from "./components/ClusterView/ClusterView.tsx";
-import { MergeSuggestions } from "./components/MergeSuggestions/MergeSuggestions.tsx";
-import { Toast } from "./components/Toast.tsx";
-import { Toolbar, ToolbarOverflowMenu } from "./components/Toolbar.tsx";
+import { ClusterView } from "./components/cluster/ClusterView.tsx";
+import { ClusterCompare } from "./components/cluster-compare/ClusterCompare.tsx";
+import {
+  AppShellHeader,
+  DEFAULT_MODE,
+  MODES,
+  modeFromPath,
+} from "./components/header/AppShellHeader.tsx";
+import { HeaderActions } from "./components/header/HeaderActions.tsx";
+import { MergeSuggestions } from "./components/merge-suggestions/MergeSuggestions.tsx";
+import { ReorderToolbarOverflow } from "./components/reorder/ReorderToolbarOverflow.tsx";
+import { ReorderView } from "./components/reorder/ReorderView.tsx";
+import { Toast } from "./components/shared/Toast.tsx";
 import { useRouter } from "./hooks/useRouter.ts";
-import { useClusterStore } from "./stores/clusterStore.ts";
 import { useConstraintsStore } from "./stores/constraintsStore.ts";
+import { useLightboxStore } from "./stores/core/lightboxStore.ts";
+import { useModalStore } from "./stores/core/modalStore.ts";
+import { useSelectionStore } from "./stores/core/selectionStore.ts";
+import { useSessionStore } from "./stores/core/sessionStore.ts";
+import { useToastStore } from "./stores/core/toastStore.ts";
 import { useDndStore } from "./stores/dndStore.ts";
 import { useGroupStore } from "./stores/groupStore.ts";
 import { useImageStore } from "./stores/imageStore.ts";
 import { useMergeSuggestionsStore } from "./stores/mergeSuggestionsStore.ts";
-import { useSelectionStore } from "./stores/selectionStore.ts";
+import {
+  useCompareStore,
+  useExpandStore,
+  useInteractionsStore,
+  useListStore,
+  useMetricsStore,
+  useSplitStore,
+} from "./stores/modes/cluster/index.ts";
 import { useTrashStore } from "./stores/trashStore.ts";
-import { useUIStore } from "./stores/uiStore.ts";
 
 // Expose all stores on window for console access / debugging
 (window as unknown as Record<string, unknown>).__stores = {
@@ -25,8 +40,16 @@ import { useUIStore } from "./stores/uiStore.ts";
   groups: useGroupStore,
   selection: useSelectionStore,
   dnd: useDndStore,
-  ui: useUIStore,
-  cluster: useClusterStore,
+  modal: useModalStore,
+  lightbox: useLightboxStore,
+  toast: useToastStore,
+  session: useSessionStore,
+  clusterList: useListStore,
+  clusterInteractions: useInteractionsStore,
+  clusterCompare: useCompareStore,
+  clusterExpand: useExpandStore,
+  clusterSplit: useSplitStore,
+  clusterMetrics: useMetricsStore,
   mergeSuggestions: useMergeSuggestionsStore,
   constraints: useConstraintsStore,
   trash: useTrashStore,
@@ -52,13 +75,9 @@ function AppShell() {
       <AppShellHeader
         mode={mode}
         navigate={navigate}
-        leftSlot={mode === "reorder" ? <ToolbarOverflowMenu /> : null}
+        leftSlot={mode === "reorder" ? <ReorderToolbarOverflow /> : null}
       >
-        {mode === "cluster" ? (
-          <ClusterActions />
-        ) : mode === "cluster-compare" || mode === "merge-suggestions" ? null : (
-          <Toolbar />
-        )}
+        <HeaderActions mode={mode} />
       </AppShellHeader>
       {mode === "cluster" ? (
         <ClusterView />
@@ -67,78 +86,10 @@ function AppShell() {
       ) : mode === "merge-suggestions" ? (
         <MergeSuggestions />
       ) : (
-        <App />
+        <ReorderView />
       )}
       <Toast />
     </>
-  );
-}
-
-function ClusterActions() {
-  const clusterData = useClusterStore((s) => s.clusterData);
-  const loading = useClusterStore((s) => s.loading);
-  const progress = useClusterStore((s) => s.progress);
-  const weights = useClusterStore((s) => s.weights);
-  const usePatches = useClusterStore((s) => s.usePatches);
-  const useRerank = useClusterStore((s) => s.useRerank);
-  const rerankBlend = useClusterStore((s) => s.rerankBlend);
-  const setWeights = useClusterStore((s) => s.setWeights);
-  const setUsePatches = useClusterStore((s) => s.setUsePatches);
-  const setUseRerank = useClusterStore((s) => s.setUseRerank);
-  const setRerankBlend = useClusterStore((s) => s.setRerankBlend);
-  const fetchClusters = useClusterStore((s) => s.fetchClusters);
-  const recutClusters = useClusterStore((s) => s.recutClusters);
-  const recutByThreshold = useClusterStore((s) => s.recutByThreshold);
-  const recutAdaptive = useClusterStore((s) => s.recutAdaptive);
-  const runScopedCluster = useClusterStore((s) => s.runScopedCluster);
-  const recutScopedByN = useClusterStore((s) => s.recutScopedByN);
-  const recutScopedByThreshold = useClusterStore((s) => s.recutScopedByThreshold);
-  const recutScopedAdaptive = useClusterStore((s) => s.recutScopedAdaptive);
-  const expandAll = useClusterStore((s) => s.expandAll);
-  const collapseAll = useClusterStore((s) => s.collapseAll);
-  const acceptAllClusters = useClusterStore((s) => s.acceptAllClusters);
-  const importClusters = useClusterStore((s) => s.importClusters);
-  const clearImportedClusters = useClusterStore((s) => s.clearImportedClusters);
-  const visibleCount = clusterData?.clusters.length ?? 0;
-  const hasError = progress.startsWith("Error:");
-  const scope = clusterData?.scope;
-  const inScope = !!scope;
-
-  const onRun =
-    inScope && scope
-      ? (n?: number) => runScopedCluster(scope.groupIds, { nClusters: n })
-      : fetchClusters;
-  const onRecut = inScope ? recutScopedByN : recutClusters;
-  const onRecutByThreshold = inScope ? recutScopedByThreshold : recutByThreshold;
-  const onRecutAdaptive = inScope ? recutScopedAdaptive : recutAdaptive;
-
-  return (
-    <ClusterToolbar
-      loading={loading}
-      progress={progress}
-      nClusters={clusterData?.nClusters ?? 200}
-      totalClusters={visibleCount}
-      hasError={hasError}
-      distanceProfile={clusterData?.distanceProfile ?? null}
-      weights={weights}
-      usePatches={usePatches}
-      useRerank={useRerank}
-      rerankBlend={rerankBlend}
-      inScope={inScope}
-      onRun={onRun}
-      onRecut={onRecut}
-      onRecutByThreshold={onRecutByThreshold}
-      onRecutAdaptive={onRecutAdaptive}
-      onWeightsChange={setWeights}
-      onUsePatchesChange={setUsePatches}
-      onUseRerankChange={setUseRerank}
-      onRerankBlendChange={setRerankBlend}
-      onExpandAll={expandAll}
-      onCollapseAll={collapseAll}
-      onAcceptAll={acceptAllClusters}
-      onImportClusters={importClusters}
-      onClearImported={clearImportedClusters}
-    />
   );
 }
 

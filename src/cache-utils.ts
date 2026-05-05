@@ -110,6 +110,34 @@ export function ensureHashOrderJson(cachePath: string): void {
   writeFileSync(orderPath, JSON.stringify(hashes));
 }
 
+/**
+ * Read `content_hashes.json` as `{ filename: hash }`. Returns `{}` if the
+ * file doesn't exist or fails to parse — both are normal pre-extraction states.
+ */
+export function loadContentHashes(cacheDir: string): Record<string, string> {
+  const path = join(cacheDir, "content_hashes.json");
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+/** Hash → current filename, derived from `content_hashes.json`. */
+export function loadHashToFilenameMap(cacheDir: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [fname, hash] of Object.entries(loadContentHashes(cacheDir))) {
+    out.set(hash, fname);
+  }
+  return out;
+}
+
+/** Filename → content hash, derived from `content_hashes.json`. */
+export function loadFilenameToHashMap(cacheDir: string): Map<string, string> {
+  return new Map(Object.entries(loadContentHashes(cacheDir)));
+}
+
 /** Load content_hashes.json + hash_cache_order.json and build the hash→row mapping. */
 export function loadHashMapping(cacheDir: string): HashMapping {
   ensureHashOrderJson(cacheDir);

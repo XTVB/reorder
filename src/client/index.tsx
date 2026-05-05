@@ -10,6 +10,7 @@ import { Toast } from "./components/Toast.tsx";
 import { Toolbar, ToolbarOverflowMenu } from "./components/Toolbar.tsx";
 import { useRouter } from "./hooks/useRouter.ts";
 import { useClusterStore } from "./stores/clusterStore.ts";
+import { useConstraintsStore } from "./stores/constraintsStore.ts";
 import { useDndStore } from "./stores/dndStore.ts";
 import { useGroupStore } from "./stores/groupStore.ts";
 import { useImageStore } from "./stores/imageStore.ts";
@@ -27,6 +28,7 @@ import { useUIStore } from "./stores/uiStore.ts";
   ui: useUIStore,
   cluster: useClusterStore,
   mergeSuggestions: useMergeSuggestionsStore,
+  constraints: useConstraintsStore,
   trash: useTrashStore,
 };
 
@@ -40,6 +42,10 @@ function AppShell() {
       navigate(MODES.find((m) => m.key === DEFAULT_MODE)!.path);
     }
   }, [pathname]);
+
+  useEffect(() => {
+    useConstraintsStore.getState().loadConstraints();
+  }, []);
 
   return (
     <>

@@ -1,9 +1,11 @@
 import { useEffect, useMemo } from "react";
 import { findClusterEverywhere, useClusterStore } from "../../stores/clusterStore.ts";
+import { useConstraintsStore } from "../../stores/constraintsStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import type { ClusterResultData, ExpandCandidate } from "../../types.ts";
 import { cn, imageUrl } from "../../utils/helpers.ts";
 import { Modal } from "../Modal.tsx";
+import { RejectButton } from "./RejectButton.tsx";
 
 const SLIDER_MIN = 0.5;
 const SLIDER_MAX = 4;
@@ -32,6 +34,10 @@ export function ExpandModal() {
   const setThreshold = useClusterStore((s) => s.setExpandThreshold);
   const setIncludeConfirmedGroups = useClusterStore((s) => s.setExpandIncludeConfirmedGroups);
   const confirmExpand = useClusterStore((s) => s.confirmExpand);
+
+  const cannotLinkIndex = useConstraintsStore((s) => s.index);
+  const lockedGroupIds = useConstraintsStore((s) => s.lockedGroupIds);
+  const addCannotLink = useConstraintsStore((s) => s.addImageGroupCannotLink);
 
   // Build a filename → current cluster map. We look at top-level + split
   // children too so the label reflects the user's current view, not just
@@ -85,6 +91,14 @@ export function ExpandModal() {
   const source = findClusterEverywhere(clusterData.clusters, splitChildren, expand.sourceClusterId);
   if (!source) return null;
 
+  // ClusterCard hides "expand…" for locked groups, but the modal may already
+  // be open from before the lock — close it.
+  const sourceGroupId = source.confirmedGroup?.id;
+  if (sourceGroupId && lockedGroupIds.has(sourceGroupId)) {
+    closeExpand();
+    return null;
+  }
+
   const ref = expand.p90Intra > 0 ? expand.p90Intra : 0.1;
   const threshold = ref * expand.thresholdMultiplier;
 
@@ -94,8 +108,15 @@ export function ExpandModal() {
       const cur = fileCluster.get(c.filename);
       if (cur?.isConfirmedGroup) return false;
     }
+    if (sourceGroupId && cannotLinkIndex.get(c.filename)?.has(sourceGroupId)) return false;
     return true;
   });
+
+  const onReject = sourceGroupId
+    ? (filename: string) => {
+        void addCannotLink(filename, sourceGroupId);
+      }
+    : undefined;
 
   const totalChecked = expand.checked.size;
   const sliderValue = multiplierToLog(expand.thresholdMultiplier);
@@ -188,6 +209,7 @@ export function ExpandModal() {
           checked={expand.checked}
           fileCluster={fileCluster}
           onToggle={toggleExpandFile}
+          onReject={onReject}
         />
       )}
     </Modal>
@@ -199,11 +221,13 @@ function ExpandGrid({
   checked,
   fileCluster,
   onToggle,
+  onReject,
 }: {
   filtered: ExpandCandidate[];
   checked: Set<string>;
   fileCluster: Map<string, { id: string; name: string; isConfirmedGroup: boolean }>;
   onToggle: (filename: string) => void;
+  onReject?: (filename: string) => void;
 }) {
   // Cap visible candidates for perf — sliders should remain responsive.
   const RENDER_CAP = 400;
@@ -227,6 +251,7 @@ function ExpandGrid({
               onChange={() => onToggle(c.filename)}
               onClick={(e) => e.stopPropagation()}
             />
+            {onReject && <RejectButton filename={c.filename} onReject={onReject} />}
             <img
               src={imageUrl(c.filename)}
               loading="lazy"

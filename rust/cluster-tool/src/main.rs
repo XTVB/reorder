@@ -82,6 +82,20 @@ struct Cli {
     /// Incompatible with --dist-matrix for now (matrix is indexed on the full set).
     #[arg(long, default_value = "")]
     filenames: String,
+
+    /// Path to JSON `[{ "image_filename": "...", "group_id": "..." }, ...]`
+    /// of image↔group cannot-link constraints. Each pair becomes a 1e18
+    /// distance sentinel between the image and the group's representative,
+    /// preventing the image from ever joining that group during NNC.
+    #[arg(long, default_value = "")]
+    cannot_link: String,
+
+    /// Path to JSON `[{ "group_id": "..." }, ...]` of locked groups.
+    /// For each locked group G, sets dist(i, G_rep) = 1e18 for every active
+    /// index i ≠ G_rep, fully isolating G from further merges. Locked groups'
+    /// clusters reproduce exactly at any tree cut.
+    #[arg(long, default_value = "")]
+    locked_groups: String,
 }
 
 // ── Data types ───────────────────────────────────────────────────────────────
@@ -91,6 +105,17 @@ struct ReorderGroup {
     id: String,
     name: String,
     images: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct CannotLinkInput {
+    image_filename: String,
+    group_id: String,
+}
+
+#[derive(Deserialize)]
+struct LockedGroupInput {
+    group_id: String,
 }
 
 #[derive(Serialize)]
@@ -351,12 +376,22 @@ fn main() {
         None
     };
 
+    let cannot_link_pairs = load_cannot_link_pairs(&cli.cannot_link, &fname_to_idx);
+    let locked_group_ids = load_locked_group_ids(&cli.locked_groups);
+    if !cannot_link_pairs.is_empty() {
+        eprintln!("Loaded {} image↔group cannot-link constraints", cannot_link_pairs.len());
+    }
+    if !locked_group_ids.is_empty() {
+        eprintln!("Loaded {} group-lock constraints", locked_group_ids.len());
+    }
+
     // Run hierarchical agglomerative linkage
     let linkage = Linkage::parse(&cli.linkage);
     eprintln!("Running {:?} linkage...", linkage);
     let merge_steps = linkage_cosine(
         &features_flat, feat_dim, n_images, &groups, &ungrouped_img_indices,
         precomputed_dist, linkage,
+        &cannot_link_pairs, &locked_group_ids,
     );
     eprintln!("Linkage complete: {} merge steps", merge_steps.len());
 
@@ -493,6 +528,40 @@ fn load_groups(groups_path: &str, fname_to_idx: &HashMap<&str, usize>) -> Vec<Lo
         .collect()
 }
 
+/// Parse a JSON array file as `Vec<T>`, returning an empty vec on missing
+/// path, unreadable file, or parse failure (all treated as "no constraints").
+fn load_json_array<T: serde::de::DeserializeOwned>(path: &str) -> Vec<T> {
+    if path.is_empty() {
+        return vec![];
+    }
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return vec![];
+    };
+    serde_json::from_str(&content).unwrap_or_default()
+}
+
+/// Resolve cannot-link pairs to indices, dropping entries with unknown filenames.
+fn load_cannot_link_pairs(
+    path: &str,
+    fname_to_idx: &HashMap<&str, usize>,
+) -> Vec<(usize, String)> {
+    load_json_array::<CannotLinkInput>(path)
+        .into_iter()
+        .filter_map(|c| {
+            fname_to_idx
+                .get(c.image_filename.as_str())
+                .map(|&idx| (idx, c.group_id))
+        })
+        .collect()
+}
+
+fn load_locked_group_ids(path: &str) -> Vec<String> {
+    load_json_array::<LockedGroupInput>(path)
+        .into_iter()
+        .map(|l| l.group_id)
+        .collect()
+}
+
 // ── Flat condensed distance matrix ───────────────────────────────────────────
 //
 // We store the upper-triangle of the n×n distance matrix as a flat Vec<f64>
@@ -548,6 +617,8 @@ fn linkage_cosine(
     ungrouped: &[usize],
     precomputed_dist: Option<(Vec<f64>, f32)>, // (distances, weight)
     linkage: Linkage,
+    cannot_link: &[(usize, String)], // (image_idx, group_id) — barrier between image and group's rep
+    locked_groups: &[String],        // group_ids that are sealed: nothing else may merge in
 ) -> Vec<MergeStep> {
     let n_groups = groups.len();
     let n_ungrouped = ungrouped.len();
@@ -710,6 +781,54 @@ fn linkage_cosine(
     for i in 0..group_reps.len() {
         for j in (i + 1)..group_reps.len() {
             set_dist(&mut dist, group_reps[i], group_reps[j], n_images, GROUP_BARRIER);
+        }
+    }
+
+    // ── Apply user cannot-link / group-lock constraints ───────────────────
+    // Same 1e18 sentinel; the inter-group barrier above guarantees Ward's
+    // squared-distance update can't overflow, and Lance-Williams safely
+    // propagates the barrier through any subsequent merges.
+    if !cannot_link.is_empty() || !locked_groups.is_empty() {
+        // Build group_id → rep_idx map. group_sorted parallels
+        // groups.iter().filter(|g| g.member_indices.len() >= 2), so we zip
+        // that filtered iterator with group_reps to recover the IDs.
+        let group_id_to_rep: HashMap<&str, usize> = groups
+            .iter()
+            .filter(|g| g.member_indices.len() >= 2)
+            .zip(group_reps.iter())
+            .map(|(g, &rep)| (g.id.as_str(), rep))
+            .collect();
+
+        let mut applied_cl = 0usize;
+        for (img_idx, group_id) in cannot_link {
+            let Some(&rep_idx) = group_id_to_rep.get(group_id.as_str()) else {
+                continue; // group no longer exists
+            };
+            if *img_idx == rep_idx {
+                continue; // image is itself the rep — nothing sensible to do
+            }
+            set_dist(&mut dist, *img_idx, rep_idx, n_images, GROUP_BARRIER);
+            applied_cl += 1;
+        }
+        if applied_cl > 0 {
+            eprintln!("  Applied {} cannot-link barriers", applied_cl);
+        }
+
+        let mut applied_lock = 0usize;
+        for group_id in locked_groups {
+            let Some(&rep_idx) = group_id_to_rep.get(group_id.as_str()) else {
+                continue;
+            };
+            for &i in &active_indices {
+                if i == rep_idx {
+                    continue;
+                }
+                set_dist(&mut dist, i, rep_idx, n_images, GROUP_BARRIER);
+            }
+            applied_lock += 1;
+        }
+        if applied_lock > 0 {
+            eprintln!("  Applied {} group-lock barriers", applied_lock);
         }
     }
 

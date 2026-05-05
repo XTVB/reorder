@@ -16,7 +16,9 @@ import {
   computeCacheSignature,
   ensureHashOrderJson,
   type HashMapping,
+  loadContentHashes,
   loadHashMapping,
+  loadHashToFilenameMap,
   parseNpyFromNpz,
   readSidecarSignature,
   reindexToFilenameOrder,
@@ -47,6 +49,155 @@ export function loadGroups(targetDir: string): ImageGroup[] {
     if (Array.isArray(raw?.groups)) return raw.groups;
   } catch {}
   return [];
+}
+
+// ── Cannot-link / group-lock constraints ────────────────────────────────────
+
+export const CONSTRAINTS_FILENAME = ".reorder-constraints.json";
+
+export interface CannotLinkEntry {
+  imageHash: string;
+  groupId: string;
+}
+
+export interface Constraints {
+  version: 1;
+  imageGroupCannotLink: CannotLinkEntry[];
+  lockedGroupIds: string[];
+}
+
+const EMPTY_CONSTRAINTS: Constraints = {
+  version: 1,
+  imageGroupCannotLink: [],
+  lockedGroupIds: [],
+};
+
+export function loadConstraints(targetDir: string): Constraints {
+  const path = join(targetDir, CONSTRAINTS_FILENAME);
+  if (!existsSync(path)) return { ...EMPTY_CONSTRAINTS };
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as Partial<Constraints>;
+    return {
+      version: 1,
+      imageGroupCannotLink: Array.isArray(raw.imageGroupCannotLink)
+        ? raw.imageGroupCannotLink.filter(
+            (c) => c && typeof c.imageHash === "string" && typeof c.groupId === "string",
+          )
+        : [],
+      lockedGroupIds: Array.isArray(raw.lockedGroupIds)
+        ? raw.lockedGroupIds.filter((id) => typeof id === "string")
+        : [],
+    };
+  } catch {
+    return { ...EMPTY_CONSTRAINTS };
+  }
+}
+
+export async function writeConstraintsFile(targetDir: string, c: Constraints): Promise<void> {
+  const path = join(targetDir, CONSTRAINTS_FILENAME);
+  const bakPath = join(targetDir, ".reorder-constraints.bak.json");
+  if (existsSync(path)) {
+    try {
+      await Bun.write(bakPath, Bun.file(path));
+    } catch {}
+  }
+  await Bun.write(path, JSON.stringify(c, null, 2));
+}
+
+/**
+ * Build the JSON payloads that the Rust cluster-tool consumes via --cannot-link
+ * and --locked-groups, resolving content-hashes back to filenames and dropping
+ * entries whose group or image is no longer available. Returns null for either
+ * field when there's nothing to write.
+ *
+ * `scope` (optional) restricts both kinds of constraint to a filename subset:
+ *   - cannot-link is dropped if the image isn't in the subset
+ *   - group-lock is dropped if any member of the group is missing from the
+ *     subset (the lock is meaningless when the group is partially represented)
+ */
+export interface ResolvedConstraintFiles {
+  cannotLinkPath: string | null;
+  lockedGroupsPath: string | null;
+}
+
+export async function writeResolvedConstraintFiles(
+  targetDir: string,
+  scope?: { allowedFilenames: Set<string> },
+): Promise<ResolvedConstraintFiles> {
+  const constraints = loadConstraints(targetDir);
+  if (constraints.imageGroupCannotLink.length === 0 && constraints.lockedGroupIds.length === 0) {
+    return { cannotLinkPath: null, lockedGroupsPath: null };
+  }
+
+  const groups = loadGroups(targetDir);
+  const groupById = new Map(groups.map((g) => [g.id, g]));
+  const cache = cacheDir(targetDir);
+  const hashToFilename = loadHashToFilenameMap(cache);
+
+  const cl: { image_filename: string; group_id: string }[] = [];
+  for (const c of constraints.imageGroupCannotLink) {
+    const fname = hashToFilename.get(c.imageHash);
+    if (!fname) continue;
+    if (!groupById.has(c.groupId)) continue;
+    if (scope && !scope.allowedFilenames.has(fname)) continue;
+    cl.push({ image_filename: fname, group_id: c.groupId });
+  }
+
+  const lockedExisting: string[] = [];
+  for (const id of constraints.lockedGroupIds) {
+    const g = groupById.get(id);
+    if (!g) continue;
+    if (scope) {
+      const allMembersInScope = g.images.every((f) => scope.allowedFilenames.has(f));
+      if (!allMembersInScope) continue;
+    }
+    lockedExisting.push(id);
+  }
+
+  const cannotLinkPath = cl.length > 0 ? join(cache, ".cannot_link_resolved.json") : null;
+  const lockedGroupsPath =
+    lockedExisting.length > 0 ? join(cache, ".locked_groups_resolved.json") : null;
+  await Promise.all([
+    cannotLinkPath ? Bun.write(cannotLinkPath, JSON.stringify(cl)) : Promise.resolve(),
+    lockedGroupsPath
+      ? Bun.write(lockedGroupsPath, JSON.stringify(lockedExisting.map((id) => ({ group_id: id }))))
+      : Promise.resolve(),
+  ]);
+
+  return { cannotLinkPath, lockedGroupsPath };
+}
+
+/**
+ * Drop constraints whose imageHash has no current filename (file gone) or
+ * whose groupId no longer exists. Called from remapAfterRename.
+ */
+export async function pruneDanglingConstraints(targetDir: string): Promise<void> {
+  const c = loadConstraints(targetDir);
+  if (c.imageGroupCannotLink.length === 0 && c.lockedGroupIds.length === 0) return;
+
+  const groups = loadGroups(targetDir);
+  const groupIds = new Set(groups.map((g) => g.id));
+
+  const contentHashes = loadContentHashes(cacheDir(targetDir));
+  const hashKnown = Object.keys(contentHashes).length > 0;
+  const validHashes = hashKnown ? new Set(Object.values(contentHashes)) : null;
+
+  const filteredCL = c.imageGroupCannotLink.filter(
+    (e) => groupIds.has(e.groupId) && (validHashes === null || validHashes.has(e.imageHash)),
+  );
+  const filteredLocked = c.lockedGroupIds.filter((id) => groupIds.has(id));
+
+  if (
+    filteredCL.length === c.imageGroupCannotLink.length &&
+    filteredLocked.length === c.lockedGroupIds.length
+  ) {
+    return;
+  }
+  await writeConstraintsFile(targetDir, {
+    version: 1,
+    imageGroupCannotLink: filteredCL,
+    lockedGroupIds: filteredLocked,
+  });
 }
 
 // ── Paths ────────────────────────────────────────────────────────────────────
@@ -500,6 +651,13 @@ export async function runLinkage(
   if (distMatrixPath && distMatrixWeight != null) {
     args.push("--dist-matrix", distMatrixPath);
     args.push("--dist-matrix-weight", String(distMatrixWeight));
+  }
+  const constraintFiles = await writeResolvedConstraintFiles(targetDir);
+  if (constraintFiles.cannotLinkPath) {
+    args.push("--cannot-link", constraintFiles.cannotLinkPath);
+  }
+  if (constraintFiles.lockedGroupsPath) {
+    args.push("--locked-groups", constraintFiles.lockedGroupsPath);
   }
   if (weights) {
     for (const [key, val] of Object.entries(weights)) {
@@ -1665,6 +1823,15 @@ export async function runScopedLinkage(
     "ward",
   ];
   if (existsSync(groupsFile)) args.push("--groups", groupsFile);
+  const scopedConstraints = await writeResolvedConstraintFiles(targetDir, {
+    allowedFilenames: new Set(subsetFilenames),
+  });
+  if (scopedConstraints.cannotLinkPath) {
+    args.push("--cannot-link", scopedConstraints.cannotLinkPath);
+  }
+  if (scopedConstraints.lockedGroupsPath) {
+    args.push("--locked-groups", scopedConstraints.lockedGroupsPath);
+  }
   if (weights) {
     for (const [key, val] of Object.entries(weights)) {
       if (val !== undefined) args.push(`--${key.replace(/_/g, "-")}-weight`, String(val));

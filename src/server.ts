@@ -1,6 +1,7 @@
 import type { Stats } from "node:fs";
 import { stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
+import { loadFilenameToHashMap, loadHashToFilenameMap } from "./cache-utils.ts";
 import type {
   ClusterData,
   ImageGroup,
@@ -11,6 +12,7 @@ import type {
 import {
   broadcastProgress,
   buildImportedResult,
+  type Constraints,
   cancelClusterJob,
   clearImportedClusters,
   clearScopedCache,
@@ -25,9 +27,11 @@ import {
   type ImportClusterInput,
   invalidateClusterCache,
   isClusterJobRunning,
+  loadConstraints,
   loadGroups,
   loadImportedClusters,
   loadPatchDistMatrix,
+  pruneDanglingConstraints,
   runFullCluster,
   runLinkageOnly,
   runRecut,
@@ -39,6 +43,7 @@ import {
   setClusterJobRunning,
   subscribeProgress,
   type WeightConfig,
+  writeConstraintsFile,
 } from "./cluster.ts";
 import { initLog, log, logData, logError } from "./log.ts";
 import { findNearestNeighbors, ModelMissingError } from "./nn-query.ts";
@@ -115,6 +120,31 @@ async function remapContentHashes(targetDir: string, renames: RenameMapping[]) {
   }
 }
 
+async function mutateConstraints(
+  targetDir: string,
+  fn: (c: Constraints) => Constraints,
+): Promise<{ changed: boolean; next: Constraints }> {
+  const c = loadConstraints(targetDir);
+  const next = fn(c);
+  const changed = next !== c;
+  if (changed) await writeConstraintsFile(targetDir, next);
+  return { changed, next };
+}
+
+function constraintsResponse(targetDir: string, c: Constraints, changed: boolean) {
+  const hashToFilename = loadHashToFilenameMap(join(targetDir, ".reorder-cache"));
+  return {
+    success: true,
+    treeStale: changed,
+    ...c,
+    imageGroupCannotLinkResolved: c.imageGroupCannotLink.map((e) => ({
+      imageHash: e.imageHash,
+      groupId: e.groupId,
+      currentFilename: hashToFilename.get(e.imageHash) ?? null,
+    })),
+  };
+}
+
 async function remapAfterRename(
   targetDir: string,
   renames: RenameMapping[],
@@ -141,6 +171,13 @@ async function remapAfterRename(
     const msg = err instanceof Error ? err.message : String(err);
     logError(label, "remapContentHashes failed", err);
     warnings.push(`Content hashes remapping failed: ${msg}`);
+  }
+  try {
+    await pruneDanglingConstraints(targetDir);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(label, "pruneDanglingConstraints failed", err);
+    warnings.push(`Constraint pruning failed: ${msg}`);
   }
   invalidateClusterCache();
 }
@@ -596,6 +633,79 @@ async function handleAPI(req: Request, path: string, targetDir: string): Promise
         await writeGroupsFile(targetDir, groups);
         return json({ success: true });
       });
+    }
+
+    if (path === "/api/constraints" && req.method === "GET") {
+      return json(constraintsResponse(targetDir, loadConstraints(targetDir), false));
+    }
+
+    if (path === "/api/constraints/cannot-link" && req.method === "POST") {
+      const body = (await req.json()) as {
+        imageFilename: string;
+        groupId: string;
+        action: "add" | "remove";
+      };
+      const hash = loadFilenameToHashMap(join(targetDir, ".reorder-cache")).get(body.imageFilename);
+      if (!hash) {
+        return json(
+          { error: `No content hash for ${body.imageFilename} — run extraction first` },
+          400,
+        );
+      }
+      const { changed, next } = await mutateConstraints(targetDir, (c) => {
+        const has = c.imageGroupCannotLink.some(
+          (e) => e.imageHash === hash && e.groupId === body.groupId,
+        );
+        if (body.action === "add" && !has) {
+          return {
+            ...c,
+            imageGroupCannotLink: [
+              ...c.imageGroupCannotLink,
+              { imageHash: hash, groupId: body.groupId },
+            ],
+          };
+        }
+        if (body.action === "remove" && has) {
+          return {
+            ...c,
+            imageGroupCannotLink: c.imageGroupCannotLink.filter(
+              (e) => !(e.imageHash === hash && e.groupId === body.groupId),
+            ),
+          };
+        }
+        return c;
+      });
+      return json(constraintsResponse(targetDir, next, changed));
+    }
+
+    if (path === "/api/constraints/group-lock" && req.method === "POST") {
+      const body = (await req.json()) as { groupId: string; locked: boolean };
+      const { changed, next } = await mutateConstraints(targetDir, (c) => {
+        const has = c.lockedGroupIds.includes(body.groupId);
+        if (body.locked && !has) {
+          return { ...c, lockedGroupIds: [...c.lockedGroupIds, body.groupId] };
+        }
+        if (!body.locked && has) {
+          return { ...c, lockedGroupIds: c.lockedGroupIds.filter((id) => id !== body.groupId) };
+        }
+        return c;
+      });
+      return json(constraintsResponse(targetDir, next, changed));
+    }
+
+    if (path === "/api/constraints/clear" && req.method === "POST") {
+      const body = (await req.json().catch(() => ({}))) as { groupId?: string };
+      const { changed, next } = await mutateConstraints(targetDir, (c) => {
+        if (body.groupId) {
+          return {
+            version: 1,
+            imageGroupCannotLink: c.imageGroupCannotLink.filter((e) => e.groupId !== body.groupId),
+            lockedGroupIds: c.lockedGroupIds.filter((id) => id !== body.groupId),
+          };
+        }
+        return { version: 1, imageGroupCannotLink: [], lockedGroupIds: [] };
+      });
+      return json(constraintsResponse(targetDir, next, changed));
     }
 
     if (path === "/api/organize/preview" && req.method === "POST") {

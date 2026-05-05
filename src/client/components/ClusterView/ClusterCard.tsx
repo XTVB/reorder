@@ -1,10 +1,12 @@
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useClusterStore } from "../../stores/clusterStore.ts";
+import { useConstraintsStore } from "../../stores/constraintsStore.ts";
 import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
 import type { ClusterMetrics, ClusterResultData } from "../../types.ts";
 import { cn, imageUrl } from "../../utils/helpers.ts";
 import { AskClaudeButton } from "../AskClaudeButton.tsx";
+import { RejectButton } from "./RejectButton.tsx";
 
 interface Props {
   cluster: ClusterResultData;
@@ -67,16 +69,28 @@ export function ClusterCard({
   onOpenExpand,
 }: Props) {
   const hasGroup = !!cluster.confirmedGroup;
+  const groupId = cluster.confirmedGroup?.id;
+
+  const cannotLinkIndex = useConstraintsStore((s) => s.index);
+  const lockedGroupIds = useConstraintsStore((s) => s.lockedGroupIds);
+  const addCannotLink = useConstraintsStore((s) => s.addImageGroupCannotLink);
+  const toggleGroupLock = useConstraintsStore((s) => s.toggleGroupLock);
+  const isLocked = !!groupId && lockedGroupIds.has(groupId);
 
   const confirmedSet = useMemo(
     () => (hasGroup ? new Set(cluster.confirmedGroup!.images) : new Set<string>()),
     [hasGroup, cluster.confirmedGroup?.images],
   );
 
-  const suggestedImages = useMemo(
+  const rawSuggestedImages = useMemo(
     () => cluster.images.filter((f) => !confirmedSet.has(f)),
     [cluster.images, confirmedSet],
   );
+
+  const suggestedImages = useMemo(() => {
+    if (!groupId) return rawSuggestedImages;
+    return rawSuggestedImages.filter((f) => !cannotLinkIndex.get(f)?.has(groupId));
+  }, [rawSuggestedImages, groupId, cannotLinkIndex]);
 
   const imageIndex = useMemo(() => new Map(cluster.images.map((f, i) => [f, i])), [cluster.images]);
 
@@ -97,6 +111,12 @@ export function ClusterCard({
   const splitDisabled = cluster.images.length < 3;
 
   function renderThumbs(files: string[], confirmed: boolean) {
+    const rejectFn =
+      !confirmed && groupId
+        ? (filename: string) => {
+            void addCannotLink(filename, groupId);
+          }
+        : undefined;
     return files.map((f) => (
       <ThumbCard
         key={f}
@@ -108,6 +128,7 @@ export function ClusterCard({
         onSelect={onImageSelect}
         onRangeSelect={onImageRangeSelect}
         onOpenLightbox={onOpenLightbox}
+        onReject={rejectFn}
       />
     ));
   }
@@ -172,7 +193,7 @@ export function ClusterCard({
               Create Group
             </button>
           )}
-          {hasGroup && suggestedImages.length > 0 && (
+          {hasGroup && !isLocked && suggestedImages.length > 0 && (
             <button className="btn btn-small btn-add" onClick={onAddToGroup}>
               Add {suggestedImages.length} to Group
             </button>
@@ -198,13 +219,15 @@ export function ClusterCard({
           >
             {splitExpanded ? "collapse" : "split"}
           </button>
-          <button
-            className="btn btn-small btn-tree-nav"
-            onClick={onOpenExpand}
-            title="Pull in nearby images from outside this cluster"
-          >
-            expand…
-          </button>
+          {!isLocked && (
+            <button
+              className="btn btn-small btn-tree-nav"
+              onClick={onOpenExpand}
+              title="Pull in nearby images from outside this cluster"
+            >
+              expand…
+            </button>
+          )}
           <button
             className="btn btn-small"
             onClick={() => useNNQueryStore.getState().openForCluster(cluster)}
@@ -213,6 +236,21 @@ export function ClusterCard({
             Find Similar
           </button>
           <AskClaudeButton images={cluster.images} name={cluster.autoName || cluster.id} />
+          {hasGroup && groupId && (
+            <button
+              className={cn("btn btn-small btn-lock", isLocked && "btn-lock-active")}
+              onClick={() => {
+                void toggleGroupLock(groupId);
+              }}
+              title={
+                isLocked
+                  ? "Unlock — allow new suggestions on next re-cluster"
+                  : "Lock — never suggest new additions for this group"
+              }
+            >
+              {isLocked ? "🔒" : "🔓"}
+            </button>
+          )}
           <button className="btn btn-small btn-dismiss" onClick={onDismiss}>
             ×
           </button>
@@ -232,7 +270,7 @@ export function ClusterCard({
             </div>
           )}
 
-          {(suggestedImages.length > 0 || !hasGroup) && (
+          {!isLocked && (suggestedImages.length > 0 || !hasGroup) && (
             <div className="cluster-section cluster-section-suggested">
               {hasGroup && (
                 <div className="cluster-section-label">
@@ -259,6 +297,7 @@ function ThumbCard({
   onSelect,
   onRangeSelect,
   onOpenLightbox,
+  onReject,
 }: {
   filename: string;
   index: number;
@@ -268,6 +307,7 @@ function ThumbCard({
   onSelect: (f: string) => void;
   onRangeSelect: (i: number) => void;
   onOpenLightbox: (i: number) => void;
+  onReject?: (filename: string) => void;
 }) {
   const thumbClass = cn(
     "cluster-thumb",
@@ -298,6 +338,7 @@ function ThumbCard({
         draggable={false}
       />
       <span className="cluster-thumb-name">{filename}</span>
+      {onReject && <RejectButton filename={filename} onReject={onReject} />}
     </div>
   );
 }

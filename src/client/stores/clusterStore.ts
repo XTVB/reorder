@@ -11,9 +11,25 @@ import type {
 import { getErrorMessage, postJson } from "../utils/helpers.ts";
 import { consolidateBlock } from "../utils/reorder.ts";
 import { consumeSSE } from "../utils/sse.ts";
+import { useConstraintsStore } from "./constraintsStore.ts";
 import { flushGroupPersist, useGroupStore } from "./groupStore.ts";
 import { useImageStore } from "./imageStore.ts";
 import { useUIStore } from "./uiStore.ts";
+
+/**
+ * When images are added to a confirmed group, any cannot-link constraint
+ * between those images and that group becomes stale (the user just told us
+ * the image *does* belong). Fire-and-forget cleanup; failures are non-fatal
+ * because the Rust pre-merge will absorb the image into the group anyway.
+ */
+function dropCannotLinkAgainstGroup(filenames: string[], groupId: string) {
+  const store = useConstraintsStore.getState();
+  for (const f of filenames) {
+    if (store.isCannotLinked(f, groupId)) {
+      store.removeImageGroupCannotLink(f, groupId).catch(() => {});
+    }
+  }
+}
 
 /** Compare-mode (merge…) state — open candidate stack against a source cluster. */
 export interface CompareState {
@@ -309,6 +325,7 @@ export const useClusterStore = create<ClusterState>((set, get) => {
       return next;
     });
 
+    dropCannotLinkAgainstGroup(merged, winnerGroupId);
     applyClusterRemoval(new Set(participants.map((c) => c.id)));
     set({ compare: null, treeStale: true });
     useUIStore
@@ -656,6 +673,7 @@ export const useClusterStore = create<ClusterState>((set, get) => {
       updateGroups((prev) =>
         prev.map((g) => (g.id === groupId ? { ...g, images: [...g.images, ...toAdd] } : g)),
       );
+      dropCannotLinkAgainstGroup(toAdd, groupId);
       showToast(`Added ${toAdd.length} images to "${cluster.confirmedGroup.name}"`, "success");
 
       const newConfirmedImages = [...cluster.confirmedGroup.images, ...toAdd];

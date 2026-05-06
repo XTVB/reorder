@@ -85,7 +85,7 @@ export function ScopePickerModal({ onClose }: Props) {
       onClose={() => !submitting && onClose()}
       footer={
         <>
-          <span className="nn-footer-status">
+          <span className="modal-footer-status">
             Re-cluster over the images in the chosen groups only
           </span>
           <button type="button" className="btn" onClick={() => !submitting && onClose()}>

@@ -4,17 +4,20 @@ import type React from "react";
 import { memo } from "react";
 import type { ImageInfo } from "../../types.ts";
 import { cn, imageUrl, wasJustDragged } from "../../utils/helpers.ts";
+import { TrashIcon } from "./TrashIcon.tsx";
 
 export const ExpandedGroupItem = memo(function ExpandedGroupItem({
   image,
   isSelected,
   isGhost,
+  isMarkedForTrash,
   onRemove,
   onCardClick,
 }: {
   image: ImageInfo;
   isSelected: boolean;
   isGhost: boolean;
+  isMarkedForTrash?: boolean;
   onRemove: () => void;
   onCardClick: (filename: string, e: React.MouseEvent) => void;
 }) {
@@ -39,6 +42,7 @@ export const ExpandedGroupItem = memo(function ExpandedGroupItem({
         isDragging && "card-overlay",
         isSelected && "card-selected",
         isGhost && "card-ghost",
+        isMarkedForTrash && "card-marked-trash",
       )}
       onClick={handleClick}
       {...attributes}
@@ -51,6 +55,15 @@ export const ExpandedGroupItem = memo(function ExpandedGroupItem({
         loading="lazy"
         draggable={false}
       />
+      {isMarkedForTrash && (
+        <span
+          className="card-trash-badge"
+          aria-label="Marked for deletion"
+          title="Marked for deletion"
+        >
+          <TrashIcon size={14} />
+        </span>
+      )}
       <div className="card-info">
         <span className="card-name" title={image.filename}>
           {image.filename}

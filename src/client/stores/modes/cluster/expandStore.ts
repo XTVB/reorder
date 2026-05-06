@@ -29,6 +29,7 @@ interface ExpandSlice {
   openExpand: (sourceClusterId: string) => Promise<void>;
   closeExpand: () => void;
   toggleExpandFile: (filename: string) => void;
+  rangeSelectExpandFile: (filename: string, allFilenames: string[]) => void;
   setExpandThreshold: (multiplier: number) => void;
   setExpandIncludeConfirmedGroups: (v: boolean) => void;
   confirmExpand: () => void;
@@ -87,6 +88,10 @@ export const useExpandStore = create<ExpandSlice>((set, get) => ({
 
   toggleExpandFile: (filename) => {
     useSelectionStore.getState().toggle("expand", filename);
+  },
+
+  rangeSelectExpandFile: (filename, allFilenames) => {
+    useSelectionStore.getState().rangeSelect("expand", allFilenames, filename);
   },
 
   setExpandThreshold: (multiplier) => {

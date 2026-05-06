@@ -1,13 +1,14 @@
-import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDismissOnOutside } from "../../hooks/useDismissOnOutside.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useListStore } from "../../stores/modes/cluster/index.ts";
 import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
 import type { ImageInfo, NNAggregation, NNFilter } from "../../types.ts";
-import { cn, imageUrl } from "../../utils/helpers.ts";
+import { cn } from "../../utils/helpers.ts";
 import { Lightbox } from "../shared/Lightbox.tsx";
 import { Modal } from "../shared/Modal.tsx";
+import { SelectableImageCard } from "../shared/SelectableImageCard.tsx";
 
 const FILTER_OPTIONS: { key: NNFilter; label: string }[] = [
   { key: "any", label: "Any" },
@@ -80,7 +81,7 @@ export function NNResultsModal() {
   const title = (
     <>
       <span className="modal-title-main">Nearest neighbors</span>
-      <span className="nn-query-label">— {queryLabel}</span>
+      <span className="modal-title-context">— {queryLabel}</span>
       {inScope && (
         <span className="nn-scope-pill" title="Restricted to current scope">
           In scope
@@ -103,9 +104,9 @@ export function NNResultsModal() {
     <>
       <Modal
         title={title}
-        className="nn-results-modal"
-        headerClassName="nn-results-header"
-        bodyClassName="nn-results-body"
+        className="image-picker-modal"
+        headerClassName="image-picker-header"
+        bodyClassName="image-picker-body"
         onClose={close}
         footer={
           <NNFooter
@@ -119,7 +120,7 @@ export function NNResultsModal() {
           />
         }
       >
-        <div className="nn-toolbar">
+        <div className="image-picker-toolbar">
           <SegmentedControl
             label="Filter"
             options={FILTER_OPTIONS}
@@ -153,20 +154,26 @@ export function NNResultsModal() {
         </div>
 
         {!loading && !error && !hasResults && (
-          <div className="nn-empty">No matches for the current filter.</div>
+          <div className="image-picker-empty">No matches for the current filter.</div>
         )}
         {hasResults && (
-          <div className="nn-results-grid">
+          <div className="image-card-grid">
             {results.map((r, i) => (
-              <NNCard
+              <SelectableImageCard
                 key={r.filename}
                 filename={r.filename}
-                distance={r.distance}
-                inGroupName={r.inGroupName}
                 selected={modalSelection.has(r.filename)}
                 onToggleSelect={() => toggleResultSelected(r.filename)}
                 onRangeSelect={() => rangeSelectResults(r.filename)}
-                onOpenLightbox={() => setLightboxIndex(i)}
+                onOpen={() => setLightboxIndex(i)}
+                bottomLeft={<span className="image-card-pill">{r.distance.toFixed(3)}</span>}
+                bottomRight={
+                  r.inGroupName ? (
+                    <span className="image-card-pill image-card-pill-group" title={r.inGroupName}>
+                      {r.inGroupName}
+                    </span>
+                  ) : null
+                }
               />
             ))}
           </div>
@@ -212,70 +219,6 @@ function SegmentedControl<T extends string>({
   );
 }
 
-function NNCard({
-  filename,
-  distance,
-  inGroupName,
-  selected,
-  onToggleSelect,
-  onRangeSelect,
-  onOpenLightbox,
-}: {
-  filename: string;
-  distance: number;
-  inGroupName: string | null;
-  selected: boolean;
-  onToggleSelect: () => void;
-  onRangeSelect: () => void;
-  onOpenLightbox: () => void;
-}) {
-  function handleClick(e: MouseEvent) {
-    e.stopPropagation();
-    if (e.shiftKey) onRangeSelect();
-    else if (e.metaKey || e.ctrlKey) onToggleSelect();
-    else onOpenLightbox();
-  }
-  return (
-    <div className={cn("nn-card", selected && "nn-card-selected")}>
-      <button
-        type="button"
-        className="nn-card-image"
-        onClick={handleClick}
-        title={`Open ${filename} (⌘ click to select, ⇧ click for range)`}
-        aria-label={`Open ${filename}`}
-      >
-        <img src={imageUrl(filename)} alt="" loading="lazy" decoding="async" draggable={false} />
-      </button>
-      <button
-        type="button"
-        className="nn-card-select"
-        onClick={(e) => {
-          e.stopPropagation();
-          if (e.shiftKey) onRangeSelect();
-          else onToggleSelect();
-        }}
-        aria-label={selected ? "Deselect" : "Select"}
-        title={selected ? "Deselect" : "Select"}
-      >
-        <span className="nn-card-check" aria-hidden>
-          {selected ? "✓" : ""}
-        </span>
-      </button>
-      <span className="nn-card-dist">{distance.toFixed(3)}</span>
-      <div className="nn-card-meta">
-        <span className="nn-card-name" title={filename}>
-          {filename}
-        </span>
-        {inGroupName && (
-          <span className="nn-card-group" title={`In group: ${inGroupName}`}>
-            {inGroupName}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function NNFooter({
   selectionCount,
   onClose,
@@ -316,7 +259,7 @@ function NNFooter({
 
   return (
     <>
-      <span className="nn-footer-status">
+      <span className="modal-footer-status">
         {hasSelection
           ? `${selectionCount} selected`
           : "⌘ click to select • ⇧ click for range • click to zoom"}

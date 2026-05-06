@@ -497,6 +497,7 @@ export function ReorderView() {
                                       group={group}
                                       imageMap={imageMap}
                                       selectedIds={selectedIds}
+                                      markedTrashIds={markedTrashIds}
                                       isMultiDragging={isMultiDragging}
                                       activeId={activeId}
                                       onRename={renameGroupAction}

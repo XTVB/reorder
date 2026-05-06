@@ -45,6 +45,7 @@ interface PopoverShellProps {
   images: string[];
   imageMap: Map<string, ImageInfo>;
   selectedIds: Set<string>;
+  markedTrashIds?: Set<string>;
   isMultiDragging: boolean;
   activeId: string | null;
   actions: React.ReactNode;
@@ -59,6 +60,7 @@ export function PopoverShell({
   images,
   imageMap,
   selectedIds,
+  markedTrashIds,
   isMultiDragging,
   activeId,
   actions,
@@ -81,6 +83,7 @@ export function PopoverShell({
             image={img}
             isSelected={selectedIds.has(fn)}
             isGhost={isMultiDragging && selectedIds.has(fn) && fn !== activeId}
+            isMarkedForTrash={markedTrashIds?.has(fn)}
             onRemove={() => onRemove(fn)}
             onCardClick={onCardClick}
           />
@@ -94,6 +97,7 @@ interface GroupPopoverProps {
   group: ImageGroup;
   imageMap: Map<string, ImageInfo>;
   selectedIds: Set<string>;
+  markedTrashIds?: Set<string>;
   isMultiDragging: boolean;
   activeId: string | null;
   onRename: (groupId: string) => void;
@@ -107,6 +111,7 @@ export function GroupPopover({
   group,
   imageMap,
   selectedIds,
+  markedTrashIds,
   isMultiDragging,
   activeId,
   onRename,
@@ -123,6 +128,7 @@ export function GroupPopover({
       images={group.images}
       imageMap={imageMap}
       selectedIds={selectedIds}
+      markedTrashIds={markedTrashIds}
       isMultiDragging={isMultiDragging}
       activeId={activeId}
       actions={

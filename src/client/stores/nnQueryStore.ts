@@ -11,7 +11,9 @@ import { getErrorMessage } from "../utils/helpers.ts";
 import { useSelectionStore } from "./core/selectionStore.ts";
 import { useToastStore } from "./core/toastStore.ts";
 import { useGroupStore } from "./groupStore.ts";
+import { dropCannotLinkAgainstGroup } from "./modes/cluster/interactionsStore.ts";
 import { useListStore } from "./modes/cluster/listStore.ts";
+import { findClusterEverywhere } from "./modes/cluster/tree-helpers.ts";
 
 type QuerySource =
   | { kind: "cluster"; clusterId: string; images: string[] }
@@ -21,6 +23,7 @@ interface NNQueryState {
   open: boolean;
   queryLabel: string;
   querySource: QuerySource | null;
+  sourceClusterLabel: string | null;
 
   filter: NNFilter;
   topN: number;
@@ -44,10 +47,12 @@ interface NNQueryState {
   fetch: () => Promise<void>;
 
   toggleResultSelected: (filename: string) => void;
+  rangeSelectResults: (filename: string) => void;
   clearModalSelection: () => void;
 
   createClusterFromSelected: () => void;
   addSelectedToGroup: (groupId: string) => Promise<void>;
+  addSelectedToSourceCluster: () => Promise<void>;
 }
 
 let _debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -64,6 +69,7 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
   open: false,
   queryLabel: "",
   querySource: null,
+  sourceClusterLabel: null,
   filter: "any",
   topN: 50,
   aggregation: "centroid",
@@ -83,6 +89,7 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
       open: true,
       queryLabel: label,
       querySource: { kind: "cluster", clusterId: cluster.id, images: cluster.images },
+      sourceClusterLabel: cluster.confirmedGroup?.name ?? cluster.autoName ?? "this cluster",
       results: [],
       error: null,
     });
@@ -96,6 +103,7 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
       open: true,
       queryLabel: `${deduped.length} selected image${deduped.length === 1 ? "" : "s"}`,
       querySource: { kind: "selection", images: deduped },
+      sourceClusterLabel: null,
       results: [],
       error: null,
     });
@@ -112,6 +120,7 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
       open: false,
       querySource: null,
       queryLabel: "",
+      sourceClusterLabel: null,
       results: [],
       error: null,
       loading: false,
@@ -197,6 +206,11 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
     useSelectionStore.getState().toggle("nn", filename);
   },
 
+  rangeSelectResults: (filename) => {
+    const filenames = get().results.map((r) => r.filename);
+    useSelectionStore.getState().rangeSelect("nn", filenames, filename);
+  },
+
   clearModalSelection: () => {
     useSelectionStore.getState().clear("nn");
   },
@@ -244,6 +258,82 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
 
     // Flush so subsequent badge lookups see the new membership.
     await useGroupStore.getState().flushPending();
+    useSelectionStore.getState().clear("nn");
+    await get().fetch();
+  },
+
+  addSelectedToSourceCluster: async () => {
+    const { querySource } = get();
+    if (!querySource || querySource.kind !== "cluster") return;
+
+    const modalSelection = useSelectionStore.getState().contexts.nn;
+    if (modalSelection.size === 0) return;
+
+    const { showToast } = useToastStore.getState();
+    const list = useListStore.getState();
+    if (!list.clusterData) return;
+
+    const cluster = findClusterEverywhere(
+      list.clusterData.clusters,
+      list.splitChildren,
+      querySource.clusterId,
+    );
+    if (!cluster) {
+      showToast("Source cluster no longer exists", "error");
+      return;
+    }
+
+    const existingImages = new Set(cluster.images);
+    const selectedNew = [...modalSelection].filter((f) => !existingImages.has(f));
+
+    let next: ClusterResultData;
+    let toastMsg: string;
+    let postCommit: (() => Promise<void>) | null = null;
+
+    if (cluster.confirmedGroup) {
+      const { groups, updateGroups, groupsLoaded, flushPending } = useGroupStore.getState();
+      if (!groupsLoaded) {
+        showToast("Groups still loading — please wait", "warning");
+        return;
+      }
+      const group = groups.find((g) => g.id === cluster.confirmedGroup!.id);
+      if (!group) {
+        showToast("Confirmed group not found", "error");
+        return;
+      }
+      const inGroup = new Set(group.images);
+      const toAddToGroup = [...modalSelection].filter((f) => !inGroup.has(f));
+      if (toAddToGroup.length === 0) {
+        showToast("All selected images are already in this group", "warning");
+        return;
+      }
+
+      updateGroups((prev) =>
+        prev.map((g) => (g.id === group.id ? { ...g, images: [...g.images, ...toAddToGroup] } : g)),
+      );
+      dropCannotLinkAgainstGroup(toAddToGroup, group.id);
+
+      next = {
+        ...cluster,
+        images: [...cluster.images, ...selectedNew],
+        confirmedGroup: { ...cluster.confirmedGroup, images: [...group.images, ...toAddToGroup] },
+      };
+      toastMsg = `Added ${toAddToGroup.length} to "${group.name}"`;
+      postCommit = flushPending;
+    } else {
+      if (selectedNew.length === 0) {
+        showToast("All selected images are already in this cluster", "warning");
+        return;
+      }
+      next = { ...cluster, images: [...cluster.images, ...selectedNew] };
+      toastMsg = `Added ${selectedNew.length} to cluster "${cluster.autoName || cluster.id}"`;
+    }
+
+    useListStore.getState().applyClusterReplace(cluster.id, next);
+    useListStore.setState({ treeStale: true });
+    showToast(toastMsg, "success");
+    if (postCommit) await postCommit();
+
     useSelectionStore.getState().clear("nn");
     await get().fetch();
   },

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useDismissOnOutside } from "../../hooks/useDismissOnOutside.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
@@ -41,9 +41,12 @@ export function NNResultsModal() {
   const setTopN = useNNQueryStore((s) => s.setTopN);
   const setAggregation = useNNQueryStore((s) => s.setAggregation);
   const toggleResultSelected = useNNQueryStore((s) => s.toggleResultSelected);
+  const rangeSelectResults = useNNQueryStore((s) => s.rangeSelectResults);
   const clearModalSelection = useNNQueryStore((s) => s.clearModalSelection);
   const createClusterFromSelected = useNNQueryStore((s) => s.createClusterFromSelected);
   const addSelectedToGroup = useNNQueryStore((s) => s.addSelectedToGroup);
+  const addSelectedToSourceCluster = useNNQueryStore((s) => s.addSelectedToSourceCluster);
+  const sourceClusterLabel = useNNQueryStore((s) => s.sourceClusterLabel);
 
   const inScope = useListStore((s) => !!s.clusterData?.scope);
 
@@ -111,6 +114,8 @@ export function NNResultsModal() {
             onClearSelection={clearModalSelection}
             onCreateCluster={createClusterFromSelected}
             onAddToGroup={addSelectedToGroup}
+            sourceClusterLabel={sourceClusterLabel}
+            onAddToSourceCluster={addSelectedToSourceCluster}
           />
         }
       >
@@ -160,6 +165,7 @@ export function NNResultsModal() {
                 inGroupName={r.inGroupName}
                 selected={modalSelection.has(r.filename)}
                 onToggleSelect={() => toggleResultSelected(r.filename)}
+                onRangeSelect={() => rangeSelectResults(r.filename)}
                 onOpenLightbox={() => setLightboxIndex(i)}
               />
             ))}
@@ -212,6 +218,7 @@ function NNCard({
   inGroupName,
   selected,
   onToggleSelect,
+  onRangeSelect,
   onOpenLightbox,
 }: {
   filename: string;
@@ -219,15 +226,22 @@ function NNCard({
   inGroupName: string | null;
   selected: boolean;
   onToggleSelect: () => void;
+  onRangeSelect: () => void;
   onOpenLightbox: () => void;
 }) {
+  function handleClick(e: MouseEvent) {
+    e.stopPropagation();
+    if (e.shiftKey) onRangeSelect();
+    else if (e.metaKey || e.ctrlKey) onToggleSelect();
+    else onOpenLightbox();
+  }
   return (
     <div className={cn("nn-card", selected && "nn-card-selected")}>
       <button
         type="button"
         className="nn-card-image"
-        onClick={onOpenLightbox}
-        title={`Open ${filename}`}
+        onClick={handleClick}
+        title={`Open ${filename} (⌘ click to select, ⇧ click for range)`}
         aria-label={`Open ${filename}`}
       >
         <img src={imageUrl(filename)} alt="" loading="lazy" decoding="async" draggable={false} />
@@ -237,7 +251,8 @@ function NNCard({
         className="nn-card-select"
         onClick={(e) => {
           e.stopPropagation();
-          onToggleSelect();
+          if (e.shiftKey) onRangeSelect();
+          else onToggleSelect();
         }}
         aria-label={selected ? "Deselect" : "Select"}
         title={selected ? "Deselect" : "Select"}
@@ -267,12 +282,16 @@ function NNFooter({
   onClearSelection,
   onCreateCluster,
   onAddToGroup,
+  sourceClusterLabel,
+  onAddToSourceCluster,
 }: {
   selectionCount: number;
   onClose: () => void;
   onClearSelection: () => void;
   onCreateCluster: () => void;
   onAddToGroup: (groupId: string) => Promise<void>;
+  sourceClusterLabel: string | null;
+  onAddToSourceCluster: () => Promise<void>;
 }) {
   const groups = useGroupStore((s) => s.groups);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
@@ -298,11 +317,26 @@ function NNFooter({
   return (
     <>
       <span className="nn-footer-status">
-        {hasSelection ? `${selectionCount} selected` : "Click ✓ to select, click image to zoom"}
+        {hasSelection
+          ? `${selectionCount} selected`
+          : "⌘ click to select • ⇧ click for range • click to zoom"}
       </span>
       {hasSelection && (
         <button type="button" className="btn btn-small" onClick={onClearSelection}>
           Clear
+        </button>
+      )}
+      {sourceClusterLabel && (
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => {
+            onAddToSourceCluster();
+          }}
+          disabled={!hasSelection}
+          title={`Add the selected images directly to ${sourceClusterLabel}`}
+        >
+          Add to "{sourceClusterLabel}"
         </button>
       )}
       <div className="nn-group-picker-wrap" ref={pickerRef}>

@@ -248,10 +248,12 @@ fn premerge_groups(
 ) -> Vec<MergeStep> {
     let n_groups = groups.len();
 
-    // Pre-compute sorted members for each group.
+    // Pre-compute sorted members for each group. Singletons are kept: their
+    // pre-merge loop body is a no-op (members[..0] is empty), but they still
+    // contribute a rep to group_reps so GROUP_BARRIER seals them off from
+    // other confirmed groups.
     let group_sorted: Vec<Vec<usize>> = groups
         .iter()
-        .filter(|g| g.member_indices.len() >= 2)
         .map(|g| {
             let mut m = g.member_indices.clone();
             m.sort();
@@ -317,11 +319,8 @@ fn premerge_groups(
 
     // ── Apply user cannot-link / group-lock constraints ───────────────────
     if !cannot_link.is_empty() || !locked_groups.is_empty() {
-        // group_id → rep_idx map: group_sorted parallels groups.iter().filter(...);
-        // zip the filtered iterator with group_reps to recover the IDs.
         let group_id_to_rep: HashMap<&str, usize> = groups
             .iter()
-            .filter(|g| g.member_indices.len() >= 2)
             .zip(group_reps.iter())
             .map(|(g, &rep)| (g.id.as_str(), rep))
             .collect();

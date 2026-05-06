@@ -25,7 +25,7 @@ import {
  * When images are added to a confirmed group, any cannot-link constraint
  * between those images and that group becomes stale. Fire-and-forget.
  */
-function dropCannotLinkAgainstGroup(filenames: string[], groupId: string) {
+export function dropCannotLinkAgainstGroup(filenames: string[], groupId: string) {
   const store = useConstraintsStore.getState();
   for (const f of filenames) {
     if (store.isCannotLinked(f, groupId)) {

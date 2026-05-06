@@ -18,8 +18,9 @@ pub struct ReorderGroup {
 }
 
 /// A confirmed group resolved against a known image set: each filename has
-/// been mapped to its index, and groups with fewer than 2 surviving members
-/// are dropped (since both binaries treat 1-image "groups" as not useful).
+/// been mapped to its index. Groups with no surviving members are dropped;
+/// singletons are kept so they're treated as confirmed clusters of size 1
+/// (sealed against merging with other confirmed groups).
 #[derive(Debug)]
 pub struct LoadedGroup {
     pub id: String,
@@ -29,8 +30,7 @@ pub struct LoadedGroup {
 }
 
 /// Load `groups.json` and resolve each group's filenames against the caller's
-/// filename → index mapping. Groups whose surviving membership is < 2 are
-/// filtered out.
+/// filename → index mapping. Groups with no surviving members are dropped.
 ///
 /// `fname_to_idx` is a closure rather than a borrow of a specific HashMap so
 /// callers can use either `HashMap<&str, usize>` or `HashMap<String, usize>`
@@ -63,7 +63,7 @@ where
                     fnames.push(f.clone());
                 }
             }
-            if indices.len() < 2 {
+            if indices.is_empty() {
                 return None;
             }
             Some(LoadedGroup {

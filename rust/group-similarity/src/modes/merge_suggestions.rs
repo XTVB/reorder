@@ -42,7 +42,7 @@ pub(crate) fn run(
         patches.fname_to_idx.get(f).copied()
     });
     let n_groups = groups.len();
-    eprintln!("Loaded {} groups (2+ images)", n_groups);
+    eprintln!("Loaded {} confirmed groups", n_groups);
 
     if n_groups < 2 {
         let empty: Vec<GroupPairResult> = vec![];

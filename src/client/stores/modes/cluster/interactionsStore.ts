@@ -1,5 +1,5 @@
 // Cluster interaction actions: image / merge selection, accept, addToGroup,
-// legacy mergeSelectedClusters / splitSelected. Selection state lives in
+// mergeSelectedClusters / splitSelected. Selection state lives in
 // core/selectionStore — this store only provides the per-cluster semantics
 // (composite "clusterId:filename" keys, lastClickedImage anchor, etc.).
 
@@ -12,7 +12,14 @@ import { useToastStore } from "../../core/toastStore.ts";
 import { useGroupStore } from "../../groupStore.ts";
 import { useImageStore } from "../../imageStore.ts";
 import { useListStore } from "./listStore.ts";
-import { findClusterEverywhere, parseImageKey, unionImages } from "./tree-helpers.ts";
+import {
+  findClusterEverywhere,
+  getSectionList,
+  getSuggestedAdditions,
+  type ImageSection,
+  parseImageKey,
+  unionImages,
+} from "./tree-helpers.ts";
 
 /**
  * When images are added to a confirmed group, any cannot-link constraint
@@ -70,16 +77,16 @@ export function commitMergeIntoGroup(participants: ClusterResultData[], winnerGr
 
 interface InteractionsState {
   /**
-   * Anchor for shift+click range select. Tracks {clusterId, index} because the
-   * core selectionStore's per-context anchor stores the composite key, not the
-   * (clusterId, index) pair we need for in-cluster range selection.
+   * Anchor for shift+click range select. Scoped to a section so a range
+   * doesn't sweep through confirmed images sandwiched between two suggested
+   * clicks. Filename (not index) survives cluster mutations between clicks.
    */
-  lastClickedImage: { clusterId: string; index: number } | null;
+  lastClickedImage: { clusterId: string; section: ImageSection; filename: string } | null;
 
   toggleMergeSelect: (clusterId: string) => void;
   clearMergeSelection: () => void;
-  toggleImageSelect: (clusterId: string, filename: string) => void;
-  rangeSelectImages: (clusterId: string, index: number) => void;
+  toggleImageSelect: (clusterId: string, filename: string, section: ImageSection) => void;
+  rangeSelectImages: (clusterId: string, filename: string, section: ImageSection) => void;
   clearImageSelection: () => void;
 
   acceptCluster: (cluster: ClusterResultData) => void;
@@ -101,32 +108,34 @@ export const useInteractionsStore = create<InteractionsState>((set, get) => ({
     useSelectionStore.getState().clear("cluster:merge");
   },
 
-  toggleImageSelect: (clusterId, filename) => {
-    const sel = useSelectionStore.getState();
-    sel.toggle("cluster:images", `${clusterId}:${filename}`);
-    const list = useListStore.getState();
-    const cluster = findClusterEverywhere(
-      list.clusterData?.clusters ?? [],
-      list.splitChildren,
-      clusterId,
-    );
-    const index = cluster?.images.indexOf(filename) ?? -1;
-    set({ lastClickedImage: { clusterId, index } });
+  toggleImageSelect: (clusterId, filename, section) => {
+    useSelectionStore.getState().toggle("cluster:images", `${clusterId}:${filename}`);
+    set({ lastClickedImage: { clusterId, section, filename } });
   },
 
-  rangeSelectImages: (clusterId, toIndex) => {
+  rangeSelectImages: (clusterId, toFilename, section) => {
     const { lastClickedImage } = get();
     const list = useListStore.getState();
-    if (!lastClickedImage || lastClickedImage.clusterId !== clusterId || !list.clusterData) return;
+    if (
+      !lastClickedImage ||
+      lastClickedImage.clusterId !== clusterId ||
+      lastClickedImage.section !== section ||
+      !list.clusterData
+    )
+      return;
     const cluster = findClusterEverywhere(list.clusterData.clusters, list.splitChildren, clusterId);
     if (!cluster) return;
 
-    const from = Math.min(lastClickedImage.index, toIndex);
-    const to = Math.max(lastClickedImage.index, toIndex);
+    const sectionList = getSectionList(cluster, section, useConstraintsStore.getState().index);
+    const fromIndex = sectionList.indexOf(lastClickedImage.filename);
+    const toIndex = sectionList.indexOf(toFilename);
+    if (fromIndex < 0 || toIndex < 0) return;
+
+    const lo = Math.min(fromIndex, toIndex);
+    const hi = Math.max(fromIndex, toIndex);
     const ids: string[] = [];
-    for (let i = from; i <= to; i++) {
-      const f = cluster.images[i];
-      if (f) ids.push(`${clusterId}:${f}`);
+    for (let i = lo; i <= hi; i++) {
+      ids.push(`${clusterId}:${sectionList[i]!}`);
     }
     useSelectionStore.getState().add("cluster:images", ids);
   },
@@ -210,7 +219,7 @@ export const useInteractionsStore = create<InteractionsState>((set, get) => ({
     }
     const groupId = cluster.confirmedGroup.id;
     const confirmedSet = new Set(cluster.confirmedGroup.images);
-    const suggested = cluster.images.filter((f) => !confirmedSet.has(f));
+    const suggested = getSuggestedAdditions(cluster, useConstraintsStore.getState().index);
 
     const selectedImages = useSelectionStore.getState().contexts["cluster:images"];
     const selectedInCluster: string[] = [];

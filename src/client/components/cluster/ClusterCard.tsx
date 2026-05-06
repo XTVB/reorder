@@ -2,6 +2,10 @@ import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useConstraintsStore } from "../../stores/constraintsStore.ts";
 import { useListStore } from "../../stores/modes/cluster/index.ts";
+import {
+  getSuggestedAdditions,
+  type ImageSection,
+} from "../../stores/modes/cluster/tree-helpers.ts";
 import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
 import type { ClusterMetrics, ClusterResultData } from "../../types.ts";
 import { cn, imageUrl } from "../../utils/helpers.ts";
@@ -22,8 +26,8 @@ interface Props {
   depth?: number;
   onToggleCollapse: () => void;
   onMergeSelect: (e: React.MouseEvent) => void;
-  onImageSelect: (filename: string) => void;
-  onImageRangeSelect: (index: number) => void;
+  onImageSelect: (filename: string, section: ImageSection) => void;
+  onImageRangeSelect: (filename: string, section: ImageSection) => void;
   onAccept: () => void;
   onAddToGroup: () => void;
   onDismiss: () => void;
@@ -77,20 +81,10 @@ export function ClusterCard({
   const toggleGroupLock = useConstraintsStore((s) => s.toggleGroupLock);
   const isLocked = !!groupId && lockedGroupIds.has(groupId);
 
-  const confirmedSet = useMemo(
-    () => (hasGroup ? new Set(cluster.confirmedGroup!.images) : new Set<string>()),
-    [hasGroup, cluster.confirmedGroup?.images],
+  const suggestedImages = useMemo(
+    () => getSuggestedAdditions(cluster, cannotLinkIndex),
+    [cluster, cannotLinkIndex],
   );
-
-  const rawSuggestedImages = useMemo(
-    () => cluster.images.filter((f) => !confirmedSet.has(f)),
-    [cluster.images, confirmedSet],
-  );
-
-  const suggestedImages = useMemo(() => {
-    if (!groupId) return rawSuggestedImages;
-    return rawSuggestedImages.filter((f) => !cannotLinkIndex.get(f)?.has(groupId));
-  }, [rawSuggestedImages, groupId, cannotLinkIndex]);
 
   const imageIndex = useMemo(() => new Map(cluster.images.map((f, i) => [f, i])), [cluster.images]);
 
@@ -304,8 +298,8 @@ function ThumbCard({
   isConfirmed: boolean;
   isSelected: boolean;
   isSearchMatch: boolean;
-  onSelect: (f: string) => void;
-  onRangeSelect: (i: number) => void;
+  onSelect: (f: string, section: ImageSection) => void;
+  onRangeSelect: (f: string, section: ImageSection) => void;
   onOpenLightbox: (i: number) => void;
   onReject?: (filename: string) => void;
 }) {
@@ -315,6 +309,7 @@ function ThumbCard({
     isSelected && "selected",
     isSearchMatch && "search-match",
   );
+  const section: ImageSection = isConfirmed ? "confirmed" : "suggested";
 
   return (
     <div
@@ -322,9 +317,9 @@ function ThumbCard({
       onClick={(e) => {
         e.stopPropagation();
         if (e.shiftKey) {
-          onRangeSelect(index);
+          onRangeSelect(filename, section);
         } else if (e.metaKey || e.ctrlKey) {
-          onSelect(filename);
+          onSelect(filename, section);
         } else {
           onOpenLightbox(index);
         }

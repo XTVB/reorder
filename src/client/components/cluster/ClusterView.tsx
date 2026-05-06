@@ -423,8 +423,12 @@ export function ClusterView() {
                     onMergeSelect={(e) => {
                       if (e.metaKey || e.ctrlKey) toggleMergeSelect(cluster.id);
                     }}
-                    onImageSelect={(filename) => toggleImageSelect(cluster.id, filename)}
-                    onImageRangeSelect={(index) => rangeSelectImages(cluster.id, index)}
+                    onImageSelect={(filename, section) =>
+                      toggleImageSelect(cluster.id, filename, section)
+                    }
+                    onImageRangeSelect={(filename, section) =>
+                      rangeSelectImages(cluster.id, filename, section)
+                    }
                     onAccept={() => acceptCluster(cluster)}
                     onAddToGroup={() => addToGroup(cluster)}
                     onDismiss={() => dismissCluster(cluster.id)}

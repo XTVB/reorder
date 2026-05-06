@@ -3,6 +3,9 @@
 
 import type { ClusterResultData, SplitChildren } from "../../../types.ts";
 
+/** Which section of a cluster card the user is interacting with. */
+export type ImageSection = "confirmed" | "suggested";
+
 /** Recursively collect every visible cluster (top-level + every split child). */
 export function collectAllClusters(
   topLevel: ClusterResultData[],
@@ -88,6 +91,32 @@ export function unionImages(participants: ClusterResultData[]): string[] {
 export function parseImageKey(key: string): { clusterId: string; filename: string } {
   const sep = key.indexOf(":");
   return { clusterId: key.slice(0, sep), filename: key.slice(sep + 1) };
+}
+
+/**
+ * Single source of truth for the suggested section: keep aligned with what
+ * the cluster card renders, since this also defines what "Add N to Group" adds.
+ */
+export function getSuggestedAdditions(
+  cluster: ClusterResultData,
+  cannotLinkIndex: Map<string, Set<string>>,
+): string[] {
+  const groupId = cluster.confirmedGroup?.id;
+  if (!groupId) return cluster.images;
+  const confirmedSet = new Set(cluster.confirmedGroup!.images);
+  return cluster.images.filter(
+    (f) => !confirmedSet.has(f) && !cannotLinkIndex.get(f)?.has(groupId),
+  );
+}
+
+/** The image list belonging to one section of a cluster card. */
+export function getSectionList(
+  cluster: ClusterResultData,
+  section: ImageSection,
+  cannotLinkIndex: Map<string, Set<string>>,
+): string[] {
+  if (section === "confirmed") return cluster.confirmedGroup?.images ?? [];
+  return getSuggestedAdditions(cluster, cannotLinkIndex);
 }
 
 /** Extract deduped filenames from a cluster:image composite-key Set. */

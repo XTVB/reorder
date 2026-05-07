@@ -15,6 +15,7 @@ interface ImageState {
 
   setImages: (images: ImageInfo[]) => void;
   fetchImages: () => Promise<void>;
+  applyDeletions: (deleted: string[]) => void;
 }
 
 export const useImageStore = create<ImageState>((set, get) => ({
@@ -55,5 +56,28 @@ export const useImageStore = create<ImageState>((set, get) => ({
       set({ loading: false });
       throw new Error("Failed to load images");
     }
+  },
+
+  // Prune deleted filenames in-place, preserving any pending reorder.
+  // Used after /api/delete so the user's unsaved reorder isn't reset by a full refetch.
+  applyDeletions: (deleted) => {
+    if (deleted.length === 0) return;
+    const { images, originalOrder, imageMap } = get();
+    const deletedSet = new Set(deleted);
+    const nextImages = images.filter((i) => !deletedSet.has(i.filename));
+    if (nextImages.length === images.length) return;
+    const nextOriginalOrder = originalOrder.filter((fn) => !deletedSet.has(fn));
+    const nextMap = new Map(imageMap);
+    for (const fn of deleted) nextMap.delete(fn);
+    const hasChanges =
+      nextImages.length > 0 &&
+      (nextImages.length !== nextOriginalOrder.length ||
+        nextImages.some((img, i) => img.filename !== nextOriginalOrder[i]));
+    set({
+      images: nextImages,
+      originalOrder: nextOriginalOrder,
+      imageMap: nextMap,
+      hasChanges,
+    });
   },
 }));

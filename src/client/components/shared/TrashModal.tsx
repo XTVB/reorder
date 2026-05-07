@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useToastStore } from "../../stores/core/toastStore.ts";
+import { useGroupStore } from "../../stores/groupStore.ts";
 import { useImageStore } from "../../stores/imageStore.ts";
 import { useTrashStore } from "../../stores/trashStore.ts";
 import type { ImageInfo } from "../../types.ts";
@@ -19,7 +20,8 @@ export function TrashModal({ onClose }: TrashModalProps) {
   const confirmDelete = useTrashStore((s) => s.confirmDelete);
 
   const imageMap = useImageStore((s) => s.imageMap);
-  const fetchImages = useImageStore((s) => s.fetchImages);
+  const applyDeletions = useImageStore((s) => s.applyDeletions);
+  const updateGroups = useGroupStore((s) => s.updateGroups);
 
   const showToast = useToastStore((s) => s.showToast);
 
@@ -49,7 +51,11 @@ export function TrashModal({ onClose }: TrashModalProps) {
         ? `${baseMsg} (${warnings.length} warning${warnings.length === 1 ? "" : "s"})`
         : baseMsg;
       showToast(text, hasWarnings ? "warning" : "success");
-      await fetchImages();
+      applyDeletions(res.deleted);
+      const deletedSet = new Set(res.deleted);
+      updateGroups((prev) =>
+        prev.map((g) => ({ ...g, images: g.images.filter((fn) => !deletedSet.has(fn)) })),
+      );
       onClose();
     } catch (err) {
       showToast(getErrorMessage(err, "Delete failed"), "error");

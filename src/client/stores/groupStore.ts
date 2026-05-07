@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { getJson, postJson } from "../api/client.ts";
 import type { ImageGroup, RenameMapping, SaveResponse } from "../types.ts";
+import { addFilenamesToGroup, appendNewGroup, dedupeGroupMemberships } from "../utils/groups.ts";
 import { getErrorMessage } from "../utils/helpers.ts";
 import { consolidateBlock, repositionBlock } from "../utils/reorder.ts";
 import { useModalStore } from "./core/modalStore.ts";
@@ -70,14 +71,18 @@ export const useGroupStore = create<GroupState>((set, get) => ({
     }
     let next = fn(groups);
     if (next === groups) return;
-    next = next.filter((g) => g.images.length > 0);
+    if (next.some((g) => g.images.length === 0)) {
+      next = next.filter((g) => g.images.length > 0);
+    }
     persistGroupsToServer(next);
     set({ groups: next, groupMap: deriveGroupMap(next) });
   },
 
   fetchGroups: async () => {
     try {
-      const groups = await getJson<ImageGroup[]>("/api/groups");
+      const raw = await getJson<ImageGroup[]>("/api/groups");
+      // Heal legacy overlapping memberships on read; see dedupeGroupMemberships.
+      const groups = dedupeGroupMemberships(raw).filter((g) => g.images.length > 0);
       set({ groups, groupMap: deriveGroupMap(groups), groupsLoaded: true });
     } catch {
       set({ groupsLoaded: true });
@@ -116,7 +121,9 @@ export const useGroupStore = create<GroupState>((set, get) => ({
       .map((i) => i.filename);
 
     setImages(consolidateBlock(images, selectedIds));
-    get().updateGroups((prev) => [...prev, { id, name: name.trim(), images: selectedInOrder }]);
+    get().updateGroups((prev) =>
+      appendNewGroup(prev, { id, name: name.trim(), images: selectedInOrder }),
+    );
     sel.clear("reorder");
   },
 
@@ -126,12 +133,7 @@ export const useGroupStore = create<GroupState>((set, get) => ({
     const sel = useSelectionStore.getState();
 
     const fileSet = new Set(filenames);
-    const newGroups = groups.map((g) => {
-      const cleaned = g.images.filter((fn) => !fileSet.has(fn));
-      if (g.id === groupId) return { ...g, images: [...cleaned, ...filenames] };
-      return { ...g, images: cleaned };
-    });
-
+    const newGroups = addFilenamesToGroup(groups, groupId, filenames);
     updateGroups(() => newGroups);
     const targetGroup = newGroups.find((g) => g.id === groupId);
     if (!targetGroup) return;
@@ -143,9 +145,7 @@ export const useGroupStore = create<GroupState>((set, get) => ({
     for (let i = 0; i < rest.length; i++) {
       if (allGroupImages.has(rest[i]!.filename)) lastIdx = i;
     }
-    if (lastIdx === -1) {
-      // No anchor in the rest — leave gallery order alone.
-    } else {
+    if (lastIdx !== -1) {
       const out = [...rest];
       out.splice(lastIdx + 1, 0, ...toMove);
       setImages(out);

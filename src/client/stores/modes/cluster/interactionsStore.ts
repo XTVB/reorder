@@ -5,6 +5,7 @@
 
 import { create } from "zustand";
 import type { ClusterResultData } from "../../../types.ts";
+import { addFilenamesToGroup, appendNewGroup, appendNewGroups } from "../../../utils/groups.ts";
 import { consolidateBlock } from "../../../utils/reorder.ts";
 import { useConstraintsStore } from "../../constraintsStore.ts";
 import { useSelectionStore } from "../../core/selectionStore.ts";
@@ -47,14 +48,11 @@ export function commitMergeIntoGroup(participants: ClusterResultData[], winnerGr
 
   const { updateGroups } = useGroupStore.getState();
   updateGroups((prev) => {
-    const next = prev
-      .filter((g) => !losingGroupIds.has(g.id))
-      .map((g) => {
-        if (g.id !== winnerGroupId) return g;
-        const seen = new Set(g.images);
-        const additions = merged.filter((f) => !seen.has(f));
-        return { ...g, images: [...g.images, ...additions] };
-      });
+    const next = addFilenamesToGroup(
+      prev.filter((g) => !losingGroupIds.has(g.id)),
+      winnerGroupId,
+      merged,
+    );
     if (!winnerName) {
       const w = next.find((g) => g.id === winnerGroupId);
       if (w) winnerName = w.name;
@@ -156,7 +154,9 @@ export const useInteractionsStore = create<InteractionsState>((set, get) => ({
       return;
     }
 
-    updateGroups((prev) => [...prev, { id: crypto.randomUUID(), name, images: cluster.images }]);
+    updateGroups((prev) =>
+      appendNewGroup(prev, { id: crypto.randomUUID(), name, images: cluster.images }),
+    );
     setImages(consolidateBlock(images, new Set(cluster.images)));
     showToast(`Created group "${name}" with ${cluster.images.length} images`, "success");
     useListStore.getState().dismissCluster(cluster.id);
@@ -197,7 +197,7 @@ export const useInteractionsStore = create<InteractionsState>((set, get) => ({
 
     const { updateGroups } = useGroupStore.getState();
     const { images, setImages } = useImageStore.getState();
-    updateGroups((prev) => [...prev, ...newGroups]);
+    updateGroups((prev) => appendNewGroups(prev, newGroups));
     const allAccepted = new Set(eligible.flatMap((c) => c.images));
     setImages(consolidateBlock(images, allAccepted));
     showToast(`Created ${newGroups.length} groups`, "success");
@@ -233,9 +233,7 @@ export const useInteractionsStore = create<InteractionsState>((set, get) => ({
 
     const { updateGroups } = useGroupStore.getState();
     const { showToast } = useToastStore.getState();
-    updateGroups((prev) =>
-      prev.map((g) => (g.id === groupId ? { ...g, images: [...g.images, ...toAdd] } : g)),
-    );
+    updateGroups((prev) => addFilenamesToGroup(prev, groupId, toAdd));
     dropCannotLinkAgainstGroup(toAdd, groupId);
     showToast(`Added ${toAdd.length} images to "${cluster.confirmedGroup.name}"`, "success");
 

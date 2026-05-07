@@ -7,6 +7,7 @@ import type {
   NNQueryResponse,
   NNResult,
 } from "../types.ts";
+import { addFilenamesToGroup } from "../utils/groups.ts";
 import { getErrorMessage } from "../utils/helpers.ts";
 import { useSelectionStore } from "./core/selectionStore.ts";
 import { useToastStore } from "./core/toastStore.ts";
@@ -251,9 +252,7 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
       return;
     }
 
-    updateGroups((prev) =>
-      prev.map((g) => (g.id === groupId ? { ...g, images: [...g.images, ...toAdd] } : g)),
-    );
+    updateGroups((prev) => addFilenamesToGroup(prev, groupId, toAdd));
     showToast(`Added ${toAdd.length} to "${group.name}"`, "success");
 
     // Flush so subsequent badge lookups see the new membership.
@@ -308,9 +307,7 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
         return;
       }
 
-      updateGroups((prev) =>
-        prev.map((g) => (g.id === group.id ? { ...g, images: [...g.images, ...toAddToGroup] } : g)),
-      );
+      updateGroups((prev) => addFilenamesToGroup(prev, group.id, toAddToGroup));
       dropCannotLinkAgainstGroup(toAddToGroup, group.id);
 
       next = {

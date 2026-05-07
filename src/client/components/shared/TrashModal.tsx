@@ -5,6 +5,7 @@ import { useGroupStore } from "../../stores/groupStore.ts";
 import { useImageStore } from "../../stores/imageStore.ts";
 import { useTrashStore } from "../../stores/trashStore.ts";
 import type { ImageInfo } from "../../types.ts";
+import { removeFilenamesFromGroups } from "../../utils/groups.ts";
 import { getErrorMessage, imageUrl } from "../../utils/helpers.ts";
 import { Lightbox } from "./Lightbox.tsx";
 import { Modal } from "./Modal.tsx";
@@ -53,9 +54,7 @@ export function TrashModal({ onClose }: TrashModalProps) {
       showToast(text, hasWarnings ? "warning" : "success");
       applyDeletions(res.deleted);
       const deletedSet = new Set(res.deleted);
-      updateGroups((prev) =>
-        prev.map((g) => ({ ...g, images: g.images.filter((fn) => !deletedSet.has(fn)) })),
-      );
+      updateGroups((prev) => removeFilenamesFromGroups(prev, deletedSet));
       onClose();
     } catch (err) {
       showToast(getErrorMessage(err, "Delete failed"), "error");

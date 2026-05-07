@@ -1,6 +1,7 @@
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useConstraintsStore } from "../../stores/constraintsStore.ts";
+import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useListStore } from "../../stores/modes/cluster/index.ts";
 import {
   getSuggestedAdditions,
@@ -31,7 +32,6 @@ interface Props {
   onAccept: () => void;
   onAddToGroup: () => void;
   onDismiss: () => void;
-  onOpenLightbox: (index: number) => void;
   onOpenCompare: () => void;
   onToggleSplit: () => void;
   onOpenExpand: () => void;
@@ -67,7 +67,6 @@ export function ClusterCard({
   onAccept,
   onAddToGroup,
   onDismiss,
-  onOpenLightbox,
   onOpenCompare,
   onToggleSplit,
   onOpenExpand,
@@ -85,8 +84,6 @@ export function ClusterCard({
     () => getSuggestedAdditions(cluster, cannotLinkIndex),
     [cluster, cannotLinkIndex],
   );
-
-  const imageIndex = useMemo(() => new Map(cluster.images.map((f, i) => [f, i])), [cluster.images]);
 
   const isFullyGrouped = hasGroup && suggestedImages.length === 0;
 
@@ -111,17 +108,16 @@ export function ClusterCard({
             void addCannotLink(filename, groupId);
           }
         : undefined;
-    return files.map((f) => (
+    return files.map((f, i) => (
       <ThumbCard
         key={f}
         filename={f}
-        index={imageIndex.get(f)!}
         isConfirmed={confirmed}
         isSelected={selectedImages.has(`${cluster.id}:${f}`)}
         isSearchMatch={searchMatchFilenames?.has(f) ?? false}
         onSelect={onImageSelect}
         onRangeSelect={onImageRangeSelect}
-        onOpenLightbox={onOpenLightbox}
+        onOpen={() => useLightboxStore.getState().openLightbox(files, i, "cluster")}
         onReject={rejectFn}
       />
     ));
@@ -284,23 +280,21 @@ export function ClusterCard({
 
 function ThumbCard({
   filename,
-  index,
   isConfirmed,
   isSelected,
   isSearchMatch,
   onSelect,
   onRangeSelect,
-  onOpenLightbox,
+  onOpen,
   onReject,
 }: {
   filename: string;
-  index: number;
   isConfirmed: boolean;
   isSelected: boolean;
   isSearchMatch: boolean;
   onSelect: (f: string, section: ImageSection) => void;
   onRangeSelect: (f: string, section: ImageSection) => void;
-  onOpenLightbox: (i: number) => void;
+  onOpen: () => void;
   onReject?: (filename: string) => void;
 }) {
   const thumbClass = cn(
@@ -321,7 +315,7 @@ function ThumbCard({
         } else if (e.metaKey || e.ctrlKey) {
           onSelect(filename, section);
         } else {
-          onOpenLightbox(index);
+          onOpen();
         }
       }}
     >

@@ -1,8 +1,10 @@
-// Single source of truth for the lightbox modal. Consolidates four prior
-// states: `uiStore.lightboxIndex` (Reorder), `clusterStore.lightbox` (Cluster),
-// and the local useState lightboxes in MergeSuggestions.tsx and
-// ClusterCompare.tsx.
+// Single source of truth for the lightbox modal across all modes and modals.
+// One global `open`/`source` pair lets each consumer gate `source === "x"` and
+// render its own <Lightbox /> from the snapshotted `filenames`. Modal-scoped
+// consumers should call `useCloseLightboxOnUnmount(source)` so state doesn't
+// leak between sessions.
 
+import { useEffect } from "react";
 import { create } from "zustand";
 
 export type LightboxSource =
@@ -12,6 +14,7 @@ export type LightboxSource =
   | "merge"
   | "review"
   | "trash"
+  | "expand"
   | "nn";
 
 interface LightboxState {
@@ -19,50 +22,30 @@ interface LightboxState {
   filenames: string[];
   index: number;
   source: LightboxSource | null;
-  /** Optional metadata for cluster mode: which cluster the images came from. */
-  clusterId: string | null;
 
-  openLightbox: (
-    filenames: string[],
-    startIndex: number,
-    source: LightboxSource,
-    clusterId?: string,
-  ) => void;
+  openLightbox: (filenames: string[], startIndex: number, source: LightboxSource) => void;
   close: () => void;
-  setIndex: (index: number) => void;
-  next: () => void;
-  prev: () => void;
 }
 
-export const useLightboxStore = create<LightboxState>((set, get) => ({
+export const useLightboxStore = create<LightboxState>((set) => ({
   open: false,
   filenames: [],
   index: 0,
   source: null,
-  clusterId: null,
 
-  openLightbox: (filenames, startIndex, source, clusterId) => {
+  openLightbox: (filenames, startIndex, source) => {
     if (filenames.length === 0) return;
     const index = Math.min(Math.max(0, startIndex), filenames.length - 1);
-    set({ open: true, filenames, index, source, clusterId: clusterId ?? null });
+    set({ open: true, filenames, index, source });
   },
-  close: () => set({ open: false, filenames: [], index: 0, source: null, clusterId: null }),
-  setIndex: (index) => {
-    const { filenames } = get();
-    if (filenames.length === 0) return;
-    const clamped = Math.min(Math.max(0, index), filenames.length - 1);
-    if (clamped !== get().index) set({ index: clamped });
-  },
-  next: () => {
-    const { filenames, index } = get();
-    if (filenames.length === 0) return;
-    const nextIdx = (index + 1) % filenames.length;
-    set({ index: nextIdx });
-  },
-  prev: () => {
-    const { filenames, index } = get();
-    if (filenames.length === 0) return;
-    const prevIdx = (index - 1 + filenames.length) % filenames.length;
-    set({ index: prevIdx });
-  },
+  close: () => set({ open: false, filenames: [], index: 0, source: null }),
 }));
+
+export function useCloseLightboxOnUnmount(source: LightboxSource) {
+  useEffect(() => {
+    return () => {
+      const s = useLightboxStore.getState();
+      if (s.source === source) s.close();
+    };
+  }, [source]);
+}

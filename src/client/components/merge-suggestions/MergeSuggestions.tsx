@@ -263,7 +263,7 @@ export function MergeSuggestions() {
 
       {lightboxOpen && (
         <Lightbox
-          images={lightboxFilenames.map((f) => ({ filename: f }))}
+          filenames={lightboxFilenames}
           initialIndex={lightboxIndex}
           onClose={handleCloseLightbox}
         />

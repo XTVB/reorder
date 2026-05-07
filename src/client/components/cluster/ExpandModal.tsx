@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useConstraintsStore } from "../../stores/constraintsStore.ts";
+import { useCloseLightboxOnUnmount, useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import {
@@ -7,7 +8,7 @@ import {
   useExpandStore,
   useListStore,
 } from "../../stores/modes/cluster/index.ts";
-import type { ClusterResultData, ImageInfo } from "../../types.ts";
+import type { ClusterResultData } from "../../types.ts";
 import { Lightbox } from "../shared/Lightbox.tsx";
 import { Modal } from "../shared/Modal.tsx";
 import { SelectableImageCard } from "../shared/SelectableImageCard.tsx";
@@ -44,7 +45,10 @@ export function ExpandModal() {
   const setIncludeConfirmedGroups = useExpandStore((s) => s.setExpandIncludeConfirmedGroups);
   const confirmExpand = useExpandStore((s) => s.confirmExpand);
 
-  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const lightboxOpen = useLightboxStore((s) => s.open && s.source === "expand");
+  const lightboxFilenames = useLightboxStore((s) => s.filenames);
+  const lightboxIndex = useLightboxStore((s) => s.index);
+  useCloseLightboxOnUnmount("expand");
 
   const cannotLinkIndex = useConstraintsStore((s) => s.index);
   const lockedGroupIds = useConstraintsStore((s) => s.lockedGroupIds);
@@ -101,13 +105,9 @@ export function ExpandModal() {
   }, [expand, source, fileCluster, cannotLinkIndex]);
 
   const allFilenames = useMemo(() => allFiltered.map((c) => c.filename), [allFiltered]);
-  const lightboxImages = useMemo<ImageInfo[]>(
-    () => allFilenames.map((filename) => ({ filename })),
-    [allFilenames],
-  );
 
   useEffect(() => {
-    if (!expand || lightboxIndex != null) return;
+    if (!expand || lightboxOpen) return;
     function handleKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         if (e.key === "Escape") closeExpand();
@@ -123,7 +123,7 @@ export function ExpandModal() {
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [expand, closeExpand, confirmExpand, lightboxIndex]);
+  }, [expand, closeExpand, confirmExpand, lightboxOpen]);
 
   if (!expand || !clusterData || !source) return null;
 
@@ -250,7 +250,7 @@ export function ExpandModal() {
                   selected={checked.has(c.filename)}
                   onToggleSelect={() => toggleExpandFile(c.filename)}
                   onRangeSelect={() => rangeSelectExpandFile(c.filename, allFilenames)}
-                  onOpen={() => setLightboxIndex(i)}
+                  onOpen={() => useLightboxStore.getState().openLightbox(allFilenames, i, "expand")}
                   topRight={
                     onReject ? <RejectButton filename={c.filename} onReject={onReject} /> : null
                   }
@@ -273,11 +273,11 @@ export function ExpandModal() {
           </div>
         )}
       </Modal>
-      {lightboxIndex != null && lightboxIndex < lightboxImages.length && (
+      {lightboxOpen && (
         <Lightbox
-          images={lightboxImages}
+          filenames={lightboxFilenames}
           initialIndex={lightboxIndex}
-          onClose={() => setLightboxIndex(null)}
+          onClose={() => useLightboxStore.getState().close()}
         />
       )}
     </>

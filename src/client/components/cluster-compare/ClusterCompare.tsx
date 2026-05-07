@@ -460,9 +460,7 @@ export function ClusterCompare() {
                     cluster={cluster}
                     rank={vi.index + 1}
                     onOpenLightbox={(idx) =>
-                      useLightboxStore
-                        .getState()
-                        .openLightbox(cluster.images, idx, "compare", cluster.id)
+                      useLightboxStore.getState().openLightbox(cluster.images, idx, "compare")
                     }
                   />
                 </div>
@@ -474,7 +472,7 @@ export function ClusterCompare() {
 
       {lightboxOpen && (
         <Lightbox
-          images={lightboxFilenames.map((f) => ({ filename: f }))}
+          filenames={lightboxFilenames}
           initialIndex={lightboxIndex}
           onClose={() => useLightboxStore.getState().close()}
         />

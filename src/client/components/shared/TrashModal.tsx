@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useCloseLightboxOnUnmount, useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useToastStore } from "../../stores/core/toastStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
@@ -27,7 +28,11 @@ export function TrashModal({ onClose }: TrashModalProps) {
   const showToast = useToastStore((s) => s.showToast);
 
   const [deleting, setDeleting] = useState(false);
-  const [lightbox, setLightbox] = useState<{ images: ImageInfo[]; index: number } | null>(null);
+
+  const lightboxOpen = useLightboxStore((s) => s.open && s.source === "trash");
+  const lightboxFilenames = useLightboxStore((s) => s.filenames);
+  const lightboxIndex = useLightboxStore((s) => s.index);
+  useCloseLightboxOnUnmount("trash");
 
   const items = useMemo<ImageInfo[]>(() => {
     const result: ImageInfo[] = [];
@@ -38,6 +43,7 @@ export function TrashModal({ onClose }: TrashModalProps) {
     return result;
   }, [markedIds, imageMap]);
 
+  const itemFilenames = useMemo(() => items.map((it) => it.filename), [items]);
   const count = items.length;
 
   async function handleConfirm() {
@@ -119,7 +125,9 @@ export function TrashModal({ onClose }: TrashModalProps) {
                 <button
                   type="button"
                   className="trash-thumb"
-                  onClick={() => setLightbox({ images: items, index: i })}
+                  onClick={() =>
+                    useLightboxStore.getState().openLightbox(itemFilenames, i, "trash")
+                  }
                   aria-label={`Open ${img.filename}`}
                 >
                   <img src={imageUrl(img.filename)} alt="" loading="lazy" draggable={false} />
@@ -143,11 +151,11 @@ export function TrashModal({ onClose }: TrashModalProps) {
           </div>
         )}
       </Modal>
-      {lightbox && (
+      {lightboxOpen && (
         <Lightbox
-          images={lightbox.images}
-          initialIndex={lightbox.index}
-          onClose={() => setLightbox(null)}
+          filenames={lightboxFilenames}
+          initialIndex={lightboxIndex}
+          onClose={() => useLightboxStore.getState().close()}
         />
       )}
     </>

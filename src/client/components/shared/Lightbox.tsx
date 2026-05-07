@@ -2,17 +2,16 @@ import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useTrashStore } from "../../stores/trashStore.ts";
-import type { ImageInfo } from "../../types.ts";
 import { cn, fullImageUrl } from "../../utils/helpers.ts";
 import { TrashIcon } from "./TrashIcon.tsx";
 
 export function Lightbox({
-  images,
+  filenames,
   initialIndex,
   onClose,
   enableTrashMark = false,
 }: {
-  images: ImageInfo[];
+  filenames: string[];
   initialIndex: number;
   onClose: () => void;
   enableTrashMark?: boolean;
@@ -26,12 +25,12 @@ export function Lightbox({
   const translateStart = useRef({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const image = images[index]!;
+  const filename = filenames[index]!;
   const isZoomed = scale > 1;
 
   const markedIds = useSelectionStore((s) => s.contexts.trash);
   const toggleTrashMark = useTrashStore((s) => s.toggle);
-  const isMarked = enableTrashMark && markedIds.has(image.filename);
+  const isMarked = enableTrashMark && markedIds.has(filename);
   const trashButtonLabel = isMarked ? "Unmark for deletion" : "Mark for deletion";
 
   const handleImageLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -68,7 +67,7 @@ export function Lightbox({
         }
         case "ArrowRight": {
           const next = indexRef.current + 1;
-          if (next < images.length) {
+          if (next < filenames.length) {
             setIndex(next);
             resetView();
           }
@@ -91,7 +90,7 @@ export function Lightbox({
         case "d":
         case "D":
           if (trashEnabledRef.current) {
-            const fn = images[indexRef.current]?.filename;
+            const fn = filenames[indexRef.current];
             if (fn) useTrashStore.getState().toggle(fn);
           }
           break;
@@ -99,11 +98,11 @@ export function Lightbox({
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [images.length]);
+  }, [filenames.length]);
 
   function go(dir: -1 | 1) {
     const next = index + dir;
-    if (next >= 0 && next < images.length) {
+    if (next >= 0 && next < filenames.length) {
       setIndex(next);
       resetView();
     }
@@ -157,7 +156,7 @@ export function Lightbox({
           &#8249;
         </button>
       )}
-      {index < images.length - 1 && (
+      {index < filenames.length - 1 && (
         <button className="lightbox-nav lightbox-next" onClick={() => go(1)} aria-label="Next">
           &#8250;
         </button>
@@ -175,8 +174,8 @@ export function Lightbox({
       >
         <img
           className="lightbox-image"
-          src={fullImageUrl(image.filename)}
-          alt={image.filename}
+          src={fullImageUrl(filename)}
+          alt={filename}
           draggable={false}
           onLoad={handleImageLoad}
           style={{ transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})` }}
@@ -187,7 +186,7 @@ export function Lightbox({
         <button
           type="button"
           className={cn("lightbox-trash", isMarked && "lightbox-trash-active")}
-          onClick={() => toggleTrashMark(image.filename)}
+          onClick={() => toggleTrashMark(filename)}
           aria-label={trashButtonLabel}
           title={`${trashButtonLabel} (D)`}
         >
@@ -197,7 +196,7 @@ export function Lightbox({
 
       <div className="lightbox-bar">
         <span className="lightbox-filename">
-          {image.filename}
+          {filename}
           {dimensions && (
             <span className="lightbox-dimensions">
               {dimensions.w} &times; {dimensions.h}
@@ -206,7 +205,7 @@ export function Lightbox({
           {isMarked && <span className="lightbox-marked">marked for deletion</span>}
         </span>
         <span className="lightbox-counter">
-          {index + 1} / {images.length}
+          {index + 1} / {filenames.length}
         </span>
         {isZoomed && <span className="lightbox-zoom">{Math.round(scale * 100)}%</span>}
       </div>

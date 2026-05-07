@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useCloseLightboxOnUnmount, useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useImageStore } from "../../stores/imageStore.ts";
-import type { ImageGroup, ImageInfo } from "../../types.ts";
+import type { ImageGroup } from "../../types.ts";
 import { cn, imageUrl, reorderImagesByGroups } from "../../utils/helpers.ts";
 import { Lightbox } from "./Lightbox.tsx";
 import { Modal } from "./Modal.tsx";
@@ -55,7 +56,11 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
   const [bucket, setBucket] = useState<ReviewStatus | null>(null);
   const [topIndex, setTopIndex] = useState(0);
   const [subIndex, setSubIndex] = useState(0);
-  const [lightbox, setLightbox] = useState<{ images: ImageInfo[]; index: number } | null>(null);
+
+  const lightboxOpen = useLightboxStore((s) => s.open && s.source === "review");
+  const lightboxFilenames = useLightboxStore((s) => s.filenames);
+  const lightboxIndex = useLightboxStore((s) => s.index);
+  useCloseLightboxOnUnmount("review");
 
   const filtered = useMemo(() => {
     if (!bucket) return snapshot;
@@ -122,7 +127,7 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
   handlersRef.current = { chooseAndAdvance, advance, onClose, exitBucket, bucket };
 
   useEffect(() => {
-    if (lightbox) return;
+    if (lightboxOpen) return;
     function handleKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLElement) {
         const tag = e.target.tagName;
@@ -147,17 +152,13 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [lightbox]);
+  }, [lightboxOpen]);
 
   function openGroupLightbox(groupImages: string[], index: number) {
     const imageMap = useImageStore.getState().imageMap;
-    const items: ImageInfo[] = [];
-    for (const fn of groupImages) {
-      const img = imageMap.get(fn);
-      if (img) items.push(img);
-    }
+    const items = groupImages.filter((fn) => imageMap.has(fn));
     if (items.length === 0) return;
-    setLightbox({ images: items, index: Math.min(index, items.length - 1) });
+    useLightboxStore.getState().openLightbox(items, index, "review");
   }
 
   const topCounts = useMemo(() => {
@@ -372,11 +373,11 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
           </div>
         )}
       </Modal>
-      {lightbox && (
+      {lightboxOpen && (
         <Lightbox
-          images={lightbox.images}
-          initialIndex={lightbox.index}
-          onClose={() => setLightbox(null)}
+          filenames={lightboxFilenames}
+          initialIndex={lightboxIndex}
+          onClose={() => useLightboxStore.getState().close()}
         />
       )}
     </>

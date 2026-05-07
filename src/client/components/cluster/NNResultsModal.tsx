@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDismissOnOutside } from "../../hooks/useDismissOnOutside.ts";
+import { useCloseLightboxOnUnmount, useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useListStore } from "../../stores/modes/cluster/index.ts";
 import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
-import type { ImageInfo, NNAggregation, NNFilter } from "../../types.ts";
+import type { NNAggregation, NNFilter } from "../../types.ts";
 import { cn } from "../../utils/helpers.ts";
 import { Lightbox } from "../shared/Lightbox.tsx";
 import { Modal } from "../shared/Modal.tsx";
@@ -51,15 +52,15 @@ export function NNResultsModal() {
 
   const inScope = useListStore((s) => !!s.clusterData?.scope);
 
-  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const lightboxOpen = useLightboxStore((s) => s.open && s.source === "nn");
+  const lightboxFilenames = useLightboxStore((s) => s.filenames);
+  const lightboxIndex = useLightboxStore((s) => s.index);
+  useCloseLightboxOnUnmount("nn");
 
-  // Index may become invalid when `results` shrinks (e.g. filter toggle).
-  useEffect(() => {
-    setLightboxIndex((i) => (i == null ? i : i < results.length ? i : null));
-  }, [results.length]);
+  const resultFilenames = useMemo(() => results.map((r) => r.filename), [results]);
 
   useEffect(() => {
-    if (!open || lightboxIndex != null) return;
+    if (!open || lightboxOpen) return;
     function handleKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.key === "Escape") {
@@ -69,12 +70,7 @@ export function NNResultsModal() {
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [open, close, lightboxIndex]);
-
-  const lightboxImages: ImageInfo[] = useMemo(
-    () => results.map((r) => ({ filename: r.filename })),
-    [results],
-  );
+  }, [open, close, lightboxOpen]);
 
   if (!open) return null;
 
@@ -165,7 +161,7 @@ export function NNResultsModal() {
                 selected={modalSelection.has(r.filename)}
                 onToggleSelect={() => toggleResultSelected(r.filename)}
                 onRangeSelect={() => rangeSelectResults(r.filename)}
-                onOpen={() => setLightboxIndex(i)}
+                onOpen={() => useLightboxStore.getState().openLightbox(resultFilenames, i, "nn")}
                 bottomLeft={<span className="image-card-pill">{r.distance.toFixed(3)}</span>}
                 bottomRight={
                   r.inGroupName ? (
@@ -179,11 +175,11 @@ export function NNResultsModal() {
           </div>
         )}
       </Modal>
-      {lightboxIndex != null && (
+      {lightboxOpen && (
         <Lightbox
-          images={lightboxImages}
+          filenames={lightboxFilenames}
           initialIndex={lightboxIndex}
-          onClose={() => setLightboxIndex(null)}
+          onClose={() => useLightboxStore.getState().close()}
         />
       )}
     </>

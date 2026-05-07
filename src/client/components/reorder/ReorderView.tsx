@@ -101,6 +101,7 @@ export function ReorderView() {
 
   const lightboxOpen = useLightboxStore((s) => s.open && s.source === "reorder");
   const lightboxIndex = useLightboxStore((s) => s.index);
+  const lightboxFilenames = useLightboxStore((s) => s.filenames);
   const closeLightbox = useLightboxStore((s) => s.close);
   const saving = useSessionStore((s) => s.saving);
   const error = useSessionStore((s) => s.error);
@@ -586,7 +587,7 @@ export function ReorderView() {
 
       {lightboxOpen && (
         <Lightbox
-          images={images}
+          filenames={lightboxFilenames}
           initialIndex={lightboxIndex}
           onClose={closeLightbox}
           enableTrashMark={!folderModeEnabled}

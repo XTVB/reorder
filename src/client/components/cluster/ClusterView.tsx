@@ -104,8 +104,7 @@ export function ClusterView() {
 
   const lightboxOpen = useLightboxStore((s) => s.open && s.source === "cluster");
   const lightboxIndex = useLightboxStore((s) => s.index);
-  const lightboxClusterId = useLightboxStore((s) => s.clusterId);
-  const openLightbox = useLightboxStore((s) => s.openLightbox);
+  const lightboxFilenames = useLightboxStore((s) => s.filenames);
   const closeLightbox = useLightboxStore((s) => s.close);
 
   const groups = useGroupStore((s) => s.groups);
@@ -338,12 +337,10 @@ export function ClusterView() {
   }, []);
 
   function renderLightbox() {
-    if (!lightboxOpen || !lightboxClusterId) return null;
-    const cluster = clusterData?.clusters.find((c) => c.id === lightboxClusterId);
-    if (!cluster) return null;
+    if (!lightboxOpen) return null;
     return (
       <Lightbox
-        images={cluster.images.map((f) => ({ filename: f }))}
+        filenames={lightboxFilenames}
         initialIndex={lightboxIndex}
         onClose={closeLightbox}
       />
@@ -432,9 +429,6 @@ export function ClusterView() {
                     onAccept={() => acceptCluster(cluster)}
                     onAddToGroup={() => addToGroup(cluster)}
                     onDismiss={() => dismissCluster(cluster.id)}
-                    onOpenLightbox={(index) =>
-                      openLightbox(cluster.images, index, "cluster", cluster.id)
-                    }
                     onOpenCompare={() => openCompare(cluster.id)}
                     onToggleSplit={() => toggleSplit(cluster.id)}
                     onOpenExpand={() => openExpand(cluster.id)}

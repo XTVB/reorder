@@ -2,8 +2,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import React from "react";
 import type { ImageInfo } from "../../types.ts";
-import { cn, imageUrl, wasJustDragged } from "../../utils/helpers.ts";
-import { TrashIcon } from "../shared/TrashIcon.tsx";
+import { ImageThumb } from "../shared/ImageThumb.tsx";
 
 export const SortableCard = React.memo(function SortableCard({
   image,
@@ -13,7 +12,9 @@ export const SortableCard = React.memo(function SortableCard({
   isSearchMatch,
   isCurrentSearchMatch,
   isMarkedForTrash,
-  onCardClick,
+  lightboxImages,
+  onSelect,
+  onRangeSelect,
 }: {
   image: ImageInfo;
   gridIndex: number;
@@ -22,7 +23,9 @@ export const SortableCard = React.memo(function SortableCard({
   isSearchMatch?: boolean;
   isCurrentSearchMatch?: boolean;
   isMarkedForTrash?: boolean;
-  onCardClick: (filename: string, e: React.MouseEvent) => void;
+  lightboxImages: string[];
+  onSelect: (filename: string, e: React.MouseEvent) => void;
+  onRangeSelect: (filename: string, e: React.MouseEvent) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: image.filename,
@@ -30,50 +33,27 @@ export const SortableCard = React.memo(function SortableCard({
 
   const style = { transform: CSS.Transform.toString(transform), transition };
 
-  function handleClick(e: React.MouseEvent) {
-    if (wasJustDragged()) return;
-    onCardClick(image.filename, e);
-  }
-
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={cn(
-        "card",
-        isDragging && "card-overlay",
-        isSelected && "card-selected",
-        isGhost && "card-ghost",
-        isSearchMatch && "card-search-match",
-        isCurrentSearchMatch && "card-search-current",
-        isMarkedForTrash && "card-marked-trash",
-      )}
-      onClick={handleClick}
-      {...attributes}
-      {...listeners}
-    >
-      <img
-        className="card-thumb"
-        src={imageUrl(image.filename)}
-        alt={image.filename}
-        loading="lazy"
-        draggable={false}
-      />
-      {isMarkedForTrash && (
-        <span
-          className="card-trash-badge"
-          aria-label="Marked for deletion"
-          title="Marked for deletion"
-        >
-          <TrashIcon size={14} />
-        </span>
-      )}
-      <div className="card-info">
-        <span className="card-badge">{gridIndex + 1}</span>
-        <span className="card-name" title={image.filename}>
-          {image.filename}
-        </span>
-      </div>
-    </div>
+    <ImageThumb
+      filename={image.filename}
+      isSelected={isSelected}
+      isGhost={isGhost}
+      isDragging={isDragging}
+      isSearchMatch={isSearchMatch}
+      isCurrentSearchMatch={isCurrentSearchMatch}
+      isMarkedForTrash={isMarkedForTrash}
+      onSelect={onSelect}
+      onRangeSelect={onRangeSelect}
+      lightboxImages={lightboxImages}
+      footer={
+        <>
+          <span className="image-thumb-badge">{gridIndex + 1}</span>
+          <span className="image-thumb-name" title={image.filename}>
+            {image.filename}
+          </span>
+        </>
+      }
+      dnd={{ setNodeRef, style, attributes, listeners }}
+    />
   );
 });

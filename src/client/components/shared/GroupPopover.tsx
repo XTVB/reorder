@@ -2,6 +2,7 @@ import type React from "react";
 import type { ImageGroup, ImageInfo } from "../../types.ts";
 import { AskClaudeButton } from "./AskClaudeButton.tsx";
 import { ExpandedGroupItem } from "./ExpandedGroupItem.tsx";
+import { TrashIcon } from "./TrashIcon.tsx";
 
 interface FloatingPopoverContentProps {
   displayName: string;
@@ -49,8 +50,10 @@ interface PopoverShellProps {
   isMultiDragging: boolean;
   activeId: string | null;
   actions: React.ReactNode;
+  lightboxImages: string[];
   onRemove: (filename: string) => void;
-  onCardClick: (id: string, e: React.MouseEvent) => void;
+  onSelect: (filename: string, e: React.MouseEvent) => void;
+  onRangeSelect: (filename: string, e: React.MouseEvent) => void;
 }
 
 export function PopoverShell({
@@ -64,8 +67,10 @@ export function PopoverShell({
   isMultiDragging,
   activeId,
   actions,
+  lightboxImages,
   onRemove,
-  onCardClick,
+  onSelect,
+  onRangeSelect,
 }: PopoverShellProps) {
   return (
     <FloatingPopoverContent
@@ -84,8 +89,10 @@ export function PopoverShell({
             isSelected={selectedIds.has(fn)}
             isGhost={isMultiDragging && selectedIds.has(fn) && fn !== activeId}
             isMarkedForTrash={markedTrashIds?.has(fn)}
+            lightboxImages={lightboxImages}
+            onSelect={onSelect}
+            onRangeSelect={onRangeSelect}
             onRemove={() => onRemove(fn)}
-            onCardClick={onCardClick}
           />
         );
       })}
@@ -100,11 +107,14 @@ interface GroupPopoverProps {
   markedTrashIds?: Set<string>;
   isMultiDragging: boolean;
   activeId: string | null;
+  lightboxImages: string[];
   onRename: (groupId: string) => void;
   onDelete: (groupId: string) => void;
   onCollapse: () => void;
   onRemoveFromGroup: (groupId: string, filename: string) => void;
-  onCardClick: (id: string, e: React.MouseEvent) => void;
+  onSelect: (filename: string, e: React.MouseEvent) => void;
+  onRangeSelect: (filename: string, e: React.MouseEvent) => void;
+  onToggleMarkAll: (groupId: string) => void;
 }
 
 export function GroupPopover({
@@ -114,12 +124,17 @@ export function GroupPopover({
   markedTrashIds,
   isMultiDragging,
   activeId,
+  lightboxImages,
   onRename,
   onDelete,
   onCollapse,
   onRemoveFromGroup,
-  onCardClick,
+  onSelect,
+  onRangeSelect,
+  onToggleMarkAll,
 }: GroupPopoverProps) {
+  const allMarked = group.images.length > 0 && group.images.every((fn) => markedTrashIds?.has(fn));
+  const markLabel = allMarked ? "Unmark group" : "Mark group for deletion";
   return (
     <PopoverShell
       id={group.id}
@@ -131,11 +146,20 @@ export function GroupPopover({
       markedTrashIds={markedTrashIds}
       isMultiDragging={isMultiDragging}
       activeId={activeId}
+      lightboxImages={lightboxImages}
       actions={
         <>
           <AskClaudeButton images={group.images} name={group.name} />
           <button className="btn btn-small btn-secondary" onClick={() => onRename(group.id)}>
             Rename
+          </button>
+          <button
+            className="btn btn-small btn-secondary btn-icon"
+            onClick={() => onToggleMarkAll(group.id)}
+            title={markLabel}
+            aria-label={markLabel}
+          >
+            <TrashIcon size={14} variant={allMarked ? "minus" : "plus"} />
           </button>
           <button className="btn btn-small btn-danger" onClick={() => onDelete(group.id)}>
             Dissolve
@@ -146,7 +170,8 @@ export function GroupPopover({
         </>
       }
       onRemove={(fn) => onRemoveFromGroup(group.id, fn)}
-      onCardClick={onCardClick}
+      onSelect={onSelect}
+      onRangeSelect={onRangeSelect}
     />
   );
 }

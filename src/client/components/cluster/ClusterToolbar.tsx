@@ -3,6 +3,7 @@ import { useToastStore } from "../../stores/core/toastStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import type { DistanceProfile, ImportClusterInput, WeightConfig } from "../../types.ts";
 import { getErrorMessage } from "../../utils/helpers.ts";
+import { OverflowMenu, OverflowMenuDivider, OverflowMenuItem } from "../shared/OverflowMenu.tsx";
 import { ScopePickerModal } from "./ScopePickerModal.tsx";
 
 const DEFAULT_N_CLUSTERS = 200;
@@ -350,57 +351,57 @@ export function ClusterToolbar({
         <span className="cluster-count">{totalClusters} clusters</span>
       )}
 
-      <button className="btn btn-small" onClick={onExpandAll} disabled={!totalClusters}>
-        Expand All
-      </button>
-      <button className="btn btn-small" onClick={onCollapseAll} disabled={!totalClusters}>
-        Collapse All
-      </button>
-
-      <button
-        className="btn btn-success"
-        onClick={() => onAcceptAll(minClusterSize)}
-        disabled={!totalClusters}
-      >
-        Accept All
-      </button>
-
+      <OverflowMenu label="More cluster actions" align="right">
+        <OverflowMenuItem onClick={onExpandAll} disabled={!totalClusters}>
+          Expand all
+        </OverflowMenuItem>
+        <OverflowMenuItem onClick={onCollapseAll} disabled={!totalClusters}>
+          Collapse all
+        </OverflowMenuItem>
+        <OverflowMenuDivider />
+        <OverflowMenuItem onClick={() => onAcceptAll(minClusterSize)} disabled={!totalClusters}>
+          Accept all
+        </OverflowMenuItem>
+        {!inScope && (
+          <>
+            <OverflowMenuDivider />
+            <OverflowMenuItem
+              onClick={() => fileInputRef.current?.click()}
+              disabled={loading}
+              title="Import clusters from a JSON file (bypasses CLIP/DINO pipeline)"
+            >
+              Import JSON…
+            </OverflowMenuItem>
+            <OverflowMenuItem
+              danger
+              closeBeforeClick
+              onClick={() => {
+                if (
+                  confirm("Clear imported clusters? The linkage-tree cache (if any) will remain.")
+                ) {
+                  onClearImported();
+                }
+              }}
+              disabled={loading}
+              title="Delete the imported-clusters cache so the view falls back to the linkage tree"
+            >
+              Clear import
+            </OverflowMenuItem>
+          </>
+        )}
+      </OverflowMenu>
       {!inScope && (
-        <>
-          <button
-            className="btn btn-small"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={loading}
-            title="Import clusters from a JSON file (bypasses CLIP/DINO pipeline)"
-          >
-            Import JSON
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="application/json,.json"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleImportFile(file);
-              e.target.value = "";
-            }}
-          />
-          <button
-            className="btn btn-small"
-            onClick={() => {
-              if (
-                confirm("Clear imported clusters? The linkage-tree cache (if any) will remain.")
-              ) {
-                onClearImported();
-              }
-            }}
-            disabled={loading}
-            title="Delete the imported-clusters cache so the view falls back to the linkage tree"
-          >
-            Clear Import
-          </button>
-        </>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) handleImportFile(file);
+            e.target.value = "";
+          }}
+        />
       )}
     </>
   );

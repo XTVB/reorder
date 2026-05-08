@@ -9,11 +9,13 @@ interface FolderPopoverProps {
   selectedIds: Set<string>;
   isMultiDragging: boolean;
   activeId: string | null;
+  lightboxImages: string[];
   onRename: (folderName: string) => void;
   onDissolve: (folderName: string) => void;
   onCollapse: () => void;
   onRemoveFromFolder: (folderName: string, filename: string) => void;
-  onCardClick: (id: string, e: React.MouseEvent) => void;
+  onSelect: (filename: string, e: React.MouseEvent) => void;
+  onRangeSelect: (filename: string, e: React.MouseEvent) => void;
 }
 
 export function FolderPopover({
@@ -22,11 +24,13 @@ export function FolderPopover({
   selectedIds,
   isMultiDragging,
   activeId,
+  lightboxImages,
   onRename,
   onDissolve,
   onCollapse,
   onRemoveFromFolder,
-  onCardClick,
+  onSelect,
+  onRangeSelect,
 }: FolderPopoverProps) {
   return (
     <PopoverShell
@@ -38,6 +42,7 @@ export function FolderPopover({
       selectedIds={selectedIds}
       isMultiDragging={isMultiDragging}
       activeId={activeId}
+      lightboxImages={lightboxImages}
       actions={
         <>
           <button className="btn btn-small btn-secondary" onClick={() => onRename(folder.name)}>
@@ -52,7 +57,8 @@ export function FolderPopover({
         </>
       }
       onRemove={(fn) => onRemoveFromFolder(folder.name, fn)}
-      onCardClick={onCardClick}
+      onSelect={onSelect}
+      onRangeSelect={onRangeSelect}
     />
   );
 }

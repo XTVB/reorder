@@ -52,9 +52,6 @@ export function ReorderToolbar() {
   const flushPending = useGroupStore((s) => s.flushPending);
 
   const markedTrashIds = useSelectionStore((s) => s.contexts.trash);
-  const markTrash = useTrashStore((s) => s.mark);
-  const unmarkTrash = useTrashStore((s) => s.unmark);
-
   const [generatingSheets, setGeneratingSheets] = useState(false);
 
   const selectedImageFilenames = useMemo(
@@ -69,9 +66,7 @@ export function ReorderToolbar() {
     : "Mark selection for deletion";
 
   function handleSelectionMarkTrash() {
-    if (selectedImageFilenames.length === 0) return;
-    if (selectionAllMarked) unmarkTrash(selectedImageFilenames);
-    else markTrash(selectedImageFilenames);
+    useTrashStore.getState().toggleMany(selectedImageFilenames);
   }
 
   // Update header subtitle when counts change

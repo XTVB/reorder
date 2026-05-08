@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { useConstraintsStore } from "../../stores/constraintsStore.ts";
-import { useCloseLightboxOnUnmount, useLightboxStore } from "../../stores/core/lightboxStore.ts";
+import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import {
@@ -9,9 +9,8 @@ import {
   useListStore,
 } from "../../stores/modes/cluster/index.ts";
 import type { ClusterResultData } from "../../types.ts";
-import { Lightbox } from "../shared/Lightbox.tsx";
+import { ImageThumb } from "../shared/ImageThumb.tsx";
 import { Modal } from "../shared/Modal.tsx";
-import { SelectableImageCard } from "../shared/SelectableImageCard.tsx";
 import { RejectButton } from "./RejectButton.tsx";
 
 const SLIDER_MIN = 0.5;
@@ -45,10 +44,7 @@ export function ExpandModal() {
   const setIncludeConfirmedGroups = useExpandStore((s) => s.setExpandIncludeConfirmedGroups);
   const confirmExpand = useExpandStore((s) => s.confirmExpand);
 
-  const lightboxOpen = useLightboxStore((s) => s.open && s.source === "expand");
-  const lightboxFilenames = useLightboxStore((s) => s.filenames);
-  const lightboxIndex = useLightboxStore((s) => s.index);
-  useCloseLightboxOnUnmount("expand");
+  const lightboxOpen = useLightboxStore((s) => s.open);
 
   const cannotLinkIndex = useConstraintsStore((s) => s.index);
   const lockedGroupIds = useConstraintsStore((s) => s.lockedGroupIds);
@@ -191,95 +187,86 @@ export function ExpandModal() {
   const sliced = allFiltered.length > RENDER_CAP ? allFiltered.slice(0, RENDER_CAP) : allFiltered;
 
   return (
-    <>
-      <Modal
-        title={title}
-        onClose={closeExpand}
-        footer={footer}
-        className="image-picker-modal"
-        headerClassName="image-picker-header"
-        bodyClassName="image-picker-body"
-      >
-        <div className="image-picker-toolbar image-picker-toolbar-stack">
-          <div className="expand-slider-row">
-            <label className="expand-slider-label">Density threshold</label>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={sliderValue}
-              onChange={(e) => setThreshold(logToMultiplier(parseFloat(e.target.value)))}
-              className="expand-slider"
-            />
-            <span className="expand-slider-value">
-              {expand.thresholdMultiplier.toFixed(2)}× p90
-            </span>
-          </div>
-          <div className="expand-slider-tickrow">
-            <span>0.5×</span>
-            <span className="expand-slider-tick-strict">stricter than self</span>
-            <span>1×</span>
-            <span className="expand-slider-tick-loose">pulls in outliers →</span>
-            <span>4×</span>
-          </div>
-          <label className="expand-toggle">
-            <input
-              type="checkbox"
-              checked={expand.includeConfirmedGroups}
-              onChange={(e) => setIncludeConfirmedGroups(e.target.checked)}
-            />
-            <span>Include images currently in confirmed groups</span>
-          </label>
+    <Modal
+      title={title}
+      onClose={closeExpand}
+      footer={footer}
+      className="image-picker-modal"
+      headerClassName="image-picker-header"
+      bodyClassName="image-picker-body"
+    >
+      <div className="image-picker-toolbar image-picker-toolbar-stack">
+        <div className="expand-slider-row">
+          <label className="expand-slider-label">Density threshold</label>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={sliderValue}
+            onChange={(e) => setThreshold(logToMultiplier(parseFloat(e.target.value)))}
+            className="expand-slider"
+          />
+          <span className="expand-slider-value">{expand.thresholdMultiplier.toFixed(2)}× p90</span>
         </div>
+        <div className="expand-slider-tickrow">
+          <span>0.5×</span>
+          <span className="expand-slider-tick-strict">stricter than self</span>
+          <span>1×</span>
+          <span className="expand-slider-tick-loose">pulls in outliers →</span>
+          <span>4×</span>
+        </div>
+        <label className="expand-toggle">
+          <input
+            type="checkbox"
+            checked={expand.includeConfirmedGroups}
+            onChange={(e) => setIncludeConfirmedGroups(e.target.checked)}
+          />
+          <span>Include images currently in confirmed groups</span>
+        </label>
+      </div>
 
-        {expand.loading ? (
-          <div className="image-picker-empty">Computing distances…</div>
-        ) : allFiltered.length === 0 ? (
-          <div className="image-picker-empty">
-            No images within threshold. Try a higher slider value.
-          </div>
-        ) : (
-          <div className="image-card-grid">
-            {sliced.map((c, i) => {
-              const cur = fileCluster.get(c.filename);
-              return (
-                <SelectableImageCard
-                  key={c.filename}
-                  filename={c.filename}
-                  selected={checked.has(c.filename)}
-                  onToggleSelect={() => toggleExpandFile(c.filename)}
-                  onRangeSelect={() => rangeSelectExpandFile(c.filename, allFilenames)}
-                  onOpen={() => useLightboxStore.getState().openLightbox(allFilenames, i, "expand")}
-                  topRight={
-                    onReject ? <RejectButton filename={c.filename} onReject={onReject} /> : null
-                  }
-                  bottomLeft={<span className="image-card-pill">{c.distance.toFixed(3)}</span>}
-                  bottomRight={
-                    cur ? (
-                      <span className="image-card-pill image-card-pill-group" title={cur.name}>
-                        {cur.isConfirmedGroup ? `🔒 ${cur.name}` : cur.name}
-                      </span>
-                    ) : null
-                  }
-                />
-              );
-            })}
-            {allFiltered.length > RENDER_CAP && (
-              <div className="image-card-grid-more">
-                +{allFiltered.length - RENDER_CAP} more not shown
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
-      {lightboxOpen && (
-        <Lightbox
-          filenames={lightboxFilenames}
-          initialIndex={lightboxIndex}
-          onClose={() => useLightboxStore.getState().close()}
-        />
+      {expand.loading ? (
+        <div className="image-picker-empty">Computing distances…</div>
+      ) : allFiltered.length === 0 ? (
+        <div className="image-picker-empty">
+          No images within threshold. Try a higher slider value.
+        </div>
+      ) : (
+        <div className="image-thumb-grid">
+          {sliced.map((c, i) => {
+            const cur = fileCluster.get(c.filename);
+            return (
+              <ImageThumb
+                key={c.filename}
+                filename={c.filename}
+                isSelected={checked.has(c.filename)}
+                showSelectButton
+                onSelect={() => toggleExpandFile(c.filename)}
+                onRangeSelect={() => rangeSelectExpandFile(c.filename, allFilenames)}
+                lightboxImages={allFilenames}
+                lightboxIndex={i}
+                topRight={
+                  onReject ? <RejectButton filename={c.filename} onReject={onReject} /> : undefined
+                }
+                bottomLeft={<span className="image-thumb-pill">{c.distance.toFixed(3)}</span>}
+                bottomRight={
+                  cur ? (
+                    <span className="image-thumb-pill image-thumb-pill-group" title={cur.name}>
+                      {cur.isConfirmedGroup ? `🔒 ${cur.name}` : cur.name}
+                    </span>
+                  ) : undefined
+                }
+              />
+            );
+          })}
+          {allFiltered.length > RENDER_CAP && (
+            <div className="image-thumb-grid-more">
+              +{allFiltered.length - RENDER_CAP} more not shown
+            </div>
+          )}
+        </div>
       )}
-    </>
+    </Modal>
   );
 }

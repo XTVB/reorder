@@ -218,11 +218,12 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
 
   createClusterFromSelected: () => {
     const modalSelection = useSelectionStore.getState().contexts.nn;
-    const { queryLabel } = get();
+    const { queryLabel, querySource } = get();
     if (modalSelection.size === 0) return;
     const insertClusterFromFilenames = useListStore.getState().insertClusterFromFilenames;
     const label = `NN: ${queryLabel}`.slice(0, 60);
-    insertClusterFromFilenames(label, [...modalSelection]);
+    const afterId = querySource?.kind === "cluster" ? querySource.clusterId : undefined;
+    insertClusterFromFilenames(label, [...modalSelection], afterId);
     useToastStore
       .getState()
       .showToast(`Created cluster with ${modalSelection.size} images`, "success");

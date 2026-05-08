@@ -11,6 +11,7 @@ import {
   wasJustDragged,
 } from "../../utils/helpers.ts";
 import { GroupThumbGrid } from "../shared/GroupThumbGrid.tsx";
+import { TrashBadge } from "../shared/TrashBadge.tsx";
 
 type GroupVariantProps = {
   variant: "group";
@@ -31,6 +32,7 @@ type CommonProps = {
   isGhost: boolean;
   isSearchMatch?: boolean;
   isCurrentSearchMatch?: boolean;
+  isMarkedForTrash?: boolean;
   onClick: (e: React.MouseEvent) => void;
   popover?: React.ReactNode;
 };
@@ -47,6 +49,7 @@ export const SortableContainerCard = memo(function SortableContainerCard(props: 
     isGhost,
     isSearchMatch,
     isCurrentSearchMatch,
+    isMarkedForTrash,
     onClick,
     popover,
   } = props;
@@ -128,6 +131,7 @@ export const SortableContainerCard = memo(function SortableContainerCard(props: 
         isGhost && "card-ghost",
         isSearchMatch && "card-search-match",
         isCurrentSearchMatch && "card-search-current",
+        isMarkedForTrash && "card-marked-trash",
       )}
       {...dataAttr}
       onClick={handleClick}
@@ -135,6 +139,7 @@ export const SortableContainerCard = memo(function SortableContainerCard(props: 
       {...listeners}
     >
       <GroupThumbGrid images={images} />
+      {isMarkedForTrash && <TrashBadge />}
       <div className="card-info">
         <span className="card-badge">{gridIndex + 1}</span>
         <span className="card-name" title={titleText}>

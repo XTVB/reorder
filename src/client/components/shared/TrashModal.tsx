@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useCloseLightboxOnUnmount, useLightboxStore } from "../../stores/core/lightboxStore.ts";
+import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useToastStore } from "../../stores/core/toastStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
@@ -8,7 +8,6 @@ import { useTrashStore } from "../../stores/trashStore.ts";
 import type { ImageInfo } from "../../types.ts";
 import { removeFilenamesFromGroups } from "../../utils/groups.ts";
 import { getErrorMessage, imageUrl } from "../../utils/helpers.ts";
-import { Lightbox } from "./Lightbox.tsx";
 import { Modal } from "./Modal.tsx";
 
 interface TrashModalProps {
@@ -28,11 +27,6 @@ export function TrashModal({ onClose }: TrashModalProps) {
   const showToast = useToastStore((s) => s.showToast);
 
   const [deleting, setDeleting] = useState(false);
-
-  const lightboxOpen = useLightboxStore((s) => s.open && s.source === "trash");
-  const lightboxFilenames = useLightboxStore((s) => s.filenames);
-  const lightboxIndex = useLightboxStore((s) => s.index);
-  useCloseLightboxOnUnmount("trash");
 
   const items = useMemo<ImageInfo[]>(() => {
     const result: ImageInfo[] = [];
@@ -107,57 +101,46 @@ export function TrashModal({ onClose }: TrashModalProps) {
   );
 
   return (
-    <>
-      <Modal
-        title={title}
-        onClose={onClose}
-        footer={footer}
-        className="trash-modal"
-        headerClassName="trash-modal-header"
-        bodyClassName="trash-modal-body"
-      >
-        {count === 0 ? (
-          <div className="trash-empty">No files marked for deletion.</div>
-        ) : (
-          <div className="trash-grid">
-            {items.map((img, i) => (
-              <div className="trash-item" key={img.filename}>
+    <Modal
+      title={title}
+      onClose={onClose}
+      footer={footer}
+      className="trash-modal"
+      headerClassName="trash-modal-header"
+      bodyClassName="trash-modal-body"
+    >
+      {count === 0 ? (
+        <div className="trash-empty">No files marked for deletion.</div>
+      ) : (
+        <div className="trash-grid">
+          {items.map((img, i) => (
+            <div className="trash-item" key={img.filename}>
+              <button
+                type="button"
+                className="trash-thumb"
+                onClick={() => useLightboxStore.getState().openLightbox(itemFilenames, i)}
+                aria-label={`Open ${img.filename}`}
+              >
+                <img src={imageUrl(img.filename)} alt="" loading="lazy" draggable={false} />
+              </button>
+              <div className="trash-item-row">
+                <span className="trash-item-name" title={img.filename}>
+                  {img.filename}
+                </span>
                 <button
                   type="button"
-                  className="trash-thumb"
-                  onClick={() =>
-                    useLightboxStore.getState().openLightbox(itemFilenames, i, "trash")
-                  }
-                  aria-label={`Open ${img.filename}`}
+                  className="trash-item-unmark"
+                  onClick={() => unmark([img.filename])}
+                  title="Unmark"
+                  aria-label={`Unmark ${img.filename}`}
                 >
-                  <img src={imageUrl(img.filename)} alt="" loading="lazy" draggable={false} />
+                  ×
                 </button>
-                <div className="trash-item-row">
-                  <span className="trash-item-name" title={img.filename}>
-                    {img.filename}
-                  </span>
-                  <button
-                    type="button"
-                    className="trash-item-unmark"
-                    onClick={() => unmark([img.filename])}
-                    title="Unmark"
-                    aria-label={`Unmark ${img.filename}`}
-                  >
-                    ×
-                  </button>
-                </div>
               </div>
-            ))}
-          </div>
-        )}
-      </Modal>
-      {lightboxOpen && (
-        <Lightbox
-          filenames={lightboxFilenames}
-          initialIndex={lightboxIndex}
-          onClose={() => useLightboxStore.getState().close()}
-        />
+            </div>
+          ))}
+        </div>
       )}
-    </>
+    </Modal>
   );
 }

@@ -3,23 +3,26 @@ import { CSS } from "@dnd-kit/utilities";
 import type React from "react";
 import { memo } from "react";
 import type { ImageInfo } from "../../types.ts";
-import { cn, imageUrl, wasJustDragged } from "../../utils/helpers.ts";
-import { TrashIcon } from "./TrashIcon.tsx";
+import { ImageThumb } from "./ImageThumb.tsx";
 
 export const ExpandedGroupItem = memo(function ExpandedGroupItem({
   image,
   isSelected,
   isGhost,
   isMarkedForTrash,
+  lightboxImages,
+  onSelect,
+  onRangeSelect,
   onRemove,
-  onCardClick,
 }: {
   image: ImageInfo;
   isSelected: boolean;
   isGhost: boolean;
   isMarkedForTrash?: boolean;
+  lightboxImages: string[];
+  onSelect: (filename: string, e: React.MouseEvent) => void;
+  onRangeSelect: (filename: string, e: React.MouseEvent) => void;
   onRemove: () => void;
-  onCardClick: (filename: string, e: React.MouseEvent) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: image.filename,
@@ -27,58 +30,34 @@ export const ExpandedGroupItem = memo(function ExpandedGroupItem({
 
   const style = { transform: CSS.Transform.toString(transform), transition };
 
-  function handleClick(e: React.MouseEvent) {
-    if (wasJustDragged()) return;
-    onCardClick(image.filename, e);
-  }
-
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={cn(
-        "card",
-        "group-image-card",
-        isDragging && "card-overlay",
-        isSelected && "card-selected",
-        isGhost && "card-ghost",
-        isMarkedForTrash && "card-marked-trash",
-      )}
-      onClick={handleClick}
-      {...attributes}
-      {...listeners}
-    >
-      <img
-        className="card-thumb"
-        src={imageUrl(image.filename)}
-        alt={image.filename}
-        loading="lazy"
-        draggable={false}
-      />
-      {isMarkedForTrash && (
-        <span
-          className="card-trash-badge"
-          aria-label="Marked for deletion"
-          title="Marked for deletion"
-        >
-          <TrashIcon size={14} />
-        </span>
-      )}
-      <div className="card-info">
-        <span className="card-name" title={image.filename}>
-          {image.filename}
-        </span>
-        <button
-          className="group-remove-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          title="Remove from group"
-        >
-          Remove
-        </button>
-      </div>
-    </div>
+    <ImageThumb
+      filename={image.filename}
+      isSelected={isSelected}
+      isGhost={isGhost}
+      isDragging={isDragging}
+      isMarkedForTrash={isMarkedForTrash}
+      onSelect={onSelect}
+      onRangeSelect={onRangeSelect}
+      lightboxImages={lightboxImages}
+      footer={
+        <>
+          <span className="image-thumb-name" title={image.filename}>
+            {image.filename}
+          </span>
+          <button
+            className="group-remove-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            title="Remove from group"
+          >
+            Remove
+          </button>
+        </>
+      }
+      dnd={{ setNodeRef, style, attributes, listeners }}
+    />
   );
 });

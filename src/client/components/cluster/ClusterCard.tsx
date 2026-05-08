@@ -1,24 +1,27 @@
 import type React from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConstraintsStore } from "../../stores/constraintsStore.ts";
-import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useListStore } from "../../stores/modes/cluster/index.ts";
 import {
   getSuggestedAdditions,
   type ImageSection,
 } from "../../stores/modes/cluster/tree-helpers.ts";
 import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
+import { useTrashStore } from "../../stores/trashStore.ts";
 import type { ClusterMetrics, ClusterResultData } from "../../types.ts";
-import { cn, imageUrl } from "../../utils/helpers.ts";
+import { cn } from "../../utils/helpers.ts";
 import { AskClaudeButton } from "../shared/AskClaudeButton.tsx";
+import { ImageThumb } from "../shared/ImageThumb.tsx";
+import { TrashBadge } from "../shared/TrashBadge.tsx";
+import { TrashIcon } from "../shared/TrashIcon.tsx";
 import { RejectButton } from "./RejectButton.tsx";
 
 interface Props {
   cluster: ClusterResultData;
   collapsed: boolean;
   mergeSelected: boolean;
-  focused: boolean;
   selectedImages: Set<string>;
+  markedTrashIds: Set<string>;
   isCurrentSearchMatch?: boolean;
   searchMatchFilenames?: Set<string>;
   metrics?: ClusterMetrics;
@@ -49,12 +52,12 @@ function fmtStability(v: number | undefined): string {
   return v.toFixed(2);
 }
 
-export function ClusterCard({
+export const ClusterCard = memo(function ClusterCard({
   cluster,
   collapsed,
   mergeSelected,
-  focused,
   selectedImages,
+  markedTrashIds,
   isCurrentSearchMatch,
   searchMatchFilenames,
   metrics,
@@ -87,38 +90,67 @@ export function ClusterCard({
 
   const isFullyGrouped = hasGroup && suggestedImages.length === 0;
 
+  const allImagesMarked =
+    cluster.images.length > 0 && cluster.images.every((f) => markedTrashIds.has(f));
+
   const statusClass = hasGroup ? "confirmed" : "suggested";
 
   const cardClass = cn(
     "cluster-card",
     mergeSelected && "merge-selected",
-    focused && "focused",
     isFullyGrouped && "fully-grouped",
     isCurrentSearchMatch && "is-search-match",
     depth > 0 && "cluster-card-child",
     splitExpanded && "cluster-card-split-open",
+    allImagesMarked && "cluster-card-marked-trash",
   );
 
   const splitDisabled = cluster.images.length < 3;
 
-  function renderThumbs(files: string[], confirmed: boolean) {
-    const rejectFn =
-      !confirmed && groupId
+  function handleToggleMarkAll() {
+    useTrashStore.getState().toggleMany(cluster.images);
+  }
+
+  const handleConfirmedSelect = useCallback(
+    (f: string) => onImageSelect(f, "confirmed"),
+    [onImageSelect],
+  );
+  const handleConfirmedRange = useCallback(
+    (f: string) => onImageRangeSelect(f, "confirmed"),
+    [onImageRangeSelect],
+  );
+  const handleSuggestedSelect = useCallback(
+    (f: string) => onImageSelect(f, "suggested"),
+    [onImageSelect],
+  );
+  const handleSuggestedRange = useCallback(
+    (f: string) => onImageRangeSelect(f, "suggested"),
+    [onImageRangeSelect],
+  );
+  const rejectSuggested = useMemo(
+    () =>
+      groupId
         ? (filename: string) => {
             void addCannotLink(filename, groupId);
           }
-        : undefined;
+        : undefined,
+    [groupId, addCannotLink],
+  );
+
+  function renderThumbs(files: string[], confirmed: boolean) {
     return files.map((f, i) => (
       <ThumbCard
         key={f}
         filename={f}
+        files={files}
+        index={i}
         isConfirmed={confirmed}
         isSelected={selectedImages.has(`${cluster.id}:${f}`)}
         isSearchMatch={searchMatchFilenames?.has(f) ?? false}
-        onSelect={onImageSelect}
-        onRangeSelect={onImageRangeSelect}
-        onOpen={() => useLightboxStore.getState().openLightbox(files, i, "cluster")}
-        onReject={rejectFn}
+        isMarkedForTrash={markedTrashIds.has(f)}
+        onSelect={confirmed ? handleConfirmedSelect : handleSuggestedSelect}
+        onRangeSelect={confirmed ? handleConfirmedRange : handleSuggestedRange}
+        onReject={confirmed ? undefined : rejectSuggested}
       />
     ));
   }
@@ -129,6 +161,7 @@ export function ClusterCard({
       onClick={onMergeSelect}
       style={depth > 0 ? { marginLeft: `${Math.min(depth, 4) * 24}px` } : undefined}
     >
+      {allImagesMarked && <TrashBadge />}
       <div
         className="cluster-header"
         onClick={(e) => {
@@ -221,11 +254,19 @@ export function ClusterCard({
           <button
             className="btn btn-small"
             onClick={() => useNNQueryStore.getState().openForCluster(cluster)}
-            title="Find images similar to this cluster (f)"
+            title="Find images similar to this cluster"
           >
             Find Similar
           </button>
           <AskClaudeButton images={cluster.images} name={cluster.autoName || cluster.id} />
+          <button
+            className="btn btn-small btn-icon"
+            onClick={handleToggleMarkAll}
+            title={allImagesMarked ? "Unmark cluster" : "Mark cluster for deletion"}
+            aria-label={allImagesMarked ? "Unmark cluster" : "Mark cluster for deletion"}
+          >
+            <TrashIcon size={14} variant={allImagesMarked ? "minus" : "plus"} />
+          </button>
           {hasGroup && groupId && (
             <button
               className={cn("btn btn-small btn-lock", isLocked && "btn-lock-active")}
@@ -276,61 +317,47 @@ export function ClusterCard({
       )}
     </div>
   );
-}
+});
 
-function ThumbCard({
+const ThumbCard = memo(function ThumbCard({
   filename,
+  files,
+  index,
   isConfirmed,
   isSelected,
   isSearchMatch,
+  isMarkedForTrash,
   onSelect,
   onRangeSelect,
-  onOpen,
   onReject,
 }: {
   filename: string;
+  files: string[];
+  index: number;
   isConfirmed: boolean;
   isSelected: boolean;
   isSearchMatch: boolean;
-  onSelect: (f: string, section: ImageSection) => void;
-  onRangeSelect: (f: string, section: ImageSection) => void;
-  onOpen: () => void;
+  isMarkedForTrash: boolean;
+  onSelect: (f: string) => void;
+  onRangeSelect: (f: string) => void;
   onReject?: (filename: string) => void;
 }) {
-  const thumbClass = cn(
-    "cluster-thumb",
-    isConfirmed ? "confirmed" : "suggested",
-    isSelected && "selected",
-    isSearchMatch && "search-match",
-  );
-  const section: ImageSection = isConfirmed ? "confirmed" : "suggested";
-
   return (
-    <div
-      className={thumbClass}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (e.shiftKey) {
-          onRangeSelect(filename, section);
-        } else if (e.metaKey || e.ctrlKey) {
-          onSelect(filename, section);
-        } else {
-          onOpen();
-        }
-      }}
-    >
-      <img
-        src={imageUrl(filename)}
-        loading="lazy"
-        decoding="async"
-        alt={filename}
-        draggable={false}
-      />
-      <span className="cluster-thumb-name">{filename}</span>
-      {onReject && <RejectButton filename={filename} onReject={onReject} />}
-    </div>
+    <ImageThumb
+      filename={filename}
+      isSelected={isSelected}
+      isSearchMatch={isSearchMatch}
+      isMarkedForTrash={isMarkedForTrash}
+      variant={isConfirmed ? "confirmed" : "suggested"}
+      onSelect={onSelect}
+      onRangeSelect={onRangeSelect}
+      lightboxImages={files}
+      lightboxIndex={index}
+      footer={<span className="image-thumb-name">{filename}</span>}
+      topRight={onReject ? <RejectButton filename={filename} onReject={onReject} /> : undefined}
+    />
   );
-}
+});
 
 function EditableName({
   name,

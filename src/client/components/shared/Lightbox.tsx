@@ -1,21 +1,25 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
+import { useFolderStore } from "../../stores/folderStore.ts";
 import { useTrashStore } from "../../stores/trashStore.ts";
 import { cn, fullImageUrl } from "../../utils/helpers.ts";
 import { TrashIcon } from "./TrashIcon.tsx";
 
-export function Lightbox({
-  filenames,
-  initialIndex,
-  onClose,
-  enableTrashMark = false,
-}: {
-  filenames: string[];
-  initialIndex: number;
-  onClose: () => void;
-  enableTrashMark?: boolean;
-}) {
+export function Lightbox() {
+  const open = useLightboxStore((s) => s.open);
+  if (!open) return null;
+  return <LightboxInner />;
+}
+
+function LightboxInner() {
+  const filenames = useLightboxStore((s) => s.filenames);
+  const initialIndex = useLightboxStore((s) => s.index);
+  const close = useLightboxStore((s) => s.close);
+  const folderModeEnabled = useFolderStore((s) => s.folderModeEnabled);
+  const enableTrashMark = !folderModeEnabled;
+
   const [index, setIndex] = useState(initialIndex);
   const [scale, setScale] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
@@ -45,8 +49,8 @@ export function Lightbox({
 
   const indexRef = useRef(index);
   indexRef.current = index;
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  const onCloseRef = useRef(close);
+  onCloseRef.current = close;
   const trashEnabledRef = useRef(enableTrashMark);
   trashEnabledRef.current = enableTrashMark;
 
@@ -144,10 +148,10 @@ export function Lightbox({
     <div
       className="lightbox-backdrop"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) close();
       }}
     >
-      <button className="lightbox-close" onClick={onClose} aria-label="Close">
+      <button className="lightbox-close" onClick={close} aria-label="Close">
         &times;
       </button>
 

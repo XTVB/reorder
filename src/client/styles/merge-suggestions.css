@@ -372,8 +372,3 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
 }
-
-/* Portal-rendered popover (re-uses .group-popover for the inner chrome) */
-.merge-expanded-thumb {
-  cursor: zoom-in;
-}

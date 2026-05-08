@@ -20,6 +20,7 @@ interface TrashState {
   mark: (filenames: string[]) => void;
   unmark: (filenames: string[]) => void;
   toggle: (filename: string) => void;
+  toggleMany: (filenames: string[]) => void;
   clear: () => void;
   pruneToValid: (validFilenames: Iterable<string>) => void;
   remap: (renames: RenameMapping[]) => void;
@@ -39,6 +40,14 @@ export const useTrashStore = create<TrashState>(() => ({
 
   toggle: (filename) => {
     useSelectionStore.getState().toggle("trash", filename);
+  },
+
+  toggleMany: (filenames) => {
+    if (filenames.length === 0) return;
+    const trashSet = useSelectionStore.getState().contexts.trash;
+    const allMarked = filenames.every((fn) => trashSet.has(fn));
+    if (allMarked) useSelectionStore.getState().remove("trash", filenames);
+    else useSelectionStore.getState().add("trash", filenames);
   },
 
   clear: () => {

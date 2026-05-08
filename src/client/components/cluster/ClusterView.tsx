@@ -16,8 +16,8 @@ import {
   useSplitStore,
 } from "../../stores/modes/cluster/index.ts";
 import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
+import { useTrashStore } from "../../stores/trashStore.ts";
 import type { ClusterData, ClusterResultData, SplitChildren } from "../../types.ts";
-import { Lightbox } from "../shared/Lightbox.tsx";
 import { SearchOverlay, useSearchOverlayState } from "../shared/SearchBar.tsx";
 import { ClusterCard } from "./ClusterCard.tsx";
 import { ComparePanel } from "./ComparePanel.tsx";
@@ -69,17 +69,16 @@ export function ClusterView() {
   const loading = useListStore((s) => s.loading);
   const collapsedClusters = useListStore((s) => s.collapsedClusters);
   const treeStale = useListStore((s) => s.treeStale);
-  const focusedClusterId = useListStore((s) => s.focusedClusterId);
   const splitChildren = useListStore((s) => s.splitChildren);
   const fetchClusters = useListStore((s) => s.fetchClusters);
   const runScopedCluster = useListStore((s) => s.runScopedCluster);
   const dismissCluster = useListStore((s) => s.dismissCluster);
   const toggleCollapsed = useListStore((s) => s.toggleCollapsed);
   const loadCachedClusters = useListStore((s) => s.loadCachedClusters);
-  const moveFocus = useListStore((s) => s.moveFocus);
 
   const mergeSelection = useSelectionStore((s) => s.contexts["cluster:merge"]);
   const selectedImages = useSelectionStore((s) => s.contexts["cluster:images"]);
+  const markedTrashIds = useSelectionStore((s) => s.contexts.trash);
 
   const toggleMergeSelect = useInteractionsStore((s) => s.toggleMergeSelect);
   const clearMergeSelection = useInteractionsStore((s) => s.clearMergeSelection);
@@ -101,11 +100,6 @@ export function ClusterView() {
   const openExpand = useExpandStore((s) => s.openExpand);
 
   const toggleSplit = useSplitStore((s) => s.toggleSplit);
-
-  const lightboxOpen = useLightboxStore((s) => s.open && s.source === "cluster");
-  const lightboxIndex = useLightboxStore((s) => s.index);
-  const lightboxFilenames = useLightboxStore((s) => s.filenames);
-  const closeLightbox = useLightboxStore((s) => s.close);
 
   const groups = useGroupStore((s) => s.groups);
   const fetchGroups = useGroupStore((s) => s.fetchGroups);
@@ -248,25 +242,13 @@ export function ClusterView() {
     setCurrentMatchIndex((i) => (i - 1 + matchRowIndices.length) % matchRowIndices.length);
   }, [matchRowIndices.length]);
 
-  // Focus scrolling via virtualizer
-  // biome-ignore lint/correctness/useExhaustiveDependencies: focusedClusterId is the intentional trigger; virtualizer/visibleClusters are stable between renders
-  useEffect(() => {
-    if (focusedClusterId) {
-      const idx = visibleClusters.findIndex((c) => c.id === focusedClusterId);
-      if (idx !== -1) virtualizer.scrollToIndex(idx, { align: "auto" });
-    }
-  }, [focusedClusterId]);
-
   // biome-ignore lint/correctness/useExhaustiveDependencies: handlers are stable Zustand actions; current state is read via getState() inside the handler so the listener can attach once on mount
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (useLightboxStore.getState().open) return;
 
-      const list = useListStore.getState();
       const sel = useSelectionStore.getState();
-      const focusedId = list.focusedClusterId;
-      const currentClusters = list.clusterData?.clusters ?? [];
       const mergeSize = sel.contexts["cluster:merge"].size;
       const selectedSize = sel.contexts["cluster:images"].size;
 
@@ -275,59 +257,10 @@ export function ClusterView() {
           if (mergeSize > 0) clearMergeSelection();
           else if (selectedSize > 0) clearImageSelection();
           break;
-        case "ArrowDown":
-          if (e.metaKey) break;
-          e.preventDefault();
-          moveFocus(1);
-          break;
-        case "j":
-          e.preventDefault();
-          moveFocus(1);
-          break;
-        case "ArrowUp":
-          if (e.metaKey) break;
-          e.preventDefault();
-          moveFocus(-1);
-          break;
-        case "k":
-          e.preventDefault();
-          moveFocus(-1);
-          break;
-        case "Enter": {
-          if (focusedId) toggleCollapsed(focusedId);
-          break;
-        }
-        case "g":
-        case "G": {
-          const cluster = currentClusters.find((c) => c.id === focusedId);
-          if (cluster && !cluster.confirmedGroup) acceptCluster(cluster);
-          break;
-        }
         case "d":
         case "D": {
-          if (focusedId) {
-            dismissCluster(focusedId);
-            moveFocus(1);
-          }
-          break;
-        }
-        case "a":
-        case "A": {
-          const cluster = currentClusters.find((c) => c.id === focusedId);
-          if (cluster?.confirmedGroup) addToGroup(cluster);
-          break;
-        }
-        case "f":
-        case "F": {
-          const wantSelection = e.shiftKey || e.key === "F";
-          if (wantSelection) {
-            const selectedSet = sel.contexts["cluster:images"];
-            if (selectedSet.size === 0) break;
-            useNNQueryStore.getState().openForSelection(filenamesFromSelectedImages(selectedSet));
-          } else {
-            const cluster = currentClusters.find((c) => c.id === focusedId);
-            if (cluster) useNNQueryStore.getState().openForCluster(cluster);
-          }
+          const fns = filenamesFromSelectedImages(sel.contexts["cluster:images"]);
+          useTrashStore.getState().toggleMany(fns);
           break;
         }
       }
@@ -335,17 +268,6 @@ export function ClusterView() {
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
-
-  function renderLightbox() {
-    if (!lightboxOpen) return null;
-    return (
-      <Lightbox
-        filenames={lightboxFilenames}
-        initialIndex={lightboxIndex}
-        onClose={closeLightbox}
-      />
-    );
-  }
 
   const virtualItems = virtualizer.getVirtualItems();
 
@@ -407,8 +329,8 @@ export function ClusterView() {
                     cluster={cluster}
                     collapsed={collapsedClusters.has(cluster.id)}
                     mergeSelected={mergeSelection.has(cluster.id)}
-                    focused={focusedClusterId === cluster.id}
                     selectedImages={selectedImages}
+                    markedTrashIds={markedTrashIds}
                     isCurrentSearchMatch={cluster.id === currentMatchClusterId}
                     searchMatchFilenames={
                       cluster.id === currentMatchClusterId ? currentMatchFilenames : undefined
@@ -455,7 +377,7 @@ export function ClusterView() {
                 .getState()
                 .openForSelection(filenamesFromSelectedImages(selectedImages))
             }
-            title="Find the nearest images to this selection (Shift+F)"
+            title="Find the nearest images to this selection"
           >
             Find Nearest
           </button>
@@ -482,7 +404,6 @@ export function ClusterView() {
         </div>
       )}
 
-      {renderLightbox()}
       <NNResultsModal />
       {compare && <ComparePanel />}
       {expand && <ExpandModal />}

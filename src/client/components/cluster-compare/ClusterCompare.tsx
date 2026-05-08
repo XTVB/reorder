@@ -1,13 +1,12 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { getJson, postJson } from "../../api/client.ts";
 import { consumeSSE } from "../../api/sse.ts";
 import { useRemeasureVirtualRows } from "../../hooks/useRemeasureVirtualRows.ts";
-import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useSessionStore } from "../../stores/core/sessionStore.ts";
 import type { ClusterData, ClusterResultData, WeightConfig } from "../../types.ts";
-import { cn, imageUrl } from "../../utils/helpers.ts";
-import { Lightbox } from "../shared/Lightbox.tsx";
+import { cn } from "../../utils/helpers.ts";
+import { ImageThumb } from "../shared/ImageThumb.tsx";
 
 const EMPTY_CLUSTERS: ClusterResultData[] = [];
 
@@ -84,9 +83,6 @@ export function ClusterCompare() {
   ]);
   const [activeTabId, setActiveTabId] = useState(tabs[0]!.id);
   const [nClusters, setNClusters] = useState(200);
-  const lightboxOpen = useLightboxStore((s) => s.open && s.source === "compare");
-  const lightboxFilenames = useLightboxStore((s) => s.filenames);
-  const lightboxIndex = useLightboxStore((s) => s.index);
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [customWeights, setCustomWeights] = useState<Weights>({ ...ZERO_WEIGHTS });
   const [customLabel, setCustomLabel] = useState("Custom");
@@ -456,26 +452,12 @@ export function ClusterCompare() {
                     transform: `translateY(${vi.start}px)`,
                   }}
                 >
-                  <CompareClusterCard
-                    cluster={cluster}
-                    rank={vi.index + 1}
-                    onOpenLightbox={(idx) =>
-                      useLightboxStore.getState().openLightbox(cluster.images, idx, "compare")
-                    }
-                  />
+                  <CompareClusterCard cluster={cluster} rank={vi.index + 1} />
                 </div>
               );
             })}
           </div>
         </div>
-      )}
-
-      {lightboxOpen && (
-        <Lightbox
-          filenames={lightboxFilenames}
-          initialIndex={lightboxIndex}
-          onClose={() => useLightboxStore.getState().close()}
-        />
       )}
     </div>
   );
@@ -483,14 +465,12 @@ export function ClusterCompare() {
 
 // ── Cluster card (read-only) ────────────────────────────────────────────────
 
-function CompareClusterCard({
+const CompareClusterCard = memo(function CompareClusterCard({
   cluster,
   rank,
-  onOpenLightbox,
 }: {
   cluster: ClusterResultData;
   rank: number;
-  onOpenLightbox: (index: number) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -516,14 +496,17 @@ function CompareClusterCard({
         <div className="cluster-body">
           <div className="cluster-thumbs">
             {cluster.images.map((f, i) => (
-              <div key={f} className="cluster-thumb" onClick={() => onOpenLightbox(i)}>
-                <img src={imageUrl(f)} loading="lazy" decoding="async" alt={f} draggable={false} />
-                <span className="cluster-thumb-name">{f}</span>
-              </div>
+              <ImageThumb
+                key={f}
+                filename={f}
+                lightboxImages={cluster.images}
+                lightboxIndex={i}
+                footer={<span className="image-thumb-name">{f}</span>}
+              />
             ))}
           </div>
         </div>
       )}
     </div>
   );
-}
+});

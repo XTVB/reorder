@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useCloseLightboxOnUnmount, useLightboxStore } from "../../stores/core/lightboxStore.ts";
+import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useImageStore } from "../../stores/imageStore.ts";
 import type { ImageGroup } from "../../types.ts";
 import { cn, imageUrl, reorderImagesByGroups } from "../../utils/helpers.ts";
-import { Lightbox } from "./Lightbox.tsx";
 import { Modal } from "./Modal.tsx";
 
 type ReviewStatus = "keep" | "maybe" | "delete";
@@ -57,10 +56,7 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
   const [topIndex, setTopIndex] = useState(0);
   const [subIndex, setSubIndex] = useState(0);
 
-  const lightboxOpen = useLightboxStore((s) => s.open && s.source === "review");
-  const lightboxFilenames = useLightboxStore((s) => s.filenames);
-  const lightboxIndex = useLightboxStore((s) => s.index);
-  useCloseLightboxOnUnmount("review");
+  const lightboxOpen = useLightboxStore((s) => s.open);
 
   const filtered = useMemo(() => {
     if (!bucket) return snapshot;
@@ -158,7 +154,7 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
     const imageMap = useImageStore.getState().imageMap;
     const items = groupImages.filter((fn) => imageMap.has(fn));
     if (items.length === 0) return;
-    useLightboxStore.getState().openLightbox(items, index, "review");
+    useLightboxStore.getState().openLightbox(items, index);
   }
 
   const topCounts = useMemo(() => {
@@ -275,111 +271,102 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
       }));
 
   return (
-    <>
-      <Modal
-        title={title}
-        onClose={onClose}
-        footer={footer}
-        className="review-modal"
-        headerClassName="review-modal-header"
-        bodyClassName="review-modal-body"
-      >
-        {bucket && (
-          <div className="review-sub-banner">
-            <span className="review-sub-banner-label">
-              Refining <strong>{STATUS_LABELS[bucket]}</strong>
-            </span>
-            <span className="review-sub-banner-counts">
-              {SUB_ORDER.map((s) => (
-                <span key={s} className={cn("review-sub-chip", `review-sub-chip-${s}`)}>
-                  {subCounts[s]} {s}
-                </span>
-              ))}
-            </span>
-          </div>
-        )}
-
-        {!current ? (
-          <div className="review-empty">
-            {bucket ? `No groups in ${STATUS_LABELS[bucket]}.` : "No groups to review."}
-          </div>
-        ) : (
-          <div className={cn("review-single", singleClass)}>
-            <div className="review-single-header">
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                onClick={() => advance(-1)}
-                disabled={currentIndex === 0}
-                aria-label="Previous group"
-              >
-                ← Prev
-              </button>
-              <div className="review-single-title">
-                <span className="review-single-name">{current.name}</span>
-                <span className="review-single-count">
-                  {current.images.length} image{current.images.length === 1 ? "" : "s"}
-                  {bucket && currentStatus && (
-                    <>
-                      {" · "}
-                      <span className={`review-single-tag review-single-tag-${currentStatus}`}>
-                        {STATUS_LABELS[currentStatus]}
-                      </span>
-                    </>
-                  )}
-                </span>
-              </div>
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                onClick={() => advance(1)}
-                disabled={currentIndex === total - 1}
-                aria-label="Next group"
-              >
-                Next →
-              </button>
-            </div>
-
-            <div className="review-single-thumbs">
-              {current.images.map((fn, i) => (
-                <button
-                  type="button"
-                  key={fn}
-                  className="review-single-thumb"
-                  onClick={() => openGroupLightbox(current.images, i)}
-                  aria-label={`Open ${fn}`}
-                >
-                  <img src={imageUrl(fn)} alt="" loading="lazy" draggable={false} />
-                </button>
-              ))}
-            </div>
-
-            <div className="review-single-actions">
-              {actionItems.map(({ s, label, activeClass }, idx) => (
-                <button
-                  type="button"
-                  key={s}
-                  className={cn(
-                    "btn review-single-status-btn",
-                    activeSlot === s ? activeClass : "btn-secondary",
-                  )}
-                  onClick={() => chooseAndAdvance(idx)}
-                >
-                  <span className="review-single-status-key">{idx + 1}</span>
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </Modal>
-      {lightboxOpen && (
-        <Lightbox
-          filenames={lightboxFilenames}
-          initialIndex={lightboxIndex}
-          onClose={() => useLightboxStore.getState().close()}
-        />
+    <Modal
+      title={title}
+      onClose={onClose}
+      footer={footer}
+      className="review-modal"
+      headerClassName="review-modal-header"
+      bodyClassName="review-modal-body"
+    >
+      {bucket && (
+        <div className="review-sub-banner">
+          <span className="review-sub-banner-label">
+            Refining <strong>{STATUS_LABELS[bucket]}</strong>
+          </span>
+          <span className="review-sub-banner-counts">
+            {SUB_ORDER.map((s) => (
+              <span key={s} className={cn("review-sub-chip", `review-sub-chip-${s}`)}>
+                {subCounts[s]} {s}
+              </span>
+            ))}
+          </span>
+        </div>
       )}
-    </>
+
+      {!current ? (
+        <div className="review-empty">
+          {bucket ? `No groups in ${STATUS_LABELS[bucket]}.` : "No groups to review."}
+        </div>
+      ) : (
+        <div className={cn("review-single", singleClass)}>
+          <div className="review-single-header">
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              onClick={() => advance(-1)}
+              disabled={currentIndex === 0}
+              aria-label="Previous group"
+            >
+              ← Prev
+            </button>
+            <div className="review-single-title">
+              <span className="review-single-name">{current.name}</span>
+              <span className="review-single-count">
+                {current.images.length} image{current.images.length === 1 ? "" : "s"}
+                {bucket && currentStatus && (
+                  <>
+                    {" · "}
+                    <span className={`review-single-tag review-single-tag-${currentStatus}`}>
+                      {STATUS_LABELS[currentStatus]}
+                    </span>
+                  </>
+                )}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              onClick={() => advance(1)}
+              disabled={currentIndex === total - 1}
+              aria-label="Next group"
+            >
+              Next →
+            </button>
+          </div>
+
+          <div className="review-single-thumbs">
+            {current.images.map((fn, i) => (
+              <button
+                type="button"
+                key={fn}
+                className="review-single-thumb"
+                onClick={() => openGroupLightbox(current.images, i)}
+                aria-label={`Open ${fn}`}
+              >
+                <img src={imageUrl(fn)} alt="" loading="lazy" draggable={false} />
+              </button>
+            ))}
+          </div>
+
+          <div className="review-single-actions">
+            {actionItems.map(({ s, label, activeClass }, idx) => (
+              <button
+                type="button"
+                key={s}
+                className={cn(
+                  "btn review-single-status-btn",
+                  activeSlot === s ? activeClass : "btn-secondary",
+                )}
+                onClick={() => chooseAndAdvance(idx)}
+              >
+                <span className="review-single-status-key">{idx + 1}</span>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }

@@ -43,7 +43,6 @@ import {
 import { FolderPopover } from "../shared/FolderPopover.tsx";
 import { GroupPopover } from "../shared/GroupPopover.tsx";
 import { GroupThumbGrid } from "../shared/GroupThumbGrid.tsx";
-import { Lightbox } from "../shared/Lightbox.tsx";
 import { OrganizeModal } from "../shared/OrganizeModal.tsx";
 import { PathsModal } from "../shared/PathsModal.tsx";
 import { PreviewModal } from "../shared/PreviewModal.tsx";
@@ -99,10 +98,15 @@ export function ReorderView() {
   const markedTrashIds = useSelectionStore((s) => s.contexts.trash);
   const pruneTrashToValid = useTrashStore((s) => s.pruneToValid);
 
-  const lightboxOpen = useLightboxStore((s) => s.open && s.source === "reorder");
-  const lightboxIndex = useLightboxStore((s) => s.index);
-  const lightboxFilenames = useLightboxStore((s) => s.filenames);
-  const closeLightbox = useLightboxStore((s) => s.close);
+  const handleToggleGroupMarkAll = useCallback((groupId: string) => {
+    const group = useGroupStore.getState().groups.find((g) => g.id === groupId);
+    if (!group) return;
+    useTrashStore.getState().toggleMany(group.images);
+  }, []);
+
+  const allFilenames = useMemo(() => images.map((i) => i.filename), [images]);
+
+  const lightboxOpen = useLightboxStore((s) => s.open);
   const saving = useSessionStore((s) => s.saving);
   const error = useSessionStore((s) => s.error);
   const showPreview = useModalStore((s) => s.open.preview);
@@ -146,6 +150,20 @@ export function ReorderView() {
     ],
   );
   const gridIds = useMemo(() => gridItems.map(gridItemId), [gridItems]);
+
+  const handleImageSelect = useCallback(
+    (filename: string) => {
+      toggle("reorder", filename);
+    },
+    [toggle],
+  );
+
+  const handleImageRangeSelect = useCallback(
+    (filename: string) => {
+      rangeSelect("reorder", gridIds, filename);
+    },
+    [rangeSelect, gridIds],
+  );
 
   const visibleItems = useMemo(
     () => gridItems.filter((item) => item.type !== "group-image" && item.type !== "folder-image"),
@@ -259,13 +277,16 @@ export function ReorderView() {
     });
   }, [folderModeEnabled, images, groupsLoaded, saving, updateGroups]);
 
-  // ---- Card click ----
   const handleGridItemClickImpl = (id: string, e: React.MouseEvent) => {
     if (e.metaKey || e.ctrlKey) {
       toggle("reorder", id);
-    } else if (e.shiftKey) {
+      return;
+    }
+    if (e.shiftKey) {
       rangeSelect("reorder", gridIds, id);
-    } else if (isFolderSortId(id)) {
+      return;
+    }
+    if (isFolderSortId(id)) {
       const fname = fromFolderSortId(id);
       if (selectedIds.size > 0) {
         const { moveImages } = useFolderStore.getState();
@@ -277,7 +298,9 @@ export function ReorderView() {
       } else {
         expandFolder(expandedFolderName === fname ? null : fname);
       }
-    } else if (isGroupSortId(id)) {
+      return;
+    }
+    if (isGroupSortId(id)) {
       const gid = fromGroupSortId(id);
       if (selectedIds.size > 0) {
         const hasOnlyImages = [...selectedIds].every((s) => !isGroupSortId(s));
@@ -288,19 +311,6 @@ export function ReorderView() {
         }
       } else {
         expandGroup(expandedGroupId === gid ? null : gid);
-      }
-    } else {
-      if (selectedIds.size > 0) {
-        clear("reorder");
-      } else {
-        const imgIdx = images.findIndex((i) => i.filename === id);
-        if (imgIdx !== -1) {
-          useLightboxStore.getState().openLightbox(
-            images.map((i) => i.filename),
-            imgIdx,
-            "reorder",
-          );
-        }
       }
     }
   };
@@ -458,11 +468,13 @@ export function ReorderView() {
                                       selectedIds={selectedIds}
                                       isMultiDragging={isMultiDragging}
                                       activeId={activeId}
+                                      lightboxImages={allFilenames}
                                       onRename={handleRenameFolder}
                                       onDissolve={handleDissolveFolder}
                                       onCollapse={collapseFolder}
                                       onRemoveFromFolder={handleRemoveFromFolder}
-                                      onCardClick={handleGridItemClick}
+                                      onSelect={handleImageSelect}
+                                      onRangeSelect={handleImageRangeSelect}
                                     />
                                   ) : undefined
                                 }
@@ -476,6 +488,9 @@ export function ReorderView() {
                             const gid = item.groupId;
                             const isExp = expandedGroupId === gid;
                             const sortId = toGroupSortId(gid);
+                            const groupAllMarked =
+                              group.images.length > 0 &&
+                              group.images.every((fn) => markedTrashIds.has(fn));
                             return (
                               <SortableContainerCard
                                 key={sortId}
@@ -491,6 +506,7 @@ export function ReorderView() {
                                 }
                                 isSearchMatch={searchState.matchIds.has(sortId)}
                                 isCurrentSearchMatch={searchState.currentMatchId === sortId}
+                                isMarkedForTrash={groupAllMarked}
                                 onClick={(e: React.MouseEvent) => handleGridItemClick(sortId, e)}
                                 popover={
                                   isExp ? (
@@ -501,11 +517,14 @@ export function ReorderView() {
                                       markedTrashIds={markedTrashIds}
                                       isMultiDragging={isMultiDragging}
                                       activeId={activeId}
+                                      lightboxImages={allFilenames}
                                       onRename={renameGroupAction}
                                       onDelete={deleteGroupAction}
                                       onCollapse={collapseGroup}
                                       onRemoveFromGroup={removeFromGroupAction}
-                                      onCardClick={handleGridItemClick}
+                                      onSelect={handleImageSelect}
+                                      onRangeSelect={handleImageRangeSelect}
+                                      onToggleMarkAll={handleToggleGroupMarkAll}
                                     />
                                   ) : undefined
                                 }
@@ -529,7 +548,9 @@ export function ReorderView() {
                               isSearchMatch={searchState.matchIds.has(item.filename)}
                               isCurrentSearchMatch={searchState.currentMatchId === item.filename}
                               isMarkedForTrash={markedTrashIds.has(item.filename)}
-                              onCardClick={handleGridItemClick}
+                              lightboxImages={allFilenames}
+                              onSelect={handleImageSelect}
+                              onRangeSelect={handleImageRangeSelect}
                             />
                           );
                         })}
@@ -543,16 +564,16 @@ export function ReorderView() {
           <DragOverlay dropAnimation={null}>
             {activeImage ? (
               <div className={isMultiDragging ? "drag-overlay-multi" : undefined}>
-                <div className="card card-dragging">
+                <div className="image-thumb image-thumb-has-footer image-thumb-dragging">
                   <img
-                    className="card-thumb"
+                    className="image-thumb-image"
                     src={imageUrl(activeImage.filename)}
                     alt={activeImage.filename}
                     draggable={false}
                   />
-                  <div className="card-info">
-                    <span className="card-badge">{activeGridIndex + 1}</span>
-                    <span className="card-name">{activeImage.filename}</span>
+                  <div className="image-thumb-footer">
+                    <span className="image-thumb-badge">{activeGridIndex + 1}</span>
+                    <span className="image-thumb-name">{activeImage.filename}</span>
                   </div>
                 </div>
                 {isMultiDragging && <div className="drag-count">{selectedIds.size}</div>}
@@ -583,15 +604,6 @@ export function ReorderView() {
             ) : null}
           </DragOverlay>
         </DndContext>
-      )}
-
-      {lightboxOpen && (
-        <Lightbox
-          filenames={lightboxFilenames}
-          initialIndex={lightboxIndex}
-          onClose={closeLightbox}
-          enableTrashMark={!folderModeEnabled}
-        />
       )}
 
       {slideshow.open && (

@@ -12,6 +12,7 @@ import { HeaderActions } from "./components/header/HeaderActions.tsx";
 import { MergeSuggestions } from "./components/merge-suggestions/MergeSuggestions.tsx";
 import { ReorderToolbarOverflow } from "./components/reorder/ReorderToolbarOverflow.tsx";
 import { ReorderView } from "./components/reorder/ReorderView.tsx";
+import { Lightbox } from "./components/shared/Lightbox.tsx";
 import { Toast } from "./components/shared/Toast.tsx";
 import { useRouter } from "./hooks/useRouter.ts";
 import { useConstraintsStore } from "./stores/constraintsStore.ts";
@@ -88,6 +89,7 @@ function AppShell() {
       ) : (
         <ReorderView />
       )}
+      <Lightbox />
       <Toast />
     </>
   );

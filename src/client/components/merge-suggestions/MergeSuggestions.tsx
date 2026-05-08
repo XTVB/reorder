@@ -1,13 +1,11 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRemeasureVirtualRows } from "../../hooks/useRemeasureVirtualRows.ts";
-import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useSessionStore } from "../../stores/core/sessionStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useMergeSuggestionsStore } from "../../stores/mergeSuggestionsStore.ts";
 import type { MergeSuggestionRow as MergeSuggestionRowType } from "../../types.ts";
-import { Lightbox } from "../shared/Lightbox.tsx";
 import { SearchOverlay, useSearchOverlayState } from "../shared/SearchBar.tsx";
 import { MergePopover } from "./MergePopover.tsx";
 import type { OpenCardHandler } from "./MergeSuggestionCard.tsx";
@@ -53,9 +51,6 @@ export function MergeSuggestions() {
   const setHeaderSubtitle = useSessionStore((s) => s.setHeaderSubtitle);
 
   const [expandedCard, setExpandedCard] = useState<ExpandedCard | null>(null);
-  const lightboxOpen = useLightboxStore((s) => s.open && s.source === "merge");
-  const lightboxFilenames = useLightboxStore((s) => s.filenames);
-  const lightboxIndex = useLightboxStore((s) => s.index);
   const search = useSearchOverlayState();
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
 
@@ -78,10 +73,6 @@ export function MergeSuggestions() {
   );
 
   const handleClosePopover = useCallback(() => setExpandedCard(null), []);
-  const handleCloseLightbox = useCallback(() => useLightboxStore.getState().close(), []);
-  const handleOpenLightbox = useCallback((images: string[], index: number) => {
-    useLightboxStore.getState().openLightbox(images, index, "merge");
-  }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only — fetchGroups is a stable Zustand action
   useEffect(() => {
@@ -256,16 +247,7 @@ export function MergeSuggestions() {
           anchorRect={expandedCard.anchorRect}
           displayName={expandedCard.displayName}
           images={expandedCard.images}
-          onOpenLightbox={handleOpenLightbox}
           onClose={handleClosePopover}
-        />
-      )}
-
-      {lightboxOpen && (
-        <Lightbox
-          filenames={lightboxFilenames}
-          initialIndex={lightboxIndex}
-          onClose={handleCloseLightbox}
         />
       )}
     </div>

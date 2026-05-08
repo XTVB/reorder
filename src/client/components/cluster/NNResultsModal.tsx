@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDismissOnOutside } from "../../hooks/useDismissOnOutside.ts";
-import { useCloseLightboxOnUnmount, useLightboxStore } from "../../stores/core/lightboxStore.ts";
+import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useListStore } from "../../stores/modes/cluster/index.ts";
 import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
 import type { NNAggregation, NNFilter } from "../../types.ts";
 import { cn } from "../../utils/helpers.ts";
-import { Lightbox } from "../shared/Lightbox.tsx";
+import { ImageThumb } from "../shared/ImageThumb.tsx";
 import { Modal } from "../shared/Modal.tsx";
-import { SelectableImageCard } from "../shared/SelectableImageCard.tsx";
 
 const FILTER_OPTIONS: { key: NNFilter; label: string }[] = [
   { key: "any", label: "Any" },
@@ -52,10 +51,7 @@ export function NNResultsModal() {
 
   const inScope = useListStore((s) => !!s.clusterData?.scope);
 
-  const lightboxOpen = useLightboxStore((s) => s.open && s.source === "nn");
-  const lightboxFilenames = useLightboxStore((s) => s.filenames);
-  const lightboxIndex = useLightboxStore((s) => s.index);
-  useCloseLightboxOnUnmount("nn");
+  const lightboxOpen = useLightboxStore((s) => s.open);
 
   const resultFilenames = useMemo(() => results.map((r) => r.filename), [results]);
 
@@ -97,92 +93,85 @@ export function NNResultsModal() {
   const hasResults = results.length > 0;
 
   return (
-    <>
-      <Modal
-        title={title}
-        className="image-picker-modal"
-        headerClassName="image-picker-header"
-        bodyClassName="image-picker-body"
-        onClose={close}
-        footer={
-          <NNFooter
-            selectionCount={modalSelection.size}
-            onClose={close}
-            onClearSelection={clearModalSelection}
-            onCreateCluster={createClusterFromSelected}
-            onAddToGroup={addSelectedToGroup}
-            sourceClusterLabel={sourceClusterLabel}
-            onAddToSourceCluster={addSelectedToSourceCluster}
-          />
-        }
-      >
-        <div className="image-picker-toolbar">
-          <SegmentedControl
-            label="Filter"
-            options={FILTER_OPTIONS}
-            value={filter}
-            onChange={setFilter}
-          />
-          <SegmentedControl
-            label="Aggregate"
-            options={AGG_OPTIONS}
-            value={aggregation}
-            onChange={setAggregation}
-          />
-          <label className="nn-topn-control">
-            <span>Top</span>
-            <select value={topN} onChange={(e) => setTopN(parseInt(e.target.value, 10))}>
-              {TOPN_PRESETS.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </label>
-          {patchesBlended && <span className="nn-patches-pill">Patches on</span>}
-          {usedModels.length > 0 && (
-            <span className="nn-models-pill" title={`Models: ${usedModels.join(", ")}`}>
-              {usedModels.length}× model
-            </span>
-          )}
-          {loading && <span className="nn-progress">{progress || "Loading..."}</span>}
-          {error && <span className="nn-error">{error}</span>}
-        </div>
-
-        {!loading && !error && !hasResults && (
-          <div className="image-picker-empty">No matches for the current filter.</div>
-        )}
-        {hasResults && (
-          <div className="image-card-grid">
-            {results.map((r, i) => (
-              <SelectableImageCard
-                key={r.filename}
-                filename={r.filename}
-                selected={modalSelection.has(r.filename)}
-                onToggleSelect={() => toggleResultSelected(r.filename)}
-                onRangeSelect={() => rangeSelectResults(r.filename)}
-                onOpen={() => useLightboxStore.getState().openLightbox(resultFilenames, i, "nn")}
-                bottomLeft={<span className="image-card-pill">{r.distance.toFixed(3)}</span>}
-                bottomRight={
-                  r.inGroupName ? (
-                    <span className="image-card-pill image-card-pill-group" title={r.inGroupName}>
-                      {r.inGroupName}
-                    </span>
-                  ) : null
-                }
-              />
-            ))}
-          </div>
-        )}
-      </Modal>
-      {lightboxOpen && (
-        <Lightbox
-          filenames={lightboxFilenames}
-          initialIndex={lightboxIndex}
-          onClose={() => useLightboxStore.getState().close()}
+    <Modal
+      title={title}
+      className="image-picker-modal"
+      headerClassName="image-picker-header"
+      bodyClassName="image-picker-body"
+      onClose={close}
+      footer={
+        <NNFooter
+          selectionCount={modalSelection.size}
+          onClose={close}
+          onClearSelection={clearModalSelection}
+          onCreateCluster={createClusterFromSelected}
+          onAddToGroup={addSelectedToGroup}
+          sourceClusterLabel={sourceClusterLabel}
+          onAddToSourceCluster={addSelectedToSourceCluster}
         />
+      }
+    >
+      <div className="image-picker-toolbar">
+        <SegmentedControl
+          label="Filter"
+          options={FILTER_OPTIONS}
+          value={filter}
+          onChange={setFilter}
+        />
+        <SegmentedControl
+          label="Aggregate"
+          options={AGG_OPTIONS}
+          value={aggregation}
+          onChange={setAggregation}
+        />
+        <label className="nn-topn-control">
+          <span>Top</span>
+          <select value={topN} onChange={(e) => setTopN(parseInt(e.target.value, 10))}>
+            {TOPN_PRESETS.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+        {patchesBlended && <span className="nn-patches-pill">Patches on</span>}
+        {usedModels.length > 0 && (
+          <span className="nn-models-pill" title={`Models: ${usedModels.join(", ")}`}>
+            {usedModels.length}× model
+          </span>
+        )}
+        {loading && <span className="nn-progress">{progress || "Loading..."}</span>}
+        {error && <span className="nn-error">{error}</span>}
+      </div>
+
+      {!loading && !error && !hasResults && (
+        <div className="image-picker-empty">No matches for the current filter.</div>
       )}
-    </>
+      {hasResults && (
+        <div className="image-thumb-grid">
+          {results.map((r, i) => (
+            <ImageThumb
+              key={r.filename}
+              filename={r.filename}
+              isSelected={modalSelection.has(r.filename)}
+              showSelectButton
+              onSelect={() => toggleResultSelected(r.filename)}
+              onRangeSelect={() => rangeSelectResults(r.filename)}
+              lightboxImages={resultFilenames}
+              lightboxIndex={i}
+              bottomLeft={<span className="image-thumb-pill">{r.distance.toFixed(3)}</span>}
+              bottomRight={
+                r.inGroupName ? (
+                  <span className="image-thumb-pill image-thumb-pill-group" title={r.inGroupName}>
+                    {r.inGroupName}
+                  </span>
+                ) : null
+              }
+            />
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }
 

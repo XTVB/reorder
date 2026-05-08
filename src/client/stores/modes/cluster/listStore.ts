@@ -1,5 +1,5 @@
 // Cluster list state — clusterData, scope, settings, recut/import/scoped pipelines,
-// focus/collapse helpers, and low-level mutators used by other cluster sub-stores.
+// collapse helpers, and low-level mutators used by other cluster sub-stores.
 
 import { create } from "zustand";
 import { deleteJson, getJson, postJson } from "../../../api/client.ts";
@@ -22,7 +22,6 @@ interface ListState {
   loading: boolean;
   progress: string;
   treeStale: boolean;
-  focusedClusterId: string | null;
   weights: WeightConfig;
   usePatches: boolean;
   useRerank: boolean;
@@ -53,16 +52,14 @@ interface ListState {
   exitScope: () => void;
 
   // Inline insertion (NN flow)
-  insertClusterFromFilenames: (name: string, filenames: string[]) => void;
+  insertClusterFromFilenames: (name: string, filenames: string[], afterClusterId?: string) => void;
 
-  // Focus / collapse / tree-stale
+  // Collapse / tree-stale
   toggleCollapsed: (clusterId: string) => void;
   expandAll: () => void;
   collapseAll: () => void;
   markTreeStale: () => void;
   renameCluster: (clusterId: string, name: string) => void;
-  setFocusedCluster: (id: string | null) => void;
-  moveFocus: (direction: 1 | -1) => void;
   dismissCluster: (clusterId: string) => void;
 
   // Low-level mutators (used by interactionsStore / compareStore / expandStore)
@@ -107,7 +104,6 @@ export const useListStore = create<ListState>((set, get) => {
     loading: false,
     progress: "",
     treeStale: false,
-    focusedClusterId: null,
     weights: { pecore_g: 1.0, color: 0.5 },
     usePatches: false,
     useRerank: true,
@@ -291,22 +287,6 @@ export const useListStore = create<ListState>((set, get) => {
 
     markTreeStale: () => set({ treeStale: true }),
 
-    setFocusedCluster: (id) => set({ focusedClusterId: id }),
-    moveFocus: (direction) => {
-      const { clusterData, focusedClusterId } = get();
-      if (!clusterData || clusterData.clusters.length === 0) return;
-      const clusters = clusterData.clusters;
-      if (!focusedClusterId) {
-        set({ focusedClusterId: clusters[direction === 1 ? 0 : clusters.length - 1]!.id });
-        return;
-      }
-      const idx = clusters.findIndex((c) => c.id === focusedClusterId);
-      const next = idx + direction;
-      if (next >= 0 && next < clusters.length) {
-        set({ focusedClusterId: clusters[next]!.id });
-      }
-    },
-
     renameCluster: (clusterId, name) => {
       const { clusterData } = get();
       if (!clusterData) return;
@@ -428,21 +408,20 @@ export const useListStore = create<ListState>((set, get) => {
       });
     },
 
-    insertClusterFromFilenames: (name, filenames) => {
+    insertClusterFromFilenames: (name, filenames, afterClusterId) => {
       const { clusterData } = get();
       if (!clusterData || filenames.length === 0) return;
-      const deduped = [...new Set(filenames)];
       const newCluster: ClusterResultData = {
         id: `nn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         autoName: name || "From NN",
         autoTags: [],
-        images: deduped,
+        images: [...new Set(filenames)],
         confirmedGroup: null,
       };
-      set({
-        clusterData: { ...clusterData, clusters: [newCluster, ...clusterData.clusters] },
-        focusedClusterId: newCluster.id,
-      });
+      const newClusters = [...clusterData.clusters];
+      const afterIdx = afterClusterId ? newClusters.findIndex((c) => c.id === afterClusterId) : -1;
+      newClusters.splice(afterIdx >= 0 ? afterIdx + 1 : 0, 0, newCluster);
+      set({ clusterData: { ...clusterData, clusters: newClusters } });
     },
   };
 });

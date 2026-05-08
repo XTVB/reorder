@@ -1,8 +1,8 @@
-import type React from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { imageUrl } from "../../utils/helpers.ts";
+import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { FloatingPopoverContent } from "../shared/GroupPopover.tsx";
+import { ImageThumb } from "../shared/ImageThumb.tsx";
 
 const MARGIN = 16;
 const GAP_BELOW_CARD = 8;
@@ -11,7 +11,6 @@ interface MergePopoverProps {
   anchorRect: DOMRect;
   displayName: string;
   images: string[];
-  onOpenLightbox: (images: string[], index: number) => void;
   onClose: () => void;
 }
 
@@ -20,15 +19,10 @@ interface MergePopoverProps {
  * the row's overflow-x clipping, anchors visually below the clicked card's
  * rect, clamps to viewport, closes on escape / click-outside / scroll.
  */
-export function MergePopover({
-  anchorRect,
-  displayName,
-  images,
-  onOpenLightbox,
-  onClose,
-}: MergePopoverProps) {
+export function MergePopover({ anchorRect, displayName, images, onClose }: MergePopoverProps) {
   const popRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const lightboxOpen = useLightboxStore((s) => s.open);
 
   // Position below the anchor card, clamped to viewport. Use layout effect so
   // the popover doesn't flicker at (0,0) on its first paint.
@@ -51,8 +45,10 @@ export function MergePopover({
     setPos({ top, left });
   }, [anchorRect]);
 
-  // Close on escape, outside click, or ancestor scroll
+  // Close on escape, outside click, or ancestor scroll. Defer to the lightbox
+  // when it's open so its escape/click consumes the event first.
   useEffect(() => {
+    if (lightboxOpen) return;
     function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
     }
@@ -74,7 +70,7 @@ export function MergePopover({
       window.removeEventListener("scroll", handleScroll, true);
       window.removeEventListener("pointerdown", handlePointerDown, true);
     };
-  }, [onClose]);
+  }, [onClose, lightboxOpen]);
 
   return createPortal(
     <div
@@ -100,35 +96,20 @@ export function MergePopover({
         }
       >
         {images.map((fn, i) => (
-          <MergeExpandedThumb key={fn} filename={fn} onClick={() => onOpenLightbox(images, i)} />
+          <ImageThumb
+            key={fn}
+            filename={fn}
+            lightboxImages={images}
+            lightboxIndex={i}
+            footer={
+              <span className="image-thumb-name" title={fn}>
+                {fn}
+              </span>
+            }
+          />
         ))}
       </FloatingPopoverContent>
     </div>,
     document.body,
-  );
-}
-
-function MergeExpandedThumb({
-  filename,
-  onClick,
-}: {
-  filename: string;
-  onClick: (e: React.MouseEvent) => void;
-}) {
-  return (
-    <div className="card group-image-card merge-expanded-thumb" onClick={onClick}>
-      <img
-        className="card-thumb"
-        src={imageUrl(filename)}
-        alt={filename}
-        loading="lazy"
-        draggable={false}
-      />
-      <div className="card-info">
-        <span className="card-name" title={filename}>
-          {filename}
-        </span>
-      </div>
-    </div>
   );
 }

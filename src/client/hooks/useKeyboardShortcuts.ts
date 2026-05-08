@@ -1,9 +1,15 @@
 import { useEffect, useRef } from "react";
 import { useModalStore } from "../stores/core/modalStore.ts";
 import { useSelectionStore } from "../stores/core/selectionStore.ts";
+import { useFolderStore } from "../stores/folderStore.ts";
 import { useGroupStore } from "../stores/groupStore.ts";
 import { useTrashStore } from "../stores/trashStore.ts";
-import { selectedImageFilenames } from "../utils/helpers.ts";
+import {
+  fromFolderSortId,
+  fromGroupSortId,
+  isFolderSortId,
+  isGroupSortId,
+} from "../utils/helpers.ts";
 
 interface KeyboardShortcutsDeps {
   isLightboxOpen: boolean;
@@ -54,13 +60,23 @@ export function useKeyboardShortcuts({
           useModalStore.getState().openModal("groupPicker");
         }
       } else if (e.key === "d" || e.key === "D") {
-        const fns = selectedImageFilenames(useSelectionStore.getState().contexts.reorder);
-        if (fns.length === 0) return;
-        const trash = useTrashStore.getState();
-        const trashSet = useSelectionStore.getState().contexts.trash;
-        const allMarked = fns.every((fn) => trashSet.has(fn));
-        if (allMarked) trash.unmark(fns);
-        else trash.mark(fns);
+        const selection = useSelectionStore.getState().contexts.reorder;
+        if (selection.size === 0) return;
+        const groupMap = useGroupStore.getState().groupMap;
+        const folderMap = useFolderStore.getState().folderMap;
+        const fns = new Set<string>();
+        for (const id of selection) {
+          if (isGroupSortId(id)) {
+            const group = groupMap.get(fromGroupSortId(id));
+            if (group) for (const fn of group.images) fns.add(fn);
+          } else if (isFolderSortId(id)) {
+            const folder = folderMap.get(fromFolderSortId(id));
+            if (folder) for (const fn of folder.images) fns.add(fn);
+          } else {
+            fns.add(id);
+          }
+        }
+        useTrashStore.getState().toggleMany([...fns]);
       }
     }
     window.addEventListener("keydown", handleKey);

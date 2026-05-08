@@ -132,7 +132,7 @@
   top: calc(100% + 6px);
   left: 0;
   z-index: 30;
-  min-width: 180px;
+  width: max-content;
   padding: 4px;
   background: var(--surface-elevated);
   border: 1px solid var(--border);
@@ -141,6 +141,11 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
+}
+
+.overflow-menu-panel--right {
+  left: auto;
+  right: 0;
 }
 
 .overflow-menu-item {

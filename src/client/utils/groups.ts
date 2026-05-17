@@ -10,6 +10,13 @@
 
 import type { ImageGroup } from "../types.ts";
 
+/** Every filename that lives in some group (one pass; for ungrouped math). */
+export function groupedFilenameSet(groups: ImageGroup[]): Set<string> {
+  const set = new Set<string>();
+  for (const g of groups) for (const fn of g.images) set.add(fn);
+  return set;
+}
+
 function stripFromOthers(
   groups: ImageGroup[],
   filenames: Set<string>,

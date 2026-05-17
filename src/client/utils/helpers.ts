@@ -1,6 +1,7 @@
 import { postJson } from "../api/client.ts";
 import { useImageStore } from "../stores/imageStore.ts";
 import type { ImageGroup, ImageInfo } from "../types.ts";
+import { groupedFilenameSet } from "./groups.ts";
 export const GROUP_PREFIX = "group:";
 export const FOLDER_PREFIX = "folder:";
 
@@ -127,11 +128,10 @@ export function reorderImagesByGroups(
   imageMap: Map<string, ImageInfo>,
   groups: ImageGroup[],
 ): ImageInfo[] {
-  const grouped = new Set<string>();
+  const grouped = groupedFilenameSet(groups);
   const result: ImageInfo[] = [];
   for (const g of groups) {
     for (const fn of g.images) {
-      grouped.add(fn);
       const img = imageMap.get(fn);
       if (img) result.push(img);
     }

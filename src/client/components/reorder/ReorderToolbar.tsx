@@ -420,6 +420,35 @@ export function ReorderToolbar() {
           </button>
           <button
             className="btn btn-secondary btn-icon"
+            onClick={() => openModal("createGroups")}
+            title="Sort ungrouped photos into new groups"
+            aria-label="Create groups from ungrouped photos"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" role="presentation">
+              <path
+                d="M3 7a2 2 0 0 1 2-2h3l2 2h6a2 2 0 0 1 2 2v3"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M3 7v10a2 2 0 0 0 2 2h8"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M18 15v6M15 18h6"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+          <button
+            className="btn btn-secondary btn-icon"
             onClick={handleOrganizeClick}
             disabled={saving}
             title="Organize groups into folders"

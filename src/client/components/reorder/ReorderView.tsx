@@ -40,6 +40,7 @@ import {
   toFolderSortId,
   toGroupSortId,
 } from "../../utils/helpers.ts";
+import { CreateGroupsModal } from "../shared/CreateGroupsModal.tsx";
 import { FolderPopover } from "../shared/FolderPopover.tsx";
 import { GroupPopover } from "../shared/GroupPopover.tsx";
 import { GroupThumbGrid } from "../shared/GroupThumbGrid.tsx";
@@ -113,6 +114,7 @@ export function ReorderView() {
   const showOrganize = useModalStore((s) => s.open.organize);
   const showPaths = useModalStore((s) => s.open.paths);
   const showReview = useModalStore((s) => s.open.review);
+  const showCreateGroups = useModalStore((s) => s.open.createGroups);
   const showTrashModal = useModalStore((s) => s.open.trash);
   const closeModal = useModalStore((s) => s.closeModal);
   const slideshow = useSessionStore((s) => s.slideshow);
@@ -642,6 +644,8 @@ export function ReorderView() {
       )}
 
       {showReview && <ReviewModal onClose={() => closeModal("review")} />}
+
+      {showCreateGroups && <CreateGroupsModal onClose={() => closeModal("createGroups")} />}
 
       {showTrashModal && <TrashModal onClose={() => closeModal("trash")} />}
     </SearchContext.Provider>

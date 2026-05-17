@@ -3,7 +3,14 @@
 
 import { create } from "zustand";
 
-export type ModalName = "preview" | "organize" | "review" | "paths" | "trash" | "groupPicker";
+export type ModalName =
+  | "preview"
+  | "organize"
+  | "review"
+  | "createGroups"
+  | "paths"
+  | "trash"
+  | "groupPicker";
 
 interface ModalState {
   open: Record<ModalName, boolean>;
@@ -18,6 +25,7 @@ const INITIAL: Record<ModalName, boolean> = {
   preview: false,
   organize: false,
   review: false,
+  createGroups: false,
   paths: false,
   trash: false,
   groupPicker: false,

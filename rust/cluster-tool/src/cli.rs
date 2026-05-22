@@ -58,6 +58,12 @@ pub(crate) struct Cli {
     #[arg(long, default_value_t = 0.0)]
     pub pecore_g_weight: f32,
 
+    /// Learned-projection-head feature weight. The features are pre-computed at
+    /// extraction time by pushing PE-G + color through the trained head and
+    /// stored as `learned_proj` in the hash cache NPZ. Already L2-normalized.
+    #[arg(long, default_value_t = 0.0)]
+    pub learned_proj_weight: f32,
+
     /// Path to precomputed condensed distance matrix binary
     #[arg(long, default_value = "")]
     pub dist_matrix: String,

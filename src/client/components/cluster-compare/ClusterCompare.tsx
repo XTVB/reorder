@@ -21,9 +21,10 @@ const WEIGHT_KEYS: { key: keyof Weights; label: string; desc: string }[] = [
   { key: "pecore_l", label: "PE-Core L", desc: "L-14-336 (1024d)" },
   { key: "pecore_g", label: "PE-Core G", desc: "bigG-14-448 (1280d)" },
   { key: "color", label: "Color", desc: "HSV+RGB 3x3 spatial (693d)" },
+  { key: "learned_proj", label: "Learned head", desc: "Trained projection of PE-G + color (256d)" },
 ];
 
-const ZERO_WEIGHTS: Weights = { clip: 0, dino: 0, dinov3: 0, pecore_l: 0, pecore_g: 0, color: 0 };
+const ZERO_WEIGHTS: Weights = { clip: 0, dino: 0, dinov3: 0, pecore_l: 0, pecore_g: 0, color: 0, learned_proj: 0 };
 
 const PRESETS: { label: string; weights: Weights }[] = [
   { label: "CLIP + color (old baseline)", weights: { ...ZERO_WEIGHTS, clip: 1.0, color: 0.5 } },
@@ -54,7 +55,7 @@ const PRESETS: { label: string; weights: Weights }[] = [
   },
   {
     label: "All models equal",
-    weights: { clip: 1.0, dino: 1.0, dinov3: 1.0, pecore_l: 1.0, pecore_g: 1.0, color: 0.5 },
+    weights: { clip: 1.0, dino: 1.0, dinov3: 1.0, pecore_l: 1.0, pecore_g: 1.0, color: 0.5, learned_proj: 0 },
   },
 ];
 

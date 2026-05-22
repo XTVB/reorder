@@ -65,6 +65,92 @@ DINOV3_WEIGHTS = os.environ.get(
 CHECKPOINT_SEC = 300  # periodic cache save interval during extraction
 
 
+def _compute_learned_proj(peg_arr, color_arr):
+    """Project (PE-G, color) features through the trained head at ~/.cache/reorder/.
+    Returns (proj_array, version_string) or None if no head is installed.
+    PE-G is L2-renormalized before concat (defensive — should already be unit norm
+    but extract paths vary across backends)."""
+    head_dir = os.environ.get("REORDER_HEAD_DIR", os.path.expanduser("~/.cache/reorder"))
+    head_pt = os.path.join(head_dir, "learned_head.pt")
+    head_cfg_path = os.path.join(head_dir, "learned_head.json")
+    if not (os.path.exists(head_pt) and os.path.exists(head_cfg_path)):
+        return None
+    with open(head_cfg_path) as f:
+        cfg = json.load(f)
+
+    # Lazy imports — torch is heavy; only pay the cost if we have a head.
+    import torch  # noqa: PLC0415
+    refinement_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "clusteringRefinement",
+    )
+    if refinement_dir not in sys.path:
+        sys.path.insert(0, refinement_dir)
+    from train_projection_head import ProjectionHead  # noqa: PLC0415
+
+    head = ProjectionHead(
+        in_dim=cfg["input_dim_total"],
+        hidden=cfg["hidden"],
+        out_dim=cfg["out_dim"],
+        dropout=cfg.get("dropout", 0.1),
+    )
+    head.load_state_dict(torch.load(head_pt, map_location="cpu", weights_only=True))
+    head.eval()
+
+    # L2-renormalize PE-G defensively, keep color raw (matches training-time loader).
+    peg = peg_arr.astype(np.float32, copy=False)
+    peg = peg / np.linalg.norm(peg, axis=1, keepdims=True).clip(min=1e-8)
+    feats = np.concatenate([peg, color_arr.astype(np.float32, copy=False)], axis=1)
+    assert feats.shape[1] == cfg["input_dim_total"], (
+        f"learned_proj input dim mismatch: got {feats.shape[1]}, head expects {cfg['input_dim_total']}"
+    )
+
+    out = np.empty((feats.shape[0], cfg["out_dim"]), dtype=np.float32)
+    with torch.no_grad():
+        for i in range(0, feats.shape[0], 512):
+            batch = torch.from_numpy(feats[i:i + 512])
+            out[i:i + 512] = head(batch).numpy()
+    return out, cfg["version"]
+
+
+def _maybe_update_learned_proj(npz_path):
+    """Idempotently ensure the NPZ contains learned_proj matching the current head
+    version. No-op when the head isn't installed or learned_proj is already
+    current. Called by main() in both the early-exit (cache fully valid) and
+    full-save paths so the projection stays in sync with the live head."""
+    if not os.path.exists(npz_path):
+        return
+    head_dir = os.environ.get("REORDER_HEAD_DIR", os.path.expanduser("~/.cache/reorder"))
+    head_cfg_path = os.path.join(head_dir, "learned_head.json")
+    if not os.path.exists(head_cfg_path):
+        return
+    with open(head_cfg_path) as f:
+        head_cfg = json.load(f)
+    current_version = head_cfg["version"]
+
+    data = np.load(npz_path, allow_pickle=True)
+    if "pecore_g" not in data.files or "color" not in data.files:
+        return
+    stored_version = str(data["_v_learned_proj"]) if "_v_learned_proj" in data.files else None
+    if stored_version == current_version and "learned_proj" in data.files:
+        # Already current
+        return
+
+    result = _compute_learned_proj(data["pecore_g"], data["color"])
+    if result is None:
+        return
+    lp_arr, lp_version = result
+
+    # Reconstruct NPZ with learned_proj added/updated. Preserve all other keys
+    # (including version keys for the other models).
+    arrays = {k: data[k] for k in data.files if k not in ("learned_proj", "_v_learned_proj")}
+    arrays["learned_proj"] = lp_arr
+    arrays["_v_learned_proj"] = np.array(lp_version)
+    np.savez_compressed(npz_path, **arrays)
+    print(f"  learned_proj: updated NPZ ({lp_arr.shape[0]} × {lp_arr.shape[1]}d, head {lp_version})",
+          file=sys.stderr)
+
+
 def content_hash(filepath: str) -> str:
     """Fast content-based hash: blake2b(first 16KB + file size)."""
     size = os.path.getsize(filepath)
@@ -749,6 +835,7 @@ def main():
 
     if not needs_new_images and not needs_model_reextract and not needs_zero_fill:
         print("All features cached, nothing to extract.", file=sys.stderr)
+        _maybe_update_learned_proj(hash_cache_path)
         json.dump({
             "total": len(image_files), "cached": len(image_files),
             "extracted": 0, "cachePath": hash_cache_path,
@@ -1029,6 +1116,7 @@ def main():
         **all_arrays,
     )
     print(f"  Saved hash cache: {hash_cache_path}", file=sys.stderr)
+    _maybe_update_learned_proj(hash_cache_path)
 
     with open(hash_cache_order_path, "w") as f:
         json.dump(final_hash_list, f)

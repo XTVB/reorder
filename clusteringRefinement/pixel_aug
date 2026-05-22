@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Controller for the pixel-aug pre-extraction. Wraps run_pixel_aug_extraction.sh
+# with start/stop/status/log/resume commands so it can be paused while the
+# computer is in use and resumed later (the underlying extraction is checkpointed
+# every 200 images per dataset, so pause/resume loses at most that many).
+#
+#   pixel_aug start    # start (or resume if previously paused)
+#   pixel_aug stop     # stop cleanly (kills the python process tree)
+#   pixel_aug status   # show running state + per-dataset progress
+#   pixel_aug log      # tail the running log
+#   pixel_aug help
+
+PIDFILE=/tmp/pixel_aug.pid
+LOGFILE=/tmp/pixel_aug.log
+RUNNER=/Users/abdudh/dev/utilities/reorder/clusteringRefinement/run_pixel_aug_extraction.sh
+
+is_running() {
+  [[ -f $PIDFILE ]] && kill -0 "$(cat $PIDFILE)" 2>/dev/null
+}
+
+cmd_start() {
+  if is_running; then
+    echo "Already running (pid $(cat $PIDFILE)). Use 'stop' first or 'status' to monitor."
+    return 1
+  fi
+  # nohup + setsid so it survives terminal close.
+  nohup "$RUNNER" >>"$LOGFILE" 2>&1 &
+  echo $! > "$PIDFILE"
+  echo "Started pid $(cat $PIDFILE)."
+  echo "  Log: $LOGFILE"
+  echo "  Pause: pixel_aug stop"
+  echo "  Resume: pixel_aug start  (resumes from last checkpoint)"
+}
+
+cmd_stop() {
+  if ! is_running; then
+    echo "Not running."
+    rm -f "$PIDFILE"
+    return 0
+  fi
+  local pid
+  pid=$(cat "$PIDFILE")
+  # Kill children first (the python extractor) so the wrapper exits cleanly.
+  pkill -P "$pid" 2>/dev/null
+  # Also kill any python extract_augmented_views still floating from a nested call.
+  pkill -f extract_augmented_views.py 2>/dev/null
+  kill "$pid" 2>/dev/null
+  # Give it a moment, then force if needed.
+  sleep 1
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid" 2>/dev/null
+    pkill -9 -f extract_augmented_views.py 2>/dev/null
+  fi
+  rm -f "$PIDFILE"
+  echo "Stopped. Run 'pixel_aug start' to resume from last checkpoint."
+}
+
+# Show progress per dataset based on views_meta.json — no running process required.
+cmd_status() {
+  if is_running; then
+    echo "STATUS: running (pid $(cat $PIDFILE))"
+  else
+    echo "STATUS: not running"
+  fi
+  echo ""
+  echo "Per-dataset progress:"
+  ~/.venvs/imgcluster-env/bin/python3 - <<'PY'
+import json, os
+dirs = [
+    "ClusteringBenchmark1", "ClusteringBenchmark2", "ClusteringBenchmark3",
+    "ClusteringBenchmark4", "ClusteringBenchmark5", "ClusteringBenchmark6",
+    "ClusteringBenchmark8", "ClusteringBenchmark9", "ClusteringBenchmark10",
+    "ClusteringBenchmark11", "ClusteringBenchmark12",
+]
+base = "/Users/abdudh/Downloads/PicsStaging"
+total_done = total = 0
+for d in dirs:
+    meta_path = f"{base}/{d}/.reorder-cache/views_meta.json"
+    ch_path = f"{base}/{d}/.reorder-cache/content_hashes.json"
+    if not os.path.exists(ch_path):
+        print(f"  {d:<24} : (no cache)")
+        continue
+    n_imgs = len(json.load(open(ch_path)))
+    if os.path.exists(meta_path):
+        m = json.load(open(meta_path))
+        done = m.get("completed_through", 0)
+        n_views = m.get("n_views", 0)
+        pct = 100.0 * done / max(n_imgs, 1)
+        bar_len = 30
+        filled = int(bar_len * done / max(n_imgs, 1))
+        bar = "█" * filled + "░" * (bar_len - filled)
+        print(f"  {d:<24} : [{bar}] {done:>5}/{n_imgs:<5} ({pct:5.1f}%) K={n_views}")
+    else:
+        bar = "░" * 30
+        print(f"  {d:<24} : [{bar}] {0:>5}/{n_imgs:<5} (  0.0%) (not started)")
+    total_done += min(done if os.path.exists(meta_path) else 0, n_imgs)
+    total += n_imgs
+print()
+print(f"OVERALL: {total_done}/{total} images ({100.0*total_done/max(total,1):.1f}%)")
+PY
+}
+
+cmd_log() {
+  if [[ ! -f $LOGFILE ]]; then
+    echo "No log file yet."
+    return 1
+  fi
+  echo "Tailing $LOGFILE (Ctrl-C to stop watching, extraction keeps running):"
+  tail -f "$LOGFILE"
+}
+
+cmd_help() {
+  cat <<EOF
+pixel_aug — controller for overnight pixel-augmented view extraction.
+
+Usage:
+  pixel_aug start    Start the extraction. If a previous run was paused, it
+                     resumes from the last checkpoint (every 200 images).
+  pixel_aug stop     Pause the extraction cleanly. Safe to resume later.
+  pixel_aug status   Show whether it's running + per-dataset progress bars.
+  pixel_aug log      Tail the live log.
+  pixel_aug help     This message.
+
+Files:
+  pidfile : $PIDFILE
+  log     : $LOGFILE
+  outputs : <dataset>/.reorder-cache/pecore_g_views.npy + color_views.npy
+
+Configured datasets (M7 skipped — already has very high images/group):
+  M1, M2, M3, M4, M5, M6, M8, M9, M10, M11, M12
+EOF
+}
+
+case "${1:-help}" in
+  start)  cmd_start ;;
+  stop|pause)  cmd_stop ;;
+  status) cmd_status ;;
+  log|tail) cmd_log ;;
+  help|--help|-h) cmd_help ;;
+  *) echo "unknown command: $1"; cmd_help; exit 1 ;;
+esac

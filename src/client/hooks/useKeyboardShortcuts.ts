@@ -43,9 +43,8 @@ export function useKeyboardShortcuts({
           searchState.close();
           return;
         }
-        const expId = useGroupStore.getState().expandedGroupId;
-        if (expId) collapseGroup();
-        else if (useSelectionStore.getState().contexts.reorder.size > 0) clear("reorder");
+        if (useSelectionStore.getState().contexts.reorder.size > 0) clear("reorder");
+        else if (useGroupStore.getState().expandedGroupId) collapseGroup();
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;

@@ -54,6 +54,7 @@ export interface WeightConfig {
   dinov3?: number;
   pecore_l?: number;
   pecore_g?: number;
+  learned_proj?: number;
 }
 
 export interface ClusterResultData {

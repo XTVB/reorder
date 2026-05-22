@@ -22,6 +22,7 @@ const WEIGHT_LABELS: { key: keyof Required<WeightConfig>; label: string }[] = [
   { key: "pecore_l", label: "PE-L" },
   { key: "pecore_g", label: "PE-G" },
   { key: "color", label: "Color" },
+  { key: "learned_proj", label: "Learned head" },
 ];
 
 /** Binary search: count how many sorted distances are < threshold */

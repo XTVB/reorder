@@ -95,12 +95,27 @@ fn main() {
     let groups = load_groups(&cli.groups, &fname_to_idx);
     eprintln!("Loaded {} confirmed groups", groups.len());
 
-    // Load embeddings (skip if using precomputed distance matrix)
+    // Load embeddings if ANY model weight is positive. The previous behavior
+    // skipped embedding loading whenever --dist-matrix was provided, which made
+    // blending the precomputed matrix with embedding distances impossible. Now
+    // the two coexist: with both, linkage.rs blends them via dist_matrix_weight.
+    let emb_specs: Vec<(&str, f32, bool)> = vec![
+        ("clip", cli.clip_weight, false),
+        ("dino", cli.dino_weight, false),
+        ("dinov3", cli.dinov3_weight, false),
+        ("pecore_l", cli.pecore_l_weight, false),
+        ("pecore_g", cli.pecore_g_weight, false),
+        ("color", cli.color_weight, true),
+        // Learned head output: already L2-normalized by the projection head's
+        // final F.normalize(), so we don't re-normalize here.
+        ("learned_proj", cli.learned_proj_weight, false),
+    ];
+    let any_active = emb_specs.iter().any(|(_, w, _)| *w > 0.0);
     let features_flat: Vec<f32>;
     let feat_dim: usize;
 
-    if use_dist_matrix {
-        eprintln!("Using precomputed distance matrix — skipping embedding loading");
+    if !any_active {
+        eprintln!("No embedding weights set — using precomputed distance matrix only");
         features_flat = vec![];
         feat_dim = 0;
     } else {
@@ -108,14 +123,6 @@ fn main() {
         let file = File::open(&cli.hash_cache).expect("Failed to open hash cache file");
         let mut npz = NpzReader::new(file).expect("Failed to read npz");
 
-        let emb_specs: Vec<(&str, f32, bool)> = vec![
-            ("clip", cli.clip_weight, false),
-            ("dino", cli.dino_weight, false),
-            ("dinov3", cli.dinov3_weight, false),
-            ("pecore_l", cli.pecore_l_weight, false),
-            ("pecore_g", cli.pecore_g_weight, false),
-            ("color", cli.color_weight, true),
-        ];
         let loaded: Vec<(Array2<f32>, f32, bool)> = emb_specs
             .iter()
             .filter(|(_, w, _)| *w > 0.0)

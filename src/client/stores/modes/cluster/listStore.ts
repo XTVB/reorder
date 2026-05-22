@@ -104,7 +104,7 @@ export const useListStore = create<ListState>((set, get) => {
     loading: false,
     progress: "",
     treeStale: false,
-    weights: { pecore_g: 1.0, color: 0.5 },
+    weights: { pecore_g: 1.0, color: 0.5, learned_proj: 0.45 },
     usePatches: false,
     useRerank: true,
     rerankBlend: 0.7,

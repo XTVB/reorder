@@ -2,8 +2,15 @@
 // rest of the codebase. Internal helpers (cache clearers, tree-cut primitives,
 // resolved-constraint writers, etc.) stay private inside their sub-modules.
 
-export type { Constraints } from "./constraints.ts";
-export { loadConstraints, mutateConstraints, pruneDanglingConstraints } from "./constraints.ts";
+export type { Constraints, RejectedMergePair } from "./constraints.ts";
+export {
+  loadConstraints,
+  mergePairKey,
+  mutateConstraints,
+  normalizeMergePair,
+  pruneDanglingConstraints,
+  writeResolvedRejectedPairsFile,
+} from "./constraints.ts";
 export { generateContactSheet } from "./contact-sheets.ts";
 export { ensurePatchDistMatrix, loadPatchDistMatrix } from "./distance-matrices.ts";
 export type { ModelEmbedding, ModelKey } from "./embeddings.ts";

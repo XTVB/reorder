@@ -37,6 +37,12 @@ pub(crate) struct Cli {
     #[arg(long, default_value_t = 0)]
     pub max_combined_size: usize,
 
+    /// Optional JSON file of group-id pairs to skip entirely (merge-suggestions
+    /// mode only). Shape: [{ "groupA": "...", "groupB": "..." }, ...]. Pairs
+    /// are unordered.
+    #[arg(long, default_value = "")]
+    pub rejected_pairs: String,
+
     /// Mode: "merge-suggestions" (default) or "dist-matrix"
     #[arg(long, value_enum, default_value_t = Mode::MergeSuggestions)]
     pub mode: Mode,

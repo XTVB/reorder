@@ -13,6 +13,7 @@ interface Props {
   onMaxCombinedSizeChange: (n: number) => void;
   onCompute: () => void;
   onApply: () => void;
+  onRejectSelected: () => void;
   onUndo: () => void;
   onClear: () => void;
   onExpandAll: () => void;
@@ -34,6 +35,7 @@ export function MergeSuggestionsToolbar({
   onMaxCombinedSizeChange,
   onCompute,
   onApply,
+  onRejectSelected,
   onUndo,
   onClear,
   onExpandAll,
@@ -124,6 +126,13 @@ export function MergeSuggestionsToolbar({
         <div className="merge-toolbar-actions">
           <button className="btn btn-success" onClick={onApply}>
             Apply {pendingCount} merge{pendingCount > 1 ? "s" : ""}
+          </button>
+          <button
+            className="btn btn-danger"
+            onClick={onRejectSelected}
+            title="Hide these pairs from future suggestions. Will not recompute."
+          >
+            Reject {pendingCount} selected
           </button>
           <button className="btn btn-small" onClick={onClear}>
             Clear

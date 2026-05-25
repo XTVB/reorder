@@ -1,6 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRemeasureVirtualRows } from "../../hooks/useRemeasureVirtualRows.ts";
+import { useConstraintsStore } from "../../stores/constraintsStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useSessionStore } from "../../stores/core/sessionStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
@@ -11,6 +12,10 @@ import { MergePopover } from "./MergePopover.tsx";
 import type { OpenCardHandler } from "./MergeSuggestionCard.tsx";
 import { MergeSuggestionRow } from "./MergeSuggestionRow.tsx";
 import { MergeSuggestionsToolbar } from "./MergeSuggestionsToolbar.tsx";
+
+function mergePairKey(a: string, b: string): string {
+  return a <= b ? `${a}|${b}` : `${b}|${a}`;
+}
 
 interface ExpandedCard {
   refGroupId: string;
@@ -35,6 +40,8 @@ export function MergeSuggestions() {
   const collapsedRows = useMergeSuggestionsStore((s) => s.collapsedRows);
   const pendingMerges = useSelectionStore((s) => s.rowSelections["merge-suggestions"]);
   const undoStack = useMergeSuggestionsStore((s) => s.undoStack);
+  const rejectedMerges = useConstraintsStore((s) => s.rejectedMerges);
+  const addRejectedMerges = useConstraintsStore((s) => s.addRejectedMerges);
 
   const setThreshold = useMergeSuggestionsStore((s) => s.setThreshold);
   const setFullResolution = useMergeSuggestionsStore((s) => s.setFullResolution);
@@ -74,23 +81,54 @@ export function MergeSuggestions() {
 
   const handleClosePopover = useCallback(() => setExpandedCard(null), []);
 
+  // Reject every currently-selected candidate. Persists to constraints and
+  // clears the selection; intentionally does NOT trigger a recompute — the
+  // client-side filter hides the rejected pairs until the user hits Compute.
+  const handleRejectSelected = useCallback(() => {
+    const sel = useSelectionStore.getState().rowSelections["merge-suggestions"];
+    const pairs: { groupA: string; groupB: string }[] = [];
+    for (const [refId, candidateIds] of sel) {
+      for (const candId of candidateIds) {
+        pairs.push({ groupA: refId, groupB: candId });
+      }
+    }
+    if (pairs.length === 0) return;
+    void addRejectedMerges(pairs);
+    useSelectionStore.getState().clearRowContext("merge-suggestions");
+  }, [addRejectedMerges]);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only — fetchGroups is a stable Zustand action
   useEffect(() => {
     fetchGroups();
   }, []);
 
+  // Apply rejected-merge filter client-side too, so a freshly-rejected pair
+  // disappears immediately without a recompute. Drop empty rows entirely.
+  const filteredSuggestions = useMemo(() => {
+    if (!suggestions || rejectedMerges.size === 0) return suggestions;
+    const out: MergeSuggestionRowType[] = [];
+    for (const row of suggestions) {
+      const kept = row.similar.filter(
+        (c) => !rejectedMerges.has(mergePairKey(row.refGroupId, c.groupId)),
+      );
+      if (kept.length === 0) continue;
+      out.push(kept.length === row.similar.length ? row : { ...row, similar: kept });
+    }
+    return out;
+  }, [suggestions, rejectedMerges]);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: setHeaderSubtitle is a stable Zustand action
   useEffect(() => {
-    if (suggestions) {
-      setHeaderSubtitle(`${suggestions.length} groups with merge candidates`);
+    if (filteredSuggestions) {
+      setHeaderSubtitle(`${filteredSuggestions.length} groups with merge candidates`);
     } else {
       setHeaderSubtitle("");
     }
     return () => setHeaderSubtitle("");
-  }, [suggestions]);
+  }, [filteredSuggestions]);
 
   // Stable reference for empty state
-  const rows = suggestions ?? EMPTY_ROWS;
+  const rows = filteredSuggestions ?? EMPTY_ROWS;
 
   // Virtualization
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -172,6 +210,7 @@ export function MergeSuggestions() {
         onMaxCombinedSizeChange={setMaxCombinedSize}
         onCompute={fetchSuggestions}
         onApply={applyMerges}
+        onRejectSelected={handleRejectSelected}
         onUndo={undo}
         onClear={clearPendingMerges}
         onExpandAll={expandAllRows}

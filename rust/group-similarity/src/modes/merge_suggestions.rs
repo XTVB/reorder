@@ -1,11 +1,52 @@
 use rayon::prelude::*;
 use reorder_common::LoadedGroup;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::patches::Patches;
 use crate::score::patch_match_score;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RejectedPairInput {
+    group_a: String,
+    group_b: String,
+}
+
+/// Load the rejected-pairs JSON file and return an unordered-pair lookup set.
+/// Returns an empty set when the path is empty or the file can't be read —
+/// rejection is a hint, not a correctness requirement.
+fn load_rejected_pairs(path: &str) -> HashSet<(String, String)> {
+    if path.is_empty() {
+        return HashSet::new();
+    }
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Could not read --rejected-pairs file {}: {}", path, e);
+            return HashSet::new();
+        }
+    };
+    let entries: Vec<RejectedPairInput> = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Could not parse --rejected-pairs file {}: {}", path, e);
+            return HashSet::new();
+        }
+    };
+    let mut set = HashSet::with_capacity(entries.len());
+    for e in entries {
+        let (a, b) = if e.group_a <= e.group_b {
+            (e.group_a, e.group_b)
+        } else {
+            (e.group_b, e.group_a)
+        };
+        set.insert((a, b));
+    }
+    set
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,7 +72,12 @@ pub(crate) fn run(
     groups_path: &str,
     min_score: f32,
     max_combined_size: usize,
+    rejected_pairs_path: &str,
 ) {
+    let rejected = load_rejected_pairs(rejected_pairs_path);
+    if !rejected.is_empty() {
+        eprintln!("Skipping {} rejected group pair(s)", rejected.len());
+    }
     let stride_image = patches.stride_image;
     let n_patches = patches.n_patches;
     let patch_dim = patches.patch_dim;
@@ -52,9 +98,24 @@ pub(crate) fn run(
 
     // ── Compute patch match scores for all group pairs (parallel) ────────
     let n_full_pairs = n_groups * (n_groups - 1) / 2;
+    let is_rejected = |i: usize, j: usize| -> bool {
+        if rejected.is_empty() {
+            return false;
+        }
+        let (a, b) = (&groups[i].id, &groups[j].id);
+        let key = if a <= b {
+            (a.clone(), b.clone())
+        } else {
+            (b.clone(), a.clone())
+        };
+        rejected.contains(&key)
+    };
     let pair_indices: Vec<(usize, usize)> = (0..n_groups)
         .flat_map(|i| ((i + 1)..n_groups).map(move |j| (i, j)))
         .filter(|&(i, j)| {
+            if is_rejected(i, j) {
+                return false;
+            }
             max_combined_size == 0
                 || groups[i].member_indices.len() + groups[j].member_indices.len()
                     <= max_combined_size

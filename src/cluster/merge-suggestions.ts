@@ -16,6 +16,7 @@ import {
 } from "../fs/paths.ts";
 import { log } from "../log.ts";
 import { GROUP_SIM_BINARY } from "./binaries.ts";
+import { writeResolvedRejectedPairsFile } from "./constraints.ts";
 import { spawn } from "./subprocess.ts";
 
 export interface GroupPairResult {
@@ -73,20 +74,26 @@ export async function computeMergeSuggestions(
     return out;
   };
 
-  // Disk cache is valid if newer than the groups file, patches cache, and
-  // content_hashes. stat all four in parallel so the staleness check is one
-  // round-trip instead of four.
+  // Write the Rust-input rejected-pairs file up front so its mtime can be
+  // folded into the cache-staleness check below. null = no rejections live.
+  const rejectedPairsPath = await writeResolvedRejectedPairsFile(targetDir);
+
+  // Disk cache is valid if newer than the groups file, patches cache,
+  // content_hashes, and (if present) the resolved rejected-pairs file.
+  // stat them in parallel so the staleness check is one round-trip.
   try {
-    const [cacheStat, groupsStat, patchesStat, hashesStat] = await Promise.all([
+    const [cacheStat, groupsStat, patchesStat, hashesStat, rejectedStat] = await Promise.all([
       stat(resultCachePath),
       stat(groupsP),
       stat(patchesCachePath),
       stat(contentHashesP),
+      rejectedPairsPath ? stat(rejectedPairsPath) : Promise.resolve(null),
     ]);
     if (
       cacheStat.mtimeMs > groupsStat.mtimeMs &&
       cacheStat.mtimeMs > patchesStat.mtimeMs &&
-      cacheStat.mtimeMs > hashesStat.mtimeMs
+      cacheStat.mtimeMs > hashesStat.mtimeMs &&
+      (rejectedStat === null || cacheStat.mtimeMs > rejectedStat.mtimeMs)
     ) {
       const cached = (await Bun.file(resultCachePath).json()) as unknown[];
       // Detect snake_case shape from before the camelCase wire-format migration.
@@ -121,6 +128,9 @@ export async function computeMergeSuggestions(
   ];
   if (maxCombinedSize > 0) {
     args.push("--max-combined-size", String(maxCombinedSize));
+  }
+  if (rejectedPairsPath) {
+    args.push("--rejected-pairs", rejectedPairsPath);
   }
 
   const label = fullRes ? "merge-suggestions-full" : "merge-suggestions";

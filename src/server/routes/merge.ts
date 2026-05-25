@@ -1,7 +1,7 @@
 // /api/merge-suggestions — pairwise group similarity via DINOv3 patch matching.
 
 import type { MergeSuggestionSimilar } from "../../client/types.ts";
-import { computeMergeSuggestions } from "../../cluster/index.ts";
+import { computeMergeSuggestions, loadConstraints, mergePairKey } from "../../cluster/index.ts";
 import { loadGroups } from "../../fs/index.ts";
 import { sseResponse } from "../middleware/sse.ts";
 import type { RouteHandler } from "../types.ts";
@@ -31,12 +31,16 @@ export const mergeRoutes: RouteHandler = async (req, ctx) => {
     });
 
     const groupMap = new Map(loadGroups(targetDir).map((g) => [g.id, g]));
+    const rejectedKeys = new Set(
+      loadConstraints(targetDir).rejectedMergePairs.map((p) => mergePairKey(p.groupA, p.groupB)),
+    );
     const rowMap = new Map<string, { refGroupId: string; similar: MergeSuggestionSimilar[] }>();
 
     for (const d of entries) {
       const gA = groupMap.get(d.groupA);
       const gB = groupMap.get(d.groupB);
       if (!gA || !gB) continue;
+      if (rejectedKeys.has(mergePairKey(d.groupA, d.groupB))) continue;
 
       // 1 - patchMedian so lower = more similar, matching the Ward-distance semantics used by other UI.
       const displayDist = 1 - d.patchMedian;

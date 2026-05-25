@@ -72,6 +72,7 @@ export const SCOPED_DIRNAME = "scoped";
 // Constraint files (Rust-resolved, inside .reorder-cache/)
 export const CANNOT_LINK_RESOLVED_FILE = ".cannot_link_resolved.json";
 export const LOCKED_GROUPS_RESOLVED_FILE = ".locked_groups_resolved.json";
+export const REJECTED_MERGE_PAIRS_RESOLVED_FILE = ".rejected_merge_pairs_resolved.json";
 
 export function contentHashesPath(targetDir: string): string {
   return join(cacheDir(targetDir), CONTENT_HASHES_FILE);

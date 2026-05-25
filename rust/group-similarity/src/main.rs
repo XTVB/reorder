@@ -20,6 +20,7 @@ fn main() {
             &cli.groups,
             cli.min_score,
             cli.max_combined_size,
+            &cli.rejected_pairs,
         ),
     }
 }

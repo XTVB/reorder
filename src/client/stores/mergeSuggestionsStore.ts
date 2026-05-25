@@ -153,10 +153,17 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
 
     const newUndoStack = [...undoStack, currentGroups].slice(-10);
 
+    // Every candidate id in the pending set gets absorbed into its ref and
+    // then removed. Capture before mutating so we can prune the suggestions
+    // list against the same set.
+    const removedIds = new Set<string>();
+    for (const candidateIds of pendingMerges.values()) {
+      for (const candId of candidateIds) removedIds.add(candId);
+    }
+
     groupStore.updateGroups((prev) => {
       const groups = prev.map((g) => ({ ...g, images: [...g.images] }));
       const byId = new Map(groups.map((g) => [g.id, g]));
-      const toRemove = new Set<string>();
 
       for (const [refId, candidateIds] of pendingMerges) {
         const ref = byId.get(refId);
@@ -171,17 +178,40 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
               existing.add(img);
             }
           }
-          toRemove.add(candId);
         }
       }
 
-      return groups.filter((g) => !toRemove.has(g.id));
+      return groups.filter((g) => !removedIds.has(g.id));
+    });
+
+    // Locally prune the suggestions to reflect the merge: drop rows whose
+    // ref or sole candidates were absorbed, refresh image lists for groups
+    // whose contents grew. NO recompute — the user iterates merge-by-merge
+    // and hits Compute explicitly when they're ready.
+    const groupById = new Map(useGroupStore.getState().groups.map((g) => [g.id, g]));
+    set((s) => {
+      if (!s.suggestions) return {};
+      const nextSuggestions: typeof s.suggestions = [];
+      for (const row of s.suggestions) {
+        if (removedIds.has(row.refGroupId)) continue;
+        const filteredSimilar = row.similar.filter((c) => !removedIds.has(c.groupId));
+        if (filteredSimilar.length === 0) continue;
+        const refGroup = groupById.get(row.refGroupId);
+        nextSuggestions.push({
+          ...row,
+          refGroupImages: refGroup ? refGroup.images : row.refGroupImages,
+          similar: filteredSimilar.map((c) => {
+            const g = groupById.get(c.groupId);
+            return g ? { ...c, groupImages: g.images } : c;
+          }),
+        });
+      }
+      return { suggestions: nextSuggestions };
     });
 
     useSelectionStore.getState().clearRowContext("merge-suggestions");
     set({ undoStack: newUndoStack });
     await useGroupStore.getState().flushPending();
-    await get().fetchSuggestions();
   },
 
   undo: async () => {

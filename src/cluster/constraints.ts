@@ -14,6 +14,7 @@ import {
   cacheDir,
   constraintsPath,
   LOCKED_GROUPS_RESOLVED_FILE,
+  REJECTED_MERGE_PAIRS_RESOLVED_FILE,
 } from "../fs/paths.ts";
 import { cachedHashMapping } from "./embeddings.ts";
 
@@ -22,17 +23,35 @@ export interface CannotLinkEntry {
   groupId: string;
 }
 
+export interface RejectedMergePair {
+  groupA: string;
+  groupB: string;
+}
+
 export interface Constraints {
   version: 1;
   imageGroupCannotLink: CannotLinkEntry[];
   lockedGroupIds: string[];
+  rejectedMergePairs: RejectedMergePair[];
 }
 
 const EMPTY_CONSTRAINTS: Constraints = {
   version: 1,
   imageGroupCannotLink: [],
   lockedGroupIds: [],
+  rejectedMergePairs: [],
 };
+
+// Pairs are stored with groupA < groupB so each unordered pair has one
+// canonical representation. Use this everywhere a pair is written or compared.
+export function normalizeMergePair(a: string, b: string): RejectedMergePair {
+  return a <= b ? { groupA: a, groupB: b } : { groupA: b, groupB: a };
+}
+
+export function mergePairKey(a: string, b: string): string {
+  const p = normalizeMergePair(a, b);
+  return `${p.groupA}\t${p.groupB}`;
+}
 
 // Single-writer (this server), so an in-memory copy is authoritative once
 // loaded. mtime keying isn't safe — same-millisecond write/read can collide.
@@ -49,6 +68,23 @@ export function loadConstraints(targetDir: string): Constraints {
   } else {
     try {
       const raw = JSON.parse(readFileSync(path, "utf-8")) as Partial<Constraints>;
+      const rawRejected = Array.isArray(raw.rejectedMergePairs)
+        ? raw.rejectedMergePairs.filter(
+            (p) => p && typeof p.groupA === "string" && typeof p.groupB === "string",
+          )
+        : [];
+      // Normalize and dedupe on load — a malformed file is silently repaired
+      // next time anything writes.
+      const seen = new Set<string>();
+      const rejected: RejectedMergePair[] = [];
+      for (const p of rawRejected) {
+        const n = normalizeMergePair(p.groupA, p.groupB);
+        if (n.groupA === n.groupB) continue;
+        const k = `${n.groupA}\t${n.groupB}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        rejected.push(n);
+      }
       value = {
         version: 1,
         imageGroupCannotLink: Array.isArray(raw.imageGroupCannotLink)
@@ -59,6 +95,7 @@ export function loadConstraints(targetDir: string): Constraints {
         lockedGroupIds: Array.isArray(raw.lockedGroupIds)
           ? raw.lockedGroupIds.filter((id) => typeof id === "string")
           : [],
+        rejectedMergePairs: rejected,
       };
     } catch {
       value = { ...EMPTY_CONSTRAINTS };
@@ -163,12 +200,39 @@ export async function writeResolvedConstraintFiles(
 }
 
 /**
+ * Write the JSON payload that the Rust group-similarity binary consumes via
+ * --rejected-pairs. Returns the path written, or null when there's nothing
+ * to skip. Rejected pairs whose groups no longer exist are dropped.
+ */
+export async function writeResolvedRejectedPairsFile(targetDir: string): Promise<string | null> {
+  const constraints = loadConstraints(targetDir);
+  if (constraints.rejectedMergePairs.length === 0) return null;
+
+  const groups = loadGroups(targetDir);
+  const groupIds = new Set(groups.map((g) => g.id));
+  const live = constraints.rejectedMergePairs.filter(
+    (p) => groupIds.has(p.groupA) && groupIds.has(p.groupB),
+  );
+  if (live.length === 0) return null;
+
+  const out = join(cacheDir(targetDir), REJECTED_MERGE_PAIRS_RESOLVED_FILE);
+  await writeJsonAtomic(out, live, { pretty: false });
+  return out;
+}
+
+/**
  * Drop constraints whose imageHash has no current filename (file gone) or
  * whose groupId no longer exists. Called from remapAfterRename.
  */
 export async function pruneDanglingConstraints(targetDir: string): Promise<void> {
   const c = loadConstraints(targetDir);
-  if (c.imageGroupCannotLink.length === 0 && c.lockedGroupIds.length === 0) return;
+  if (
+    c.imageGroupCannotLink.length === 0 &&
+    c.lockedGroupIds.length === 0 &&
+    c.rejectedMergePairs.length === 0
+  ) {
+    return;
+  }
 
   const groups = loadGroups(targetDir);
   const groupIds = new Set(groups.map((g) => g.id));
@@ -181,10 +245,14 @@ export async function pruneDanglingConstraints(targetDir: string): Promise<void>
     (e) => groupIds.has(e.groupId) && (validHashes === null || validHashes.has(e.imageHash)),
   );
   const filteredLocked = c.lockedGroupIds.filter((id) => groupIds.has(id));
+  const filteredRejected = c.rejectedMergePairs.filter(
+    (p) => groupIds.has(p.groupA) && groupIds.has(p.groupB),
+  );
 
   if (
     filteredCL.length === c.imageGroupCannotLink.length &&
-    filteredLocked.length === c.lockedGroupIds.length
+    filteredLocked.length === c.lockedGroupIds.length &&
+    filteredRejected.length === c.rejectedMergePairs.length
   ) {
     return;
   }
@@ -192,5 +260,6 @@ export async function pruneDanglingConstraints(targetDir: string): Promise<void>
     version: 1,
     imageGroupCannotLink: filteredCL,
     lockedGroupIds: filteredLocked,
+    rejectedMergePairs: filteredRejected,
   });
 }

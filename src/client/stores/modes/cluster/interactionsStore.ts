@@ -28,11 +28,11 @@ import {
  */
 export function dropCannotLinkAgainstGroup(filenames: string[], groupId: string) {
   const store = useConstraintsStore.getState();
-  for (const f of filenames) {
-    if (store.isCannotLinked(f, groupId)) {
-      store.removeImageGroupCannotLink(f, groupId).catch(() => {});
-    }
-  }
+  const pairs = filenames
+    .filter((f) => store.isCannotLinked(f, groupId))
+    .map((filename) => ({ filename, groupId }));
+  if (pairs.length === 0) return;
+  store.removeImageGroupCannotLink(pairs).catch(() => {});
 }
 
 export function commitMergeIntoGroup(participants: ClusterResultData[], winnerGroupId: string) {

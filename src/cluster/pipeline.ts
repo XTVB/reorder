@@ -115,6 +115,47 @@ export type LinkageMethod = "ward" | "average" | "complete";
 
 const DEFAULT_RERANK_BLEND = 0.7;
 
+/**
+ * Re-interpret the `learned_proj` weight as "target fraction of the final cosine
+ * signal" rather than as a raw concat-multiplier.
+ *
+ * For unit-norm sub-vectors fed into rust's concat-then-cosine pipeline, each
+ * component's contribution to the final cosine is wₖ² / Σwⱼ². So to make
+ * learned_proj contribute exactly `b` of the total, we set its raw weight to
+ *   w_learned = √(b · S / (1 − b))    where S = Σ wⱼ² for j ≠ learned_proj.
+ *
+ * Edge cases:
+ *  - b ≤ 0: pass through (no learned head contribution).
+ *  - b ≥ 1, or S == 0: zero out the other weights and set learned_proj to 1.
+ *
+ * This lets the UI slider (and any caller) treat the learned_proj weight as a
+ * percentage of the final signal, independent of how the other model weights
+ * are set.
+ */
+export function rescaleLearnedProjWeight(weights: WeightConfig): WeightConfig {
+  const b = weights.learned_proj ?? 0;
+  if (b <= 0) return weights;
+
+  let s = 0;
+  for (const [key, val] of Object.entries(weights)) {
+    if (key === "learned_proj") continue;
+    const v = val ?? 0;
+    if (v > 0) s += v * v;
+  }
+
+  if (b >= 1 || s === 0) {
+    // 100% learned head — zero out the other components.
+    const out: WeightConfig = { learned_proj: 1 };
+    for (const key of Object.keys(weights)) {
+      if (key !== "learned_proj") (out as Record<string, number>)[key] = 0;
+    }
+    return out;
+  }
+
+  const learnedActual = Math.sqrt((b * s) / (1 - b));
+  return { ...weights, learned_proj: learnedActual };
+}
+
 export interface LinkageOptions {
   usePatches?: boolean;
   useRerank?: boolean;
@@ -189,7 +230,8 @@ export async function runLinkage(
     args.push("--locked-groups", constraintFiles.lockedGroupsPath);
   }
   if (weights) {
-    for (const [key, val] of Object.entries(weights)) {
+    const rescaled = rescaleLearnedProjWeight(weights);
+    for (const [key, val] of Object.entries(rescaled)) {
       if (val !== undefined) args.push(`--${key.replace(/_/g, "-")}-weight`, String(val));
     }
   }
@@ -223,10 +265,17 @@ export { suggestedCounts as computeSuggestedCounts };
 
 /** Derive the set of model keys needed for a given weight config.
  * Only models explicitly given a positive weight are extracted — missing keys
- * mean "don't extract", so CLIP etc. are never pulled unless the user asked for them. */
+ * mean "don't extract", so CLIP etc. are never pulled unless the user asked for them.
+ * learned_proj is derived from pecore_g + color at extraction time, so it implies
+ * both of those as upstream dependencies. */
 export function modelsForWeights(weights?: WeightConfig): string[] | undefined {
   if (!weights) return undefined; // no config → extract all (auto mode)
-  return MODEL_KEYS.filter((k) => (weights[k] ?? 0) > 0);
+  const out = new Set(MODEL_KEYS.filter((k) => (weights[k] ?? 0) > 0));
+  if (out.has("learned_proj")) {
+    out.add("pecore_g");
+    out.add("color");
+  }
+  return Array.from(out);
 }
 
 export async function runFullCluster(

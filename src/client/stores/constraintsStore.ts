@@ -24,11 +24,16 @@ interface ConstraintsState {
   index: Map<string, Set<string>>;
 
   loadConstraints: () => Promise<void>;
-  addImageGroupCannotLink: (filename: string, groupId: string) => Promise<void>;
-  removeImageGroupCannotLink: (filename: string, groupId: string) => Promise<void>;
+  addImageGroupCannotLink: (pairs: CannotLinkPair[]) => Promise<void>;
+  removeImageGroupCannotLink: (pairs: CannotLinkPair[]) => Promise<void>;
   toggleGroupLock: (groupId: string) => Promise<void>;
   isCannotLinked: (filename: string, groupId: string) => boolean;
   isGroupLocked: (groupId: string) => boolean;
+}
+
+export interface CannotLinkPair {
+  filename: string;
+  groupId: string;
 }
 
 function buildIndex(resolved: ResolvedCannotLink[]): Map<string, Set<string>> {
@@ -96,24 +101,24 @@ export const useConstraintsStore = create<ConstraintsState>((set, get) => ({
     }
   },
 
-  addImageGroupCannotLink: async (filename, groupId) => {
-    if (get().isCannotLinked(filename, groupId)) return;
+  addImageGroupCannotLink: async (pairs) => {
+    const novel = pairs.filter((p) => !get().isCannotLinked(p.filename, p.groupId));
+    if (novel.length === 0) return;
     try {
       const payload = await postJson<ServerResponse>("/api/constraints/cannot-link", {
-        imageFilename: filename,
-        groupId,
+        pairs: novel.map((p) => ({ imageFilename: p.filename, groupId: p.groupId })),
         action: "add",
       });
       applyMutationPayload(payload);
     } catch {}
   },
 
-  removeImageGroupCannotLink: async (filename, groupId) => {
-    if (!get().isCannotLinked(filename, groupId)) return;
+  removeImageGroupCannotLink: async (pairs) => {
+    const present = pairs.filter((p) => get().isCannotLinked(p.filename, p.groupId));
+    if (present.length === 0) return;
     try {
       const payload = await postJson<ServerResponse>("/api/constraints/cannot-link", {
-        imageFilename: filename,
-        groupId,
+        pairs: present.map((p) => ({ imageFilename: p.filename, groupId: p.groupId })),
         action: "remove",
       });
       applyMutationPayload(payload);

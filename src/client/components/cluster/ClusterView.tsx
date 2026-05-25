@@ -1,6 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRemeasureVirtualRows } from "../../hooks/useRemeasureVirtualRows.ts";
+import { type CannotLinkPair, useConstraintsStore } from "../../stores/constraintsStore.ts";
 import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useSessionStore } from "../../stores/core/sessionStore.ts";
@@ -8,6 +9,8 @@ import { useGroupStore } from "../../stores/groupStore.ts";
 import {
   clusterShapeHash,
   filenamesFromSelectedImages,
+  findClusterEverywhere,
+  parseImageKey,
   useCompareStore,
   useExpandStore,
   useInteractionsStore,
@@ -104,6 +107,9 @@ export function ClusterView() {
   const groups = useGroupStore((s) => s.groups);
   const fetchGroups = useGroupStore((s) => s.fetchGroups);
   const setHeaderSubtitle = useSessionStore((s) => s.setHeaderSubtitle);
+
+  const cannotLinkIndex = useConstraintsStore((s) => s.index);
+  const addCannotLink = useConstraintsStore((s) => s.addImageGroupCannotLink);
 
   const unsortedClusters = clusterData?.clusters ?? EMPTY_CLUSTERS;
 
@@ -241,6 +247,32 @@ export function ClusterView() {
     if (matchRowIndices.length === 0) return;
     setCurrentMatchIndex((i) => (i - 1 + matchRowIndices.length) % matchRowIndices.length);
   }, [matchRowIndices.length]);
+
+  const rejectableFromSelection = useMemo(() => {
+    if (selectedImages.size === 0) {
+      return { pairs: [] as CannotLinkPair[], keys: new Set<string>() };
+    }
+    const pairs: CannotLinkPair[] = [];
+    const keys = new Set<string>();
+    for (const key of selectedImages) {
+      const { clusterId, filename } = parseImageKey(key);
+      const cluster = findClusterEverywhere(unsortedClusters, splitChildren, clusterId);
+      const group = cluster?.confirmedGroup;
+      if (!group) continue;
+      if (group.images.includes(filename)) continue;
+      if (cannotLinkIndex.get(filename)?.has(group.id)) continue;
+      pairs.push({ filename, groupId: group.id });
+      keys.add(key);
+    }
+    return { pairs, keys };
+  }, [selectedImages, unsortedClusters, splitChildren, cannotLinkIndex]);
+
+  const handleRejectSelected = useCallback(() => {
+    const { pairs, keys } = rejectableFromSelection;
+    if (pairs.length === 0) return;
+    void addCannotLink(pairs);
+    useSelectionStore.getState().remove("cluster:images", keys);
+  }, [rejectableFromSelection, addCannotLink]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: handlers are stable Zustand actions; current state is read via getState() inside the handler so the listener can attach once on mount
   useEffect(() => {
@@ -381,6 +413,15 @@ export function ClusterView() {
           >
             Find Nearest
           </button>
+          {rejectableFromSelection.pairs.length > 0 && (
+            <button
+              className="btn btn-secondary"
+              onClick={handleRejectSelected}
+              title="Never suggest these images for their respective groups"
+            >
+              Never Suggest ({rejectableFromSelection.pairs.length})
+            </button>
+          )}
           <button className="btn" onClick={clearImageSelection}>
             Deselect
           </button>

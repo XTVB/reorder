@@ -12,7 +12,15 @@ import {
 } from "../cache-utils.ts";
 import { cacheDir, contentHashesPath, HASH_CACHE_FILE } from "../fs/paths.ts";
 
-export const MODEL_KEYS = ["clip", "dino", "dinov3", "pecore_l", "pecore_g", "color", "learned_proj"] as const;
+export const MODEL_KEYS = [
+  "clip",
+  "dino",
+  "dinov3",
+  "pecore_l",
+  "pecore_g",
+  "color",
+  "learned_proj",
+] as const;
 export type ModelKey = (typeof MODEL_KEYS)[number];
 
 export class ModelMissingError extends Error {

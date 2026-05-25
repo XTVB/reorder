@@ -133,7 +133,7 @@ export function ExpandModal() {
 
   const onReject = sourceGroupId
     ? (filename: string) => {
-        void addCannotLink(filename, sourceGroupId);
+        void addCannotLink([{ filename, groupId: sourceGroupId }]);
       }
     : undefined;
 

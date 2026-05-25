@@ -131,7 +131,7 @@ export const ClusterCard = memo(function ClusterCard({
     () =>
       groupId
         ? (filename: string) => {
-            void addCannotLink(filename, groupId);
+            void addCannotLink([{ filename, groupId }]);
           }
         : undefined,
     [groupId, addCannotLink],

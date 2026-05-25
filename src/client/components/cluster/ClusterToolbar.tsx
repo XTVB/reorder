@@ -230,22 +230,31 @@ export function ClusterToolbar({
                 ))}
               </div>
               <div className="cluster-weights-sliders">
-                {WEIGHT_LABELS.map(({ key, label }) => (
-                  <label key={key} className="cluster-weight-row">
-                    <span className="cluster-weight-label">{label}</span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="2"
-                      step="0.1"
-                      value={weights[key] ?? 0}
-                      onChange={(e) =>
-                        onWeightsChange({ ...weights, [key]: parseFloat(e.target.value) })
-                      }
-                    />
-                    <span className="cluster-weight-value">{(weights[key] ?? 0).toFixed(1)}</span>
-                  </label>
-                ))}
+                {WEIGHT_LABELS.map(({ key, label }) => {
+                  // The learned-head slider is a target contribution fraction
+                  // vs raw concat-weights for the others
+                  const isLearned = key === "learned_proj";
+                  const max = isLearned ? "1" : "2";
+                  const step = isLearned ? "0.05" : "0.1";
+                  const v = weights[key] ?? 0;
+                  const displayValue = isLearned ? `${Math.round(v * 100)}%` : v.toFixed(1);
+                  return (
+                    <label key={key} className="cluster-weight-row">
+                      <span className="cluster-weight-label">{label}</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max={max}
+                        step={step}
+                        value={v}
+                        onChange={(e) =>
+                          onWeightsChange({ ...weights, [key]: parseFloat(e.target.value) })
+                        }
+                      />
+                      <span className="cluster-weight-value">{displayValue}</span>
+                    </label>
+                  );
+                })}
               </div>
             </div>
           )}

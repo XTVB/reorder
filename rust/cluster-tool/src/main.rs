@@ -100,10 +100,7 @@ fn main() {
     // blending the precomputed matrix with embedding distances impossible. Now
     // the two coexist: with both, linkage.rs blends them via dist_matrix_weight.
     let emb_specs: Vec<(&str, f32, bool)> = vec![
-        ("clip", cli.clip_weight, false),
-        ("dino", cli.dino_weight, false),
         ("dinov3", cli.dinov3_weight, false),
-        ("pecore_l", cli.pecore_l_weight, false),
         ("pecore_g", cli.pecore_g_weight, false),
         ("color", cli.color_weight, true),
         // Learned head output: already L2-normalized by the projection head's

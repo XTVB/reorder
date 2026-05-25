@@ -1,5 +1,5 @@
 // One-at-a-time slot for expensive cluster compute jobs (extract, cluster,
-// recut, scoped). Distinct from withRenameLock (fs/lock.ts) which guards
+// recut). Distinct from withRenameLock (fs/lock.ts) which guards
 // on-disk filesystem state. A second compute job request returns 409 while
 // one is running, and aborting cancels the running subprocess via SIGINT.
 

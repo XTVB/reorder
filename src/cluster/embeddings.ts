@@ -1,26 +1,17 @@
 // Image-model embedding loaders and the in-memory caches that keep them
-// hot across requests. Drives auto-naming (TF-IDF), tree-navigation, and
-// nearest-neighbor search.
+// hot across requests. Drives tree-navigation and nearest-neighbor search.
 
 import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
 import {
   type HashMapping,
   loadHashMapping,
   parseNpyFromNpz,
   reindexToFilenameOrder,
+  resolveHashCachePath,
 } from "../cache-utils.ts";
-import { cacheDir, contentHashesPath, HASH_CACHE_FILE } from "../fs/paths.ts";
+import { cacheDir, contentHashesPath } from "../fs/paths.ts";
 
-export const MODEL_KEYS = [
-  "clip",
-  "dino",
-  "dinov3",
-  "pecore_l",
-  "pecore_g",
-  "color",
-  "learned_proj",
-] as const;
+export const MODEL_KEYS = ["dinov3", "pecore_g", "color", "learned_proj"] as const;
 export type ModelKey = (typeof MODEL_KEYS)[number];
 
 export class ModelMissingError extends Error {
@@ -61,7 +52,7 @@ export function loadModelEmbedding(targetDir: string, modelKey: ModelKey): Model
   if (cached) return cached;
 
   const mapping = cachedHashMapping(targetDir);
-  const npzBuf = readFileSync(join(cacheDir(targetDir), HASH_CACHE_FILE)) as Buffer;
+  const npzBuf = readFileSync(resolveHashCachePath(cacheDir(targetDir))) as Buffer;
   let hashOrdered: Float32Array;
   try {
     hashOrdered = parseNpyFromNpz(npzBuf, `${modelKey}.npy`);

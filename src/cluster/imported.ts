@@ -55,7 +55,6 @@ export async function buildImportedResult(
     return {
       id: `imported_${i}`,
       autoName: c.name,
-      autoTags: [],
       images: sortedImages,
       confirmedGroup: group ? { id: group.id, name: group.name, images: group.images } : null,
     };

@@ -307,7 +307,6 @@ export const useInteractionsStore = create<InteractionsState>((set, get) => ({
       const newCluster: ClusterResultData = {
         id: `split_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         autoName: "Split",
-        autoTags: [],
         images: splitFiles,
         confirmedGroup: null,
         splitFrom: source.id,

@@ -186,7 +186,7 @@ export function findNearestNeighbors(
   const queryIndices = downsampleIndices(rawQueryIdx, opts.downsampleQueryTo ?? 64);
 
   let models = activeModelsFromWeights(opts.weights);
-  if (models.length === 0) models = [{ key: "clip", weight: 1.0 }];
+  if (models.length === 0) models = [{ key: "pecore_g", weight: 1.0 }];
 
   const blended = new Float64Array(n);
   let totalWeight = 0;

@@ -1,11 +1,11 @@
-// Cluster orchestration: extraction → linkage → auto-naming. The cluster-tool
-// Rust binary handles linkage; we drive it from here, weave in re-rank or
-// patch matrices when requested, and apply TF-IDF naming on top.
+// Cluster orchestration: extraction → linkage → name assignment. The cluster-tool
+// Rust binary handles linkage; we drive it from here and weave in re-rank or
+// patch matrices when requested.
 
 import { existsSync } from "node:fs";
 import { rename } from "node:fs/promises";
 import { join } from "node:path";
-import { ensureHashOrderJson } from "../cache-utils.ts";
+import { ensureHashOrderJson, resolveHashCachePath } from "../cache-utils.ts";
 import { loadGroups } from "../fs/groups.ts";
 import { withRenameLock } from "../fs/lock.ts";
 import {
@@ -13,7 +13,6 @@ import {
   contentHashesPath,
   contentHashesTmpPath,
   groupsPath,
-  HASH_CACHE_FILE,
   linkageTreePath,
 } from "../fs/paths.ts";
 import { log } from "../log.ts";
@@ -36,18 +35,29 @@ import {
   recutTreeByThreshold,
 } from "./linkage.ts";
 import { spawnJSON } from "./subprocess.ts";
-import {
-  clustersWithoutAutoNames,
-  computeAutoNames,
-  ensureTextEmbeddings,
-  type NamedClusterInput,
-} from "./tfidf.ts";
+
+/** Shape of cluster passed in from the Rust cluster-tool output. */
+interface RawCluster {
+  id: string;
+  images: string[];
+  confirmedGroup: { id: string; name: string; images: string[] } | null;
+}
 
 // Internal type matching the cluster-tool stdout shape.
 export interface RustOutput {
-  clusters: NamedClusterInput[];
+  clusters: RawCluster[];
   nClusters: number;
   treePath: string;
+}
+
+/** Assign autoNames from confirmed-group names with a generic fallback. */
+function namedClusters(clusters: RawCluster[]): ClusterResultData[] {
+  return clusters.map((c, i) => ({
+    id: c.id,
+    autoName: c.confirmedGroup?.name ?? `Cluster ${i + 1}`,
+    images: c.images,
+    confirmedGroup: c.confirmedGroup,
+  }));
 }
 
 /**
@@ -171,7 +181,7 @@ export async function runLinkage(
   onProgress?: (line: string) => void,
 ): Promise<RustOutput> {
   const cache = cacheDir(targetDir);
-  const hashCachePath = join(cache, HASH_CACHE_FILE);
+  const hashCachePath = resolveHashCachePath(cache);
   const contentHashesP = contentHashesPath(targetDir);
   const hashOrderPath = join(cache, "hash_cache_order.json");
   const groupsFile = groupsPath(targetDir);
@@ -291,23 +301,17 @@ export async function runFullCluster(
     required.push("dinov3");
   }
   const signal = getClusterAbortSignal();
-  const hasClip = !required || required.includes("clip");
-  const extractionPromises: Promise<unknown>[] = [
-    extractFeatures(targetDir, onProgress, required ? { required, signal } : { signal }),
-  ];
-  if (hasClip) extractionPromises.push(ensureTextEmbeddings(targetDir));
-  const [extraction] = (await Promise.all(extractionPromises)) as [
-    Awaited<ReturnType<typeof extractFeatures>>,
-    ...unknown[],
-  ];
+  const extraction = await extractFeatures(
+    targetDir,
+    onProgress,
+    required ? { required, signal } : { signal },
+  );
   log("cluster", `Extraction: ${extraction.extracted} new, ${extraction.cached} cached`);
 
   const rustOutput = await runLinkage(targetDir, nClusters, weights, options, onProgress);
   log("cluster", `Linkage complete: ${rustOutput.clusters.length} clusters`);
 
-  const clusters = hasClip
-    ? computeAutoNames(targetDir, rustOutput.clusters)
-    : clustersWithoutAutoNames(rustOutput.clusters);
+  const clusters = namedClusters(rustOutput.clusters);
 
   const nImages = clusters.reduce((n, c) => n + c.images.length, 0);
   const distanceProfile = getDistanceProfile(targetDir);
@@ -321,7 +325,7 @@ export async function runLinkageOnly(
   options?: LinkageOptions,
 ): Promise<ClusterData> {
   const rustOutput = await runLinkage(targetDir, nClusters, weights, options);
-  const clusters = computeAutoNames(targetDir, rustOutput.clusters);
+  const clusters = namedClusters(rustOutput.clusters);
   const nImages = clusters.reduce((n, c) => n + c.images.length, 0);
   return { clusters, suggestedCounts: suggestedCounts(nImages), nClusters };
 }
@@ -368,7 +372,7 @@ export function buildClustersFromLabels(
 
   const rawClusters = [...clusterMembers.entries()]
     .sort((a, b) => b[1].length - a[1].length)
-    .map(([, images], ci): NamedClusterInput => {
+    .map(([, images], ci): RawCluster => {
       const confirmed = images.find((f) => imgToGroup.has(f));
       const group = confirmed ? (imgToGroup.get(confirmed) ?? null) : null;
       return {
@@ -378,11 +382,7 @@ export function buildClustersFromLabels(
       };
     });
 
-  try {
-    return computeAutoNames(targetDir, rawClusters);
-  } catch {
-    return clustersWithoutAutoNames(rawClusters);
-  }
+  return namedClusters(rawClusters);
 }
 
 async function buildRecutResult(

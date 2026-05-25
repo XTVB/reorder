@@ -10,7 +10,6 @@ export type SelectionContext =
   | "reorder" // grid filenames
   | "cluster:images" // composite "clusterId:filename"
   | "cluster:merge" // cluster IDs in merge bar
-  | "compare" // candidate cluster IDs in ComparePanel
   | "expand" // filenames in ExpandModal
   | "nn" // result filenames in NNResultsModal
   | "trash"; // filenames marked for trash
@@ -58,7 +57,6 @@ const INITIAL_CONTEXTS: Record<SelectionContext, Set<string>> = {
   reorder: new Set(),
   "cluster:images": new Set(),
   "cluster:merge": new Set(),
-  compare: new Set(),
   expand: new Set(),
   nn: new Set(),
   trash: new Set(),
@@ -68,7 +66,6 @@ const INITIAL_ANCHORS: Record<SelectionContext, string | null> = {
   reorder: null,
   "cluster:images": null,
   "cluster:merge": null,
-  compare: null,
   expand: null,
   nn: null,
   trash: null,

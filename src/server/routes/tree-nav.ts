@@ -1,9 +1,8 @@
-// Tree-navigation operations: metrics, merge candidates, split, expand candidates.
+// Tree-navigation operations: metrics, split, expand candidates.
 
 import {
   computeClusterMetrics,
   expandCandidates,
-  rankMergeCandidates,
   splitClusterByTree,
 } from "../../cluster/tree-nav.ts";
 import type { WeightConfig } from "../../shared/types.ts";
@@ -31,22 +30,6 @@ export const treeNavRoutes: RouteHandler = async (req, ctx) => {
       };
     }
     return json({ metrics: out });
-  }
-
-  if (path === "/api/cluster/tree-nav/merge-candidates" && req.method === "POST") {
-    const body = (await req.json()) as {
-      sourceImages?: string[];
-      candidates?: { id: string; images: string[] }[];
-      weights?: WeightConfig;
-    };
-    if (!Array.isArray(body.sourceImages) || body.sourceImages.length === 0) {
-      return json({ error: "sourceImages must be non-empty" }, 400);
-    }
-    if (!Array.isArray(body.candidates)) {
-      return json({ error: "candidates must be an array" }, 400);
-    }
-    const scores = rankMergeCandidates(targetDir, body.sourceImages, body.candidates, body.weights);
-    return json({ scores });
   }
 
   if (path === "/api/cluster/tree-nav/split" && req.method === "POST") {

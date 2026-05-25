@@ -6,7 +6,6 @@ import type { AppMode } from "../../types.ts";
 export const MODES: { key: AppMode; label: string; title: string; path: string }[] = [
   { key: "reorder", label: "Reorder", title: "Reorder Images", path: "/reorder" },
   { key: "cluster", label: "Cluster", title: "Cluster", path: "/cluster" },
-  // { key: "cluster-compare", label: "Compare", title: "Cluster", path: "/cluster-compare" },
   {
     key: "merge-suggestions",
     label: "Merge",

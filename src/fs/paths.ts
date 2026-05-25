@@ -54,20 +54,21 @@ export function tagsPath(targetDir: string): string {
 }
 
 // Cache files (inside .reorder-cache/)
-export const HASH_CACHE_FILE = "clip_hash_cache.npz";
+export const HASH_CACHE_FILE = "embeddings_hash_cache.npz";
+// Legacy filename retained so we can transparently migrate caches written
+// before the CLIP/PE-L/DINOv2 cleanup. Bun-side readers fall back to this.
+export const LEGACY_HASH_CACHE_FILE = "clip_hash_cache.npz";
 export const HASH_ORDER_FILE = "hash_cache_order.json";
 export const CONTENT_HASHES_FILE = "content_hashes.json";
 export const CONTENT_HASHES_TMP_FILE = "content_hashes.json.tmp";
 export const LINKAGE_TREE_FILE = "linkage_tree.bin";
 export const PATCH_DIST_MATRIX_FILE = "patch_dist_matrix.bin";
 export const RERANK_DIST_MATRIX_FILE = "rerank_dist_matrix.bin";
-export const TEXT_EMBEDDINGS_FILE = "text_embeddings.json";
 export const IMPORTED_CLUSTERS_FILE = "imported_clusters.json";
 export const DINOV3_PATCHES_FILE = "dinov3_patches_hash_cache.npy";
 export const DINOV3_PATCHES_FULL_FILE = "dinov3_patches_full_hash_cache.npy";
 export const DINOV3_PATCHES_HASHES_FILE = "dinov3_patches_hashes.json";
 export const CONTACT_SHEETS_DIRNAME = "contact_sheets";
-export const SCOPED_DIRNAME = "scoped";
 
 // Constraint files (Rust-resolved, inside .reorder-cache/)
 export const CANNOT_LINK_RESOLVED_FILE = ".cannot_link_resolved.json";
@@ -89,15 +90,9 @@ export function patchDistMatrixPath(targetDir: string): string {
 export function rerankDistMatrixPath(targetDir: string): string {
   return join(cacheDir(targetDir), RERANK_DIST_MATRIX_FILE);
 }
-export function textEmbeddingsPath(targetDir: string): string {
-  return join(cacheDir(targetDir), TEXT_EMBEDDINGS_FILE);
-}
 export function importedClustersPath(targetDir: string): string {
   return join(cacheDir(targetDir), IMPORTED_CLUSTERS_FILE);
 }
 export function contactSheetsDir(targetDir: string): string {
   return join(cacheDir(targetDir), CONTACT_SHEETS_DIRNAME);
-}
-export function scopedDir(targetDir: string): string {
-  return join(cacheDir(targetDir), SCOPED_DIRNAME);
 }

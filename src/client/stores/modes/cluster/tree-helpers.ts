@@ -1,5 +1,5 @@
 // Tree-walk helpers shared across cluster sub-stores. Used by listStore,
-// interactionsStore, compareStore, expandStore, and consumers.
+// interactionsStore, expandStore, and consumers.
 
 import type { ClusterResultData, SplitChildren } from "../../../types.ts";
 
@@ -47,26 +47,6 @@ export function dedupeAppend(base: string[], adds: string[]): string[] {
     if (!seen.has(a)) {
       seen.add(a);
       out.push(a);
-    }
-  }
-  return out;
-}
-
-/** Resolve {source, ...checkedClusters} from compare-state ids, deduped by id. */
-export function collectMergeParticipants(
-  clusters: ClusterResultData[],
-  splitChildren: Record<string, SplitChildren>,
-  source: ClusterResultData,
-  checkedIds: Set<string>,
-): ClusterResultData[] {
-  const out = [source];
-  const seenIds = new Set([source.id]);
-  for (const id of checkedIds) {
-    if (seenIds.has(id)) continue;
-    const c = findClusterEverywhere(clusters, splitChildren, id);
-    if (c) {
-      out.push(c);
-      seenIds.add(id);
     }
   }
   return out;

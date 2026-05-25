@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(about = "Hierarchical agglomerative clustering with pre-seeded groups")]
 pub(crate) struct Cli {
-    /// Path to hash-keyed cache .npz (clip_hash_cache.npz)
+    /// Path to hash-keyed cache .npz (embeddings_hash_cache.npz)
     #[arg(long)]
     pub hash_cache: PathBuf,
 
@@ -34,25 +34,13 @@ pub(crate) struct Cli {
     #[arg(long, default_value = "")]
     pub output_tree: String,
 
-    /// CLIP feature weight
-    #[arg(long, default_value_t = 0.0)]
-    pub clip_weight: f32,
-
     /// Color feature weight
     #[arg(long, default_value_t = 0.0)]
     pub color_weight: f32,
 
-    /// DINOv2 feature weight
-    #[arg(long, default_value_t = 0.0)]
-    pub dino_weight: f32,
-
     /// DINOv3 CLS token weight
     #[arg(long, default_value_t = 0.0)]
     pub dinov3_weight: f32,
-
-    /// PE-Core-L feature weight
-    #[arg(long, default_value_t = 0.0)]
-    pub pecore_l_weight: f32,
 
     /// PE-Core-bigG feature weight
     #[arg(long, default_value_t = 0.0)]

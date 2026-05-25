@@ -4,8 +4,6 @@ import { basename, join } from "node:path";
 import {
   buildImportedResult,
   clearImportedClusters,
-  clearScopedCache,
-  ensureTextEmbeddings,
   extractFeatures,
   generateContactSheet,
   getClusterAbortSignal,
@@ -39,8 +37,6 @@ export const clusterExtractRoutes: RouteHandler = async (req, ctx) => {
         models ? { force: models, signal } : { signal },
       );
       invalidateClusterCache();
-      clearScopedCache(targetDir);
-      await ensureTextEmbeddings(targetDir);
       return result;
     }, "Extraction already in progress");
   }

@@ -28,9 +28,7 @@ export {
   pendingFolderSavePath,
   pendingRenamePath,
   rerankDistMatrixPath,
-  scopedDir,
   tagsPath,
-  textEmbeddingsPath,
 } from "./paths.ts";
 export type { RecoveryResult } from "./recovery.ts";
 export { recoverPendingRename } from "./recovery.ts";

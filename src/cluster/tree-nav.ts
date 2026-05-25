@@ -18,7 +18,6 @@ import {
   type ModelKey,
 } from "./embeddings.ts";
 import { type LinkageTree, loadTree } from "./linkage.ts";
-import { computeAutoNames } from "./tfidf.ts";
 
 /**
  * Path-halving find for union-find structures backed by an Int32Array parent
@@ -58,8 +57,7 @@ function loadActiveModels(targetDir: string, weights: WeightConfig | undefined):
     }
   }
   if (out.length === 0) {
-    // Fall back to CLIP at unit weight, matching nn-query semantics
-    out.push({ emb: loadModelEmbedding(targetDir, "clip"), weight: 1.0 });
+    out.push({ emb: loadModelEmbedding(targetDir, "pecore_g"), weight: 1.0 });
   }
   return out;
 }
@@ -332,234 +330,6 @@ export function computeClusterMetrics(
   return out;
 }
 
-// ── Merge candidate ranking ──────────────────────────────────────────────────
-
-export interface MergeCandidateScore {
-  id: string;
-  distance: number;
-}
-
-interface CandidateInput {
-  id: string;
-  images: string[];
-}
-
-interface TreeNeighbours {
-  /** Images on the other side of the first merge after source forms — its sibling. */
-  sibling: Set<number>;
-  /** Images on the other side of the SECOND merge above source — descendants of the parent's sibling. */
-  cousins: Set<number>;
-}
-
-/**
- * Walk the linkage tree to find both the source's tree-sibling and tree-cousins.
- *
- * Tree sibling: the cluster the source would merge with first.
- * Tree cousins: the cluster on the other side of the next-next merge —
- *               i.e. descendants of the source's parent's sibling.
- * Returns null if the source never forms a clean component in the tree.
- */
-function findTreeNeighbours(
-  tree: LinkageTree,
-  fnToIdx: Map<string, number>,
-  sourceImages: string[],
-): TreeNeighbours | null {
-  const { nImages, steps } = tree;
-  const inSource = new Uint8Array(nImages);
-  let target = 0;
-  for (const f of sourceImages) {
-    const idx = fnToIdx.get(f);
-    if (idx !== undefined && !inSource[idx]) {
-      inSource[idx] = 1;
-      target++;
-    }
-  }
-  if (target === 0) return null;
-
-  const parent = new Int32Array(nImages);
-  const sizeIn = new Int32Array(nImages);
-  const sizeOut = new Int32Array(nImages);
-  // Linked-list of every image rooted at each component, so we can recover
-  // membership cheaply when the merge that joins source with non-source fires.
-  const next = new Int32Array(nImages).fill(-1);
-  const head = new Int32Array(nImages);
-  const tail = new Int32Array(nImages);
-  for (let i = 0; i < nImages; i++) {
-    parent[i] = i;
-    sizeIn[i] = inSource[i] ? 1 : 0;
-    sizeOut[i] = inSource[i] ? 0 : 1;
-    head[i] = i;
-    tail[i] = i;
-  }
-  const find = (x: number) => pathHalvingFind(parent, x);
-
-  let formed = false;
-  let formedRoot = -1;
-  let sibling: Set<number> | null = null;
-  let cousins: Set<number> | null = null;
-  let trackedRoot = -1;
-
-  function captureSide(rootIdx: number): Set<number> {
-    const out = new Set<number>();
-    for (let j = head[rootIdx]!; j >= 0; j = next[j]!) out.add(j);
-    return out;
-  }
-
-  for (const s of steps) {
-    if (s.distance >= 1e10) break;
-    const ra = find(s.clusterA);
-    const rb = find(s.clusterB);
-    if (ra === rb) continue;
-
-    if (formed) {
-      if (sibling === null) {
-        const fr = find(formedRoot);
-        if (fr === ra || fr === rb) {
-          const otherRoot = fr === ra ? rb : ra;
-          sibling = captureSide(otherRoot);
-          trackedRoot = fr;
-        }
-      } else if (cousins === null) {
-        const tr = find(trackedRoot);
-        if (tr === ra || tr === rb) {
-          const otherRoot = tr === ra ? rb : ra;
-          cousins = captureSide(otherRoot);
-        }
-      }
-    }
-
-    parent[ra] = rb;
-    sizeIn[rb] = sizeIn[rb]! + sizeIn[ra]!;
-    sizeOut[rb] = sizeOut[rb]! + sizeOut[ra]!;
-    next[tail[rb]!] = head[ra]!;
-    tail[rb] = tail[ra]!;
-
-    if (!formed && sizeIn[rb]! === target && sizeOut[rb]! === 0) {
-      formed = true;
-      formedRoot = rb;
-    }
-
-    if (sibling !== null && cousins !== null) break;
-  }
-  if (sibling === null) return null;
-  return { sibling, cousins: cousins ?? new Set() };
-}
-
-function jaccardOverlap(candidateIdx: number[], target: Set<number>): number {
-  if (target.size === 0 || candidateIdx.length === 0) return 0;
-  let overlap = 0;
-  for (const idx of candidateIdx) if (target.has(idx)) overlap++;
-  if (overlap === 0) return 0;
-  return overlap / (candidateIdx.length + target.size - overlap);
-}
-
-function topKNearestIndices(
-  models: ActiveModel[],
-  centroids: Float64Array[],
-  nImages: number,
-  sourceSet: Set<number>,
-  k: number,
-): Set<number> {
-  const heap: { idx: number; dist: number }[] = [];
-  for (let i = 0; i < nImages; i++) {
-    if (sourceSet.has(i)) continue;
-    const d = imageToCentroidDist(models, centroids, i);
-    if (heap.length < k) {
-      heap.push({ idx: i, dist: d });
-      if (heap.length === k) heap.sort((a, b) => b.dist - a.dist);
-    } else if (d < heap[0]!.dist) {
-      heap[0] = { idx: i, dist: d };
-      heap.sort((a, b) => b.dist - a.dist);
-    }
-  }
-  return new Set(heap.map((e) => e.idx));
-}
-
-export function rankMergeCandidates(
-  targetDir: string,
-  sourceImages: string[],
-  candidates: CandidateInput[],
-  weights: WeightConfig | undefined,
-): MergeCandidateScore[] {
-  const mapping = cachedHashMapping(targetDir);
-  const fnToIdx = mapping.fnToIdx;
-  const models = loadActiveModels(targetDir, weights);
-
-  const sourceIdx = sourceImages
-    .map((f) => fnToIdx.get(f))
-    .filter((x): x is number => x !== undefined);
-  if (sourceIdx.length === 0) return [];
-  const sourceSet = new Set(sourceIdx);
-  const sourceCentroid = buildCentroids(models, sourceIdx);
-
-  const neighbours = findTreeNeighbours(loadTree(targetDir), fnToIdx, sourceImages);
-  const sibling = neighbours?.sibling ?? new Set<number>();
-  const cousins = neighbours?.cousins ?? new Set<number>();
-
-  type Scored = {
-    id: string;
-    distance: number;
-    cIdx: number[];
-    siblingScore: number;
-    cousinScore: number;
-  };
-  const scored: Scored[] = [];
-  for (const c of candidates) {
-    const cIdx = c.images.map((f) => fnToIdx.get(f)).filter((x): x is number => x !== undefined);
-    if (cIdx.length === 0) continue;
-    const cCentroid = buildCentroids(models, cIdx);
-    let total = 0;
-    let totalWeight = 0;
-    for (let m = 0; m < models.length; m++) {
-      const { weight } = models[m]!;
-      const sa = sourceCentroid[m]!;
-      const ca = cCentroid[m]!;
-      let dot = 0;
-      for (let d = 0; d < sa.length; d++) dot += sa[d]! * ca[d]!;
-      total += weight * Math.max(0, 1 - dot);
-      totalWeight += weight;
-    }
-    const distance = totalWeight > 0 ? total / totalWeight : 0;
-    scored.push({
-      id: c.id,
-      distance,
-      cIdx,
-      siblingScore: jaccardOverlap(cIdx, sibling),
-      cousinScore: jaccardOverlap(cIdx, cousins),
-    });
-  }
-
-  let bestSiblingId: string | null = null;
-  let bestSiblingScore = 0;
-  for (const s of scored) {
-    if (s.siblingScore > bestSiblingScore) {
-      bestSiblingScore = s.siblingScore;
-      bestSiblingId = s.id;
-    }
-  }
-
-  const KNN_K = Math.min(80, Math.max(20, sourceIdx.length * 4));
-  const topK =
-    candidates.length > 0
-      ? topKNearestIndices(models, sourceCentroid, mapping.nImages, sourceSet, KNN_K)
-      : new Set<number>();
-
-  type Ranked = { id: string; distance: number; bucket: number; knnBoost: number };
-  const ranked: Ranked[] = scored.map((s) => ({
-    id: s.id,
-    distance: s.distance,
-    bucket: s.id === bestSiblingId ? 0 : s.cousinScore > 0 ? 1 : 2,
-    knnBoost: jaccardOverlap(s.cIdx, topK),
-  }));
-
-  ranked.sort((a, b) => {
-    if (a.bucket !== b.bucket) return a.bucket - b.bucket;
-    if (a.distance !== b.distance) return a.distance - b.distance;
-    return b.knnBoost - a.knnBoost;
-  });
-  return ranked.map(({ id, distance }) => ({ id, distance }));
-}
-
 // ── Two-way binary split via linkage tree ────────────────────────────────────
 
 export interface SplitResult {
@@ -684,31 +454,16 @@ function buildSplitChildren(targetDir: string, a: string[], b: string[]): SplitR
   }
   const ts = Date.now();
   const rand = () => Math.random().toString(36).slice(2, 8);
-  const rawClusters = [
-    {
+  const buildChild = (images: string[], idx: number): ClusterResultData => {
+    const confirmed = pickConfirmed(images, fnToGroup);
+    return {
       id: `split_${ts}_${rand()}`,
-      images: a.slice().sort(),
-      confirmedGroup: pickConfirmed(a, fnToGroup),
-    },
-    {
-      id: `split_${ts}_${rand()}`,
-      images: b.slice().sort(),
-      confirmedGroup: pickConfirmed(b, fnToGroup),
-    },
-  ];
-  let named: ClusterResultData[];
-  try {
-    named = computeAutoNames(targetDir, rawClusters);
-  } catch {
-    named = rawClusters.map((c, i) => ({
-      id: c.id,
-      autoName: c.confirmedGroup?.name ?? `Split ${i + 1}`,
-      autoTags: [],
-      images: c.images,
-      confirmedGroup: c.confirmedGroup,
-    }));
-  }
-  return { childA: named[0]!, childB: named[1]! };
+      autoName: confirmed?.name ?? `Split ${idx + 1}`,
+      images: images.slice().sort(),
+      confirmedGroup: confirmed,
+    };
+  };
+  return { childA: buildChild(a, 0), childB: buildChild(b, 1) };
 }
 
 function pickConfirmed(

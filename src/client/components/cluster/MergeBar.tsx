@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { useListStore } from "../../stores/modes/cluster/index.ts";
 import type { ClusterResultData } from "../../types.ts";
 
 interface Props {
@@ -16,22 +15,6 @@ export function MergeBar({ selection, clusters, onMerge, onCancel, onRemove }: P
     [clusters, selection],
   );
 
-  const inScope = useListStore((s) => !!s.clusterData?.scope);
-  const runScopedCluster = useListStore((s) => s.runScopedCluster);
-
-  // Scoped re-cluster is available only when every selected cluster has a confirmed group
-  // AND we're not already inside a scoped view.
-  const scopeGroupIds = useMemo(() => {
-    if (inScope) return null;
-    if (selected.length < 2) return null;
-    const ids: string[] = [];
-    for (const c of selected) {
-      if (!c.confirmedGroup) return null;
-      ids.push(c.confirmedGroup.id);
-    }
-    return [...new Set(ids)];
-  }, [selected, inScope]);
-
   return (
     <div className="cluster-merge-bar">
       <span className="merge-count">{selection.size} clusters selected</span>
@@ -45,15 +28,6 @@ export function MergeBar({ selection, clusters, onMerge, onCancel, onRemove }: P
       <button className="btn btn-merge" onClick={onMerge} disabled={selection.size < 2}>
         Merge
       </button>
-      {scopeGroupIds && scopeGroupIds.length >= 2 && (
-        <button
-          className="btn btn-secondary"
-          onClick={() => runScopedCluster(scopeGroupIds)}
-          title="Re-cluster over only the images in these confirmed groups"
-        >
-          Re-cluster these groups
-        </button>
-      )}
       <button className="btn btn-small" onClick={onCancel}>
         Cancel
       </button>

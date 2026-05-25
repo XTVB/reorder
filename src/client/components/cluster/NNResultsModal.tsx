@@ -3,7 +3,6 @@ import { useDismissOnOutside } from "../../hooks/useDismissOnOutside.ts";
 import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
-import { useListStore } from "../../stores/modes/cluster/index.ts";
 import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
 import type { NNAggregation, NNFilter } from "../../types.ts";
 import { cn } from "../../utils/helpers.ts";
@@ -49,8 +48,6 @@ export function NNResultsModal() {
   const addSelectedToSourceCluster = useNNQueryStore((s) => s.addSelectedToSourceCluster);
   const sourceClusterLabel = useNNQueryStore((s) => s.sourceClusterLabel);
 
-  const inScope = useListStore((s) => !!s.clusterData?.scope);
-
   const lightboxOpen = useLightboxStore((s) => s.open);
 
   const resultFilenames = useMemo(() => results.map((r) => r.filename), [results]);
@@ -74,11 +71,6 @@ export function NNResultsModal() {
     <>
       <span className="modal-title-main">Nearest neighbors</span>
       <span className="modal-title-context">— {queryLabel}</span>
-      {inScope && (
-        <span className="nn-scope-pill" title="Restricted to current scope">
-          In scope
-        </span>
-      )}
       <button
         type="button"
         className="btn btn-icon modal-close-btn"

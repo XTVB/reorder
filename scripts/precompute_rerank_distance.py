@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Precompute the k-reciprocal re-ranking distance matrix.
 
-Reads weighted features from clip_hash_cache.npz, builds the kNN graph using
+Reads weighted features from embeddings_hash_cache.npz, builds the kNN graph using
 cosine similarity, computes R*-expanded reciprocal neighbor sets, applies local
 query expansion, and writes the resulting Jaccard-style distance matrix in the
 binary format expected by cluster-tool's --dist-matrix flag.
@@ -38,7 +38,15 @@ def load_weighted_features(cache_dir: str, weights: dict[str, float]):
     `weights` maps model key (e.g. "pecore_g", "color", "dinov3") → weight.
     Skips models with weight 0 or missing from cache.
     """
-    npz = np.load(os.path.join(cache_dir, "clip_hash_cache.npz"), allow_pickle=True)
+    npz_path = os.path.join(cache_dir, "embeddings_hash_cache.npz")
+    if not os.path.exists(npz_path):
+        # Migration: caches written before the CLIP/PE-L/DINOv2 cleanup live
+        # under clip_hash_cache.npz. Bun-side code renames in place, but this
+        # script can be invoked first; fall back to the legacy filename.
+        legacy = os.path.join(cache_dir, "clip_hash_cache.npz")
+        if os.path.exists(legacy):
+            npz_path = legacy
+    npz = np.load(npz_path, allow_pickle=True)
     with open(os.path.join(cache_dir, "content_hashes.json")) as f:
         ch = json.load(f)
     with open(os.path.join(cache_dir, "hash_cache_order.json")) as f:

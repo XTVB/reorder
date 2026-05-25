@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useToastStore } from "../../stores/core/toastStore.ts";
-import { useGroupStore } from "../../stores/groupStore.ts";
 import type { DistanceProfile, ImportClusterInput, WeightConfig } from "../../types.ts";
 import { getErrorMessage } from "../../utils/helpers.ts";
 import { OverflowMenu, OverflowMenuDivider, OverflowMenuItem } from "../shared/OverflowMenu.tsx";
-import { ScopePickerModal } from "./ScopePickerModal.tsx";
 
 const DEFAULT_N_CLUSTERS = 200;
 
@@ -16,10 +14,7 @@ const WEIGHT_PRESETS: { label: string; weights: WeightConfig }[] = [
 ];
 
 const WEIGHT_LABELS: { key: keyof Required<WeightConfig>; label: string }[] = [
-  { key: "clip", label: "CLIP" },
-  { key: "dino", label: "DINOv2" },
   { key: "dinov3", label: "DINOv3" },
-  { key: "pecore_l", label: "PE-L" },
   { key: "pecore_g", label: "PE-G" },
   { key: "color", label: "Color" },
   { key: "learned_proj", label: "Learned head" },
@@ -48,7 +43,6 @@ interface Props {
   usePatches: boolean;
   useRerank: boolean;
   rerankBlend: number;
-  inScope: boolean;
   onRun: (n?: number) => void;
   onRecut: (n: number) => void;
   onRecutByThreshold: (threshold: number) => void;
@@ -72,7 +66,6 @@ export function ClusterToolbar({
   hasError,
   distanceProfile,
   weights,
-  inScope,
   onRun,
   onRecut,
   onRecutByThreshold,
@@ -95,10 +88,8 @@ export function ClusterToolbar({
   const [previewCount, setPreviewCount] = useState<number | null>(null);
   const [showWeights, setShowWeights] = useState(false);
   const [minClusterSize, setMinClusterSize] = useState(5);
-  const [scopePickerOpen, setScopePickerOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const showToast = useToastStore((s) => s.showToast);
-  const hasAnyGroups = useGroupStore((s) => s.groups.length > 0);
 
   const handleImportFile = useCallback(
     async (file: File) => {
@@ -189,19 +180,8 @@ export function ClusterToolbar({
         onClick={() => onRun(parseInt(customN, 10) || DEFAULT_N_CLUSTERS)}
         disabled={loading}
       >
-        {loading ? "Clustering..." : inScope ? "Re-run scoped" : "Run Clustering"}
+        {loading ? "Clustering..." : "Run Clustering"}
       </button>
-      {!inScope && (
-        <button
-          className="btn btn-secondary"
-          onClick={() => setScopePickerOpen(true)}
-          disabled={loading || !hasAnyGroups}
-          title="Cluster within a chosen subset of groups"
-        >
-          Scope…
-        </button>
-      )}
-      {scopePickerOpen && <ScopePickerModal onClose={() => setScopePickerOpen(false)} />}
 
       {/* Configuration: weights + patches toggle */}
       <div className="toolbar-group" title="Embedding configuration">
@@ -372,47 +352,39 @@ export function ClusterToolbar({
         <OverflowMenuItem onClick={() => onAcceptAll(minClusterSize)} disabled={!totalClusters}>
           Accept all
         </OverflowMenuItem>
-        {!inScope && (
-          <>
-            <OverflowMenuDivider />
-            <OverflowMenuItem
-              onClick={() => fileInputRef.current?.click()}
-              disabled={loading}
-              title="Import clusters from a JSON file (bypasses CLIP/DINO pipeline)"
-            >
-              Import JSON…
-            </OverflowMenuItem>
-            <OverflowMenuItem
-              danger
-              closeBeforeClick
-              onClick={() => {
-                if (
-                  confirm("Clear imported clusters? The linkage-tree cache (if any) will remain.")
-                ) {
-                  onClearImported();
-                }
-              }}
-              disabled={loading}
-              title="Delete the imported-clusters cache so the view falls back to the linkage tree"
-            >
-              Clear import
-            </OverflowMenuItem>
-          </>
-        )}
-      </OverflowMenu>
-      {!inScope && (
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="application/json,.json"
-          style={{ display: "none" }}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) handleImportFile(file);
-            e.target.value = "";
+        <OverflowMenuDivider />
+        <OverflowMenuItem
+          onClick={() => fileInputRef.current?.click()}
+          disabled={loading}
+          title="Import clusters from a JSON file (bypasses the clustering pipeline)"
+        >
+          Import JSON…
+        </OverflowMenuItem>
+        <OverflowMenuItem
+          danger
+          closeBeforeClick
+          onClick={() => {
+            if (confirm("Clear imported clusters? The linkage-tree cache (if any) will remain.")) {
+              onClearImported();
+            }
           }}
-        />
-      )}
+          disabled={loading}
+          title="Delete the imported-clusters cache so the view falls back to the linkage tree"
+        >
+          Clear import
+        </OverflowMenuItem>
+      </OverflowMenu>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleImportFile(file);
+          e.target.value = "";
+        }}
+      />
     </>
   );
 }

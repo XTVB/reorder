@@ -48,11 +48,8 @@ export interface SaveResponse {
 // Cluster types
 
 export interface WeightConfig {
-  clip?: number;
   color?: number;
-  dino?: number;
   dinov3?: number;
-  pecore_l?: number;
   pecore_g?: number;
   learned_proj?: number;
 }
@@ -60,7 +57,6 @@ export interface WeightConfig {
 export interface ClusterResultData {
   id: string;
   autoName: string;
-  autoTags: { term: string; z: number }[];
   images: string[];
   confirmedGroup: { id: string; name: string; images: string[] } | null;
   splitFrom?: string;
@@ -72,20 +68,11 @@ export interface DistanceProfile {
   nGroups: number;
 }
 
-export interface ClusterScope {
-  scopeKey: string;
-  groupIds: string[];
-  groupNames: string[];
-  nImages: number;
-  subsetFilenames: string[];
-}
-
 export interface ClusterData {
   clusters: ClusterResultData[];
   suggestedCounts: number[];
   nClusters: number;
   distanceProfile?: DistanceProfile;
-  scope?: ClusterScope;
 }
 
 export interface ImportClusterInput {

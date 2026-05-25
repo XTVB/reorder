@@ -5,7 +5,7 @@ import { ReorderToolbar } from "../reorder/ReorderToolbar.tsx";
 
 export function HeaderActions({ mode }: { mode: AppMode }) {
   if (mode === "cluster") return <ClusterActions />;
-  if (mode === "cluster-compare" || mode === "merge-suggestions") return null;
+  if (mode === "merge-suggestions") return null;
   return <ReorderToolbar />;
 }
 
@@ -23,7 +23,6 @@ function ClusterActions() {
   const setRerankBlend = useListStore((s) => s.setRerankBlend);
   const fetchClusters = useListStore((s) => s.fetchClusters);
   const recut = useListStore((s) => s.recut);
-  const runScopedCluster = useListStore((s) => s.runScopedCluster);
   const expandAll = useListStore((s) => s.expandAll);
   const collapseAll = useListStore((s) => s.collapseAll);
   const acceptAllClusters = useInteractionsStore((s) => s.acceptAllClusters);
@@ -31,17 +30,6 @@ function ClusterActions() {
   const clearImportedClusters = useListStore((s) => s.clearImportedClusters);
   const visibleCount = clusterData?.clusters.length ?? 0;
   const hasError = progress.startsWith("Error:");
-  const scope = clusterData?.scope;
-  const inScope = !!scope;
-
-  const onRun =
-    inScope && scope
-      ? (n?: number) => runScopedCluster(scope.groupIds, { nClusters: n })
-      : fetchClusters;
-  const onRecut = (n: number) => recut({ nClusters: n }, { scoped: inScope });
-  const onRecutByThreshold = (threshold: number) => recut({ threshold }, { scoped: inScope });
-  const onRecutAdaptive = (minClusterSize: number) =>
-    recut({ minClusterSize }, { scoped: inScope });
 
   return (
     <ClusterToolbar
@@ -55,11 +43,10 @@ function ClusterActions() {
       usePatches={usePatches}
       useRerank={useRerank}
       rerankBlend={rerankBlend}
-      inScope={inScope}
-      onRun={onRun}
-      onRecut={onRecut}
-      onRecutByThreshold={onRecutByThreshold}
-      onRecutAdaptive={onRecutAdaptive}
+      onRun={fetchClusters}
+      onRecut={(n) => recut({ nClusters: n })}
+      onRecutByThreshold={(threshold) => recut({ threshold })}
+      onRecutAdaptive={(minClusterSize) => recut({ minClusterSize })}
       onWeightsChange={setWeights}
       onUsePatchesChange={setUsePatches}
       onUseRerankChange={setUseRerank}

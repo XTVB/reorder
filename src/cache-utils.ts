@@ -6,8 +6,22 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { HASH_CACHE_FILE, LEGACY_HASH_CACHE_FILE } from "./fs/paths.ts";
+
+/** Resolve the embeddings hash-cache path inside `cacheDir`, migrating the
+ * pre-cleanup `clip_hash_cache.npz` filename in place if it's still there. */
+export function resolveHashCachePath(cacheDir: string): string {
+  const current = join(cacheDir, HASH_CACHE_FILE);
+  if (existsSync(current)) return current;
+  const legacy = join(cacheDir, LEGACY_HASH_CACHE_FILE);
+  if (existsSync(legacy)) {
+    renameSync(legacy, current);
+    return current;
+  }
+  return current;
+}
 
 interface NpzEntry {
   name: string;
@@ -103,13 +117,13 @@ export function parseNpyStringsFromNpz(npzBuf: Buffer, entryName: string): strin
 
 /**
  * Ensure hash_cache_order.json exists. If missing, regenerate it from the
- * `hashes` array stored inside clip_hash_cache.npz (the Rust cluster-tool
- * can't read numpy string arrays, so it needs this JSON sidecar).
+ * `hashes` array stored inside the embeddings hash-cache NPZ (the Rust
+ * cluster-tool can't read numpy string arrays, so it needs this JSON sidecar).
  */
 export function ensureHashOrderJson(cachePath: string): void {
   const orderPath = join(cachePath, "hash_cache_order.json");
   if (existsSync(orderPath)) return;
-  const npzPath = join(cachePath, "clip_hash_cache.npz");
+  const npzPath = resolveHashCachePath(cachePath);
   if (!existsSync(npzPath)) return; // nothing to regenerate from
   const npzBuf = readFileSync(npzPath) as Buffer;
   const hashes = parseNpyStringsFromNpz(npzBuf, "hashes.npy");
@@ -174,7 +188,7 @@ export function loadHashMapping(cacheDir: string): HashMapping {
 }
 
 /**
- * Read per-model version strings (`_v_<key>`) from clip_hash_cache.npz.
+ * Read per-model version strings (`_v_<key>`) from the embeddings hash-cache NPZ.
  * Returns `{ key: version }` for every model whose version key exists in the
  * NPZ. These are the same strings extract_features.py writes via MODEL_VERSIONS.
  * Used for cache invalidation: if a model gets re-extracted with a new
@@ -190,7 +204,7 @@ const _modelVersionsCache = new Map<
   { size: number; mtime: number; versions: Record<string, string> }
 >();
 export function readModelVersions(cacheDir: string): Record<string, string> {
-  const npzPath = join(cacheDir, "clip_hash_cache.npz");
+  const npzPath = resolveHashCachePath(cacheDir);
   if (!existsSync(npzPath)) return {};
   const stat = statSync(npzPath);
   const cached = _modelVersionsCache.get(npzPath);

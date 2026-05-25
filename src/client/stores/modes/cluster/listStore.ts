@@ -1,4 +1,4 @@
-// Cluster list state — clusterData, scope, settings, recut/import/scoped pipelines,
+// Cluster list state — clusterData, settings, recut/import pipelines,
 // collapse helpers, and low-level mutators used by other cluster sub-stores.
 
 import { create } from "zustand";
@@ -13,12 +13,9 @@ import type {
 } from "../../../types.ts";
 import { getErrorMessage } from "../../../utils/helpers.ts";
 import { useToastStore } from "../../core/toastStore.ts";
-import { useGroupStore } from "../../groupStore.ts";
 
 interface ListState {
   clusterData: ClusterData | null;
-  /** Snapshot of the pre-scope global clusterData, restored on exitScope. */
-  globalClusterData: ClusterData | null;
   loading: boolean;
   progress: string;
   treeStale: boolean;
@@ -39,17 +36,14 @@ interface ListState {
 
   // Pipeline
   fetchClusters: (nClusters?: number) => Promise<void>;
-  recut: (
-    params: { nClusters?: number; threshold?: number; minClusterSize?: number },
-    opts?: { scoped?: boolean },
-  ) => Promise<void>;
+  recut: (params: {
+    nClusters?: number;
+    threshold?: number;
+    minClusterSize?: number;
+  }) => Promise<void>;
   loadCachedClusters: () => Promise<void>;
   importClusters: (payload: { clusters: ImportClusterInput[] }) => Promise<void>;
   clearImportedClusters: () => Promise<void>;
-
-  // Scope
-  runScopedCluster: (groupIds: string[], opts?: { nClusters?: number }) => Promise<void>;
-  exitScope: () => void;
 
   // Inline insertion (NN flow)
   insertClusterFromFilenames: (name: string, filenames: string[], afterClusterId?: string) => void;
@@ -100,7 +94,6 @@ export const useListStore = create<ListState>((set, get) => {
 
   return {
     clusterData: null,
-    globalClusterData: null,
     loading: false,
     progress: "",
     treeStale: false,
@@ -248,22 +241,18 @@ export const useListStore = create<ListState>((set, get) => {
       }
     },
 
-    recut: (params, opts) => {
-      const scoped = opts?.scoped ?? false;
-      const url = scoped ? "/api/cluster/scoped/recut" : "/api/cluster/recut";
-      const scopeKey = scoped ? get().clusterData?.scope?.scopeKey : undefined;
-      if (scoped && !scopeKey) return Promise.resolve();
-      const body: Record<string, unknown> = scoped ? { scopeKey } : {};
-      let msg = scoped ? "Re-cutting scoped tree..." : "Re-cutting tree...";
+    recut: (params) => {
+      const body: Record<string, unknown> = {};
+      let msg = "Re-cutting tree...";
       if (params.minClusterSize != null) {
         body.minClusterSize = params.minClusterSize;
-        msg = scoped ? "Adaptive scoped re-cut..." : "Adaptive re-cut...";
+        msg = "Adaptive re-cut...";
       } else if (params.threshold != null) {
         body.threshold = params.threshold;
       } else {
         body.nClusters = params.nClusters ?? 200;
       }
-      return doRecut(url, body, msg);
+      return doRecut("/api/cluster/recut", body, msg);
     },
 
     dismissCluster: (clusterId) => {
@@ -346,75 +335,12 @@ export const useListStore = create<ListState>((set, get) => {
       }
     },
 
-    runScopedCluster: async (groupIds, opts) => {
-      if (groupIds.length === 0) return;
-      // Flush pending group persists so Rust sees latest .reorder-groups.json
-      await useGroupStore.getState().flushPending();
-
-      const prev = get().clusterData;
-      // Preserve the pre-scope global view (unless we're already in scope).
-      const globalBackup = prev?.scope ? get().globalClusterData : prev;
-
-      set({
-        loading: true,
-        progress: "Starting scoped clustering...",
-        globalClusterData: globalBackup,
-      });
-      try {
-        const { weights } = get();
-        const start = await startSSE("/api/cluster/scoped", {
-          groupIds,
-          nClusters: opts?.nClusters,
-          weights,
-        });
-        if (start.kind === "conflict") {
-          set({ loading: false, progress: "Clustering already in progress" });
-          return;
-        }
-
-        let result: ClusterData | null = null;
-        await consumeSSE(start.response, {
-          onProgress: (message) => set({ progress: message }),
-          onResult: (data) => {
-            result = data as ClusterData;
-          },
-          onError: (error) => {
-            set({ loading: false, progress: `Error: ${error}` });
-          },
-        });
-
-        if (result) {
-          set({ ...applyClusterResultPayload(result), treeStale: false });
-        } else if (!get().progress.startsWith("Error:")) {
-          set({ loading: false, progress: "No scoped results returned" });
-        }
-      } catch (err) {
-        set({
-          loading: false,
-          progress: `Error: ${getErrorMessage(err, "scoped cluster failed")}`,
-        });
-      }
-    },
-
-    exitScope: () => {
-      const backup = get().globalClusterData;
-      if (!backup) {
-        set({ clusterData: null, globalClusterData: null });
-        return;
-      }
-      set({
-        clusterData: backup,
-        globalClusterData: null,
-      });
-    },
-
     insertClusterFromFilenames: (name, filenames, afterClusterId) => {
       const { clusterData } = get();
       if (!clusterData || filenames.length === 0) return;
       const newCluster: ClusterResultData = {
         id: `nn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         autoName: name || "From NN",
-        autoTags: [],
         images: [...new Set(filenames)],
         confirmedGroup: null,
       };

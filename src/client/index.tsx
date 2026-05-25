@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { ClusterView } from "./components/cluster/ClusterView.tsx";
-import { ClusterCompare } from "./components/cluster-compare/ClusterCompare.tsx";
 import {
   AppShellHeader,
   DEFAULT_MODE,
@@ -26,7 +25,6 @@ import { useGroupStore } from "./stores/groupStore.ts";
 import { useImageStore } from "./stores/imageStore.ts";
 import { useMergeSuggestionsStore } from "./stores/mergeSuggestionsStore.ts";
 import {
-  useCompareStore,
   useExpandStore,
   useInteractionsStore,
   useListStore,
@@ -47,7 +45,6 @@ import { useTrashStore } from "./stores/trashStore.ts";
   session: useSessionStore,
   clusterList: useListStore,
   clusterInteractions: useInteractionsStore,
-  clusterCompare: useCompareStore,
   clusterExpand: useExpandStore,
   clusterSplit: useSplitStore,
   clusterMetrics: useMetricsStore,
@@ -82,8 +79,6 @@ function AppShell() {
       </AppShellHeader>
       {mode === "cluster" ? (
         <ClusterView />
-      ) : mode === "cluster-compare" ? (
-        <ClusterCompare />
       ) : mode === "merge-suggestions" ? (
         <MergeSuggestions />
       ) : (

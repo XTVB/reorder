@@ -146,8 +146,7 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
     const { querySource, filter, topN, aggregation } = get();
     if (!querySource || querySource.images.length === 0) return;
 
-    const { weights, usePatches, clusterData } = useListStore.getState();
-    const restrictToFilenames = clusterData?.scope?.subsetFilenames;
+    const { weights, usePatches } = useListStore.getState();
 
     set({ loading: true, progress: "Running NN query...", error: null });
     try {
@@ -158,7 +157,6 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
         aggregation,
         weights,
         usePatches,
-        restrictToFilenames,
       });
       if (start.kind === "conflict") {
         set({ loading: false, progress: "", error: "Clustering in progress — retry shortly" });

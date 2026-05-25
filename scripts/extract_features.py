@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""Extract CLIP + PE-Core + color features from images, cached by content hash.
+"""Extract PE-Core-G + DINOv3 + color features from images, cached by content hash.
 
 Only does feature extraction — no clustering. Outputs a manifest JSON to stdout.
 Progress is reported on stderr.
 
 Models:
-  - CLIP ViT-B/32 (512-dim) — kept for TF-IDF auto-naming
-  - DINOv2 ViT-L/14 (1024-dim)
   - DINOv3 ViT-B/16 (768-dim CLS + 49 × 768 pooled patches + 196 × 768 full-res patches)
-  - PE-Core-L-14-336 (1024-dim) — Meta Perception Encoder, large variant
   - PE-Core-bigG-14-448 (1280-dim) — Meta Perception Encoder, giant variant
   - Color histograms (693-dim) — 3x3 spatial grid of HSV + RGB moments (77 per cell)
 
@@ -33,9 +30,6 @@ import numpy as np
 # Per-model version keys. Only models whose version changed get re-extracted.
 # The cache stores "_v_<key>" for each model. Missing or mismatched → re-extract that model only.
 MODEL_VERSIONS = {
-    "clip": "ViT-B-32-laion2b-v1",
-    "dino": "dinov2-vitl14-v1",
-    "pecore_l": "PE-Core-L-14-336-meta-v1",
     "pecore_g": "PE-Core-bigG-14-448-meta-v1",
     "color": "hsv-rgb-3x3-693d-v1",
     "dinov3": "dinov3-vitb16-7x7pool-v2",
@@ -306,8 +300,6 @@ def _load_existing_cache(hash_cache_path):
             # Migrate old monolithic _model_version to per-model versions.
             old_version = str(data["_model_version"]) if "_model_version" in data else None
             old_compat = {
-                "clip": old_version and "clip-ViT-B-32" in old_version,
-                "dino": old_version and "dinov2-vitl14" in old_version,
                 "color": old_version and "color77" in old_version,
             }
 
@@ -587,32 +579,6 @@ def extract_open_clip(key, model_name, pretrained, hw, batch_size_eff, label,
     return embs
 
 
-def extract_dinov2(items, ctx, args, save_to_cache):
-    """DINOv2 ViT-L/14 extraction (torch.hub)."""
-    import contextlib
-    import torch
-    from torchvision import transforms
-    print(f"  [Pass {ctx.next_pass()}/{ctx.total_passes}] DINOv2 ViT-L/14 ({len(items)} images)",
-          file=sys.stderr)
-    with contextlib.redirect_stdout(sys.stderr):
-        dino_model = torch.hub.load("facebookresearch/dinov2", "dinov2_vitl14")
-    dino_model = dino_model.to(ctx.device).eval()
-    dino_preprocess = transforms.Compose([
-        transforms.Resize(518, interpolation=transforms.InterpolationMode.BICUBIC),
-        transforms.CenterCrop(518),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-
-    embs = _run_pass(
-        items, dino_preprocess, 518, max(1, args.batch_size // 2), "DINOv2",
-        inference_fn=dino_model, ctx=ctx,
-        on_checkpoint=lambda e, i: save_to_cache("dino", e, i),
-    )
-    ctx.free_model(dino_model, dino_preprocess)
-    return embs
-
-
 def extract_dinov3(items, ctx, args, save_to_cache, save_patches_cache):
     """DINOv3 ViT-B/16 extraction (transformers, local weights).
 
@@ -741,13 +707,13 @@ class ExtractCtx:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract CLIP + PE-Core + color features")
+    parser = argparse.ArgumentParser(description="Extract PE-G + DINOv3 + color features")
     parser.add_argument("image_dir", help="Directory containing images")
     parser.add_argument("--cache-dir", default=None,
                         help="Cache directory (default: <image_dir>/.reorder-cache)")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--models", default=None,
-                        help="Comma-separated list of models to force re-extract (e.g. 'pecore_l,pecore_g'). "
+                        help="Comma-separated list of models to force re-extract (e.g. 'pecore_g,color'). "
                              "Default: extract all models with missing/outdated cache.")
     parser.add_argument("--required", default=None,
                         help="Comma-separated list of required models. Only these (if missing/outdated) "
@@ -767,7 +733,12 @@ def main():
     cache_dir = args.cache_dir or os.path.join(image_dir, ".reorder-cache")
     os.makedirs(cache_dir, exist_ok=True)
 
-    hash_cache_path = os.path.join(cache_dir, "clip_hash_cache.npz")
+    hash_cache_path = os.path.join(cache_dir, "embeddings_hash_cache.npz")
+    # Migrate the old CLIP-era filename in place so existing caches survive the rename.
+    legacy_hash_cache = os.path.join(cache_dir, "clip_hash_cache.npz")
+    if os.path.exists(legacy_hash_cache) and not os.path.exists(hash_cache_path):
+        os.rename(legacy_hash_cache, hash_cache_path)
+        print(f"Migrated cache: {legacy_hash_cache} → {hash_cache_path}", file=sys.stderr)
     hash_cache_order_path = os.path.join(cache_dir, "hash_cache_order.json")
     # Lock-gap fix: write to .tmp; the TS side (src/cluster/pipeline.ts) renames
     # to the final path under the FS lock so concurrent /api/save can't observe
@@ -883,7 +854,7 @@ def main():
     prev_sigint = signal.signal(signal.SIGINT, _handle_sigint)
 
     # Only import torch if a neural model pass is needed.
-    _neural_keys = {"clip", "pecore_l", "pecore_g", "dino", "dinov3"}
+    _neural_keys = {"pecore_g", "dinov3"}
     if any(items_map[k] for k in _neural_keys):
         import torch
         ctx.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
@@ -1002,8 +973,6 @@ def main():
         _save_model_to_cache("color", new_color, items_done)
 
     OPEN_CLIP_MODELS = [
-        ("clip",     "ViT-B-32",           "laion2b_s34b_b79k", 224, 4, 1,  512, "CLIP"),
-        ("pecore_l", "PE-Core-L-14-336",   "meta",              336, 1, 2, 1024, "PE-Core-L"),
         ("pecore_g", "PE-Core-bigG-14-448","meta",              448, 1, 8, 1280, "PE-Core-G"),
     ]
 
@@ -1021,18 +990,7 @@ def main():
         else:
             new_arrays[key] = np.zeros((0, dim), dtype=np.float32)
 
-    new_clip = new_arrays["clip"]
-    new_pecore_l = new_arrays["pecore_l"]
     new_pecore_g = new_arrays["pecore_g"]
-
-    # DINOv2
-    dino_items = items_map["dino"]
-    if dino_items and not ctx.interrupted:
-        new_dino = extract_dinov2(dino_items, ctx, args, _save_model_to_cache)
-        n_done = new_dino.shape[0]
-        _save_model_to_cache("dino", new_dino, dino_items[:n_done])
-    else:
-        new_dino = np.zeros((0, 1024), dtype=np.float32)
 
     # DINOv3
     dinov3_items = items_map["dinov3"]
@@ -1063,9 +1021,9 @@ def main():
     # deleted/moved files to prevent unbounded cache growth.
     new_hashes_map = {k: [h for _, h in items_map[k]] for k in EMB_KEYS}
     new_data_map = {
-        "clip": new_clip, "dino": new_dino,
-        "pecore_l": new_pecore_l, "pecore_g": new_pecore_g,
-        "color": new_color, "dinov3": new_dinov3,
+        "pecore_g": new_pecore_g,
+        "color": new_color,
+        "dinov3": new_dinov3,
     }
 
     current_hash_set = set(current_hashes.values())

@@ -12,6 +12,7 @@ import { join } from "node:path";
 import {
   computeCacheSignature,
   readSidecarSignature,
+  resolveHashCachePath,
   writeSidecarSignature,
 } from "../cache-utils.ts";
 import {
@@ -19,7 +20,6 @@ import {
   contentHashesPath,
   DINOV3_PATCHES_FILE,
   DINOV3_PATCHES_HASHES_FILE,
-  HASH_CACHE_FILE,
   patchDistMatrixPath,
   rerankDistMatrixPath,
 } from "../fs/paths.ts";
@@ -51,7 +51,7 @@ export async function ensureRerankDistMatrix(
   onProgress?: (line: string) => void,
 ): Promise<string> {
   const cache = cacheDir(targetDir);
-  const hashCachePath = join(cache, HASH_CACHE_FILE);
+  const hashCachePath = resolveHashCachePath(cache);
   const matrixPath = rerankDistMatrixPath(targetDir);
   const sidecar = sidecarPath(matrixPath);
 

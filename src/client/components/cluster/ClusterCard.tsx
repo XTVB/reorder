@@ -35,7 +35,6 @@ interface Props {
   onAccept: () => void;
   onAddToGroup: () => void;
   onDismiss: () => void;
-  onOpenCompare: () => void;
   onToggleSplit: () => void;
   onOpenExpand: () => void;
 }
@@ -70,7 +69,6 @@ export const ClusterCard = memo(function ClusterCard({
   onAccept,
   onAddToGroup,
   onDismiss,
-  onOpenCompare,
   onToggleSplit,
   onOpenExpand,
 }: Props) {
@@ -203,13 +201,6 @@ export const ClusterCard = memo(function ClusterCard({
           </span>
         </div>
 
-        {!collapsed &&
-          cluster.autoTags.slice(0, 4).map((t) => (
-            <span key={t.term} className="cluster-tag" title={`z=${t.z.toFixed(1)}`}>
-              {t.term}
-            </span>
-          ))}
-
         <div className="cluster-actions" onClick={(e) => e.stopPropagation()}>
           {!hasGroup && (
             <button className="btn btn-small btn-create" onClick={onAccept}>
@@ -221,13 +212,6 @@ export const ClusterCard = memo(function ClusterCard({
               Add {suggestedImages.length} to Group
             </button>
           )}
-          <button
-            className="btn btn-small btn-tree-nav"
-            onClick={onOpenCompare}
-            title="Open compare-mode to merge with similar clusters"
-          >
-            merge…
-          </button>
           <button
             className="btn btn-small btn-tree-nav"
             onClick={onToggleSplit}

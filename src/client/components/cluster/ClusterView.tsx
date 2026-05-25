@@ -11,7 +11,6 @@ import {
   filenamesFromSelectedImages,
   findClusterEverywhere,
   parseImageKey,
-  useCompareStore,
   useExpandStore,
   useInteractionsStore,
   useListStore,
@@ -23,11 +22,9 @@ import { useTrashStore } from "../../stores/trashStore.ts";
 import type { ClusterData, ClusterResultData, SplitChildren } from "../../types.ts";
 import { SearchOverlay, useSearchOverlayState } from "../shared/SearchBar.tsx";
 import { ClusterCard } from "./ClusterCard.tsx";
-import { ComparePanel } from "./ComparePanel.tsx";
 import { ExpandModal } from "./ExpandModal.tsx";
 import { MergeBar } from "./MergeBar.tsx";
 import { NNResultsModal } from "./NNResultsModal.tsx";
-import { ScopeBanner } from "./ScopeBanner.tsx";
 
 interface DisplayEntry {
   cluster: ClusterResultData;
@@ -57,10 +54,6 @@ function getClusterSubtitle(
   groupCount: number,
   loading: boolean,
 ): string {
-  if (clusterData?.scope) {
-    const { scope } = clusterData;
-    return `Scoped: ${scope.groupIds.length} groups · ${scope.nImages} images`;
-  }
   if (clusterData) return `${visibleCount} clusters — ${groupCount} groups`;
   return loading ? "Loading..." : "Run clustering to start";
 }
@@ -74,7 +67,6 @@ export function ClusterView() {
   const treeStale = useListStore((s) => s.treeStale);
   const splitChildren = useListStore((s) => s.splitChildren);
   const fetchClusters = useListStore((s) => s.fetchClusters);
-  const runScopedCluster = useListStore((s) => s.runScopedCluster);
   const dismissCluster = useListStore((s) => s.dismissCluster);
   const toggleCollapsed = useListStore((s) => s.toggleCollapsed);
   const loadCachedClusters = useListStore((s) => s.loadCachedClusters);
@@ -95,9 +87,6 @@ export function ClusterView() {
 
   const metrics = useMetricsStore((s) => s.metrics);
   const refreshMetrics = useMetricsStore((s) => s.refreshMetrics);
-
-  const compare = useCompareStore((s) => s.compare);
-  const openCompare = useCompareStore((s) => s.openCompare);
 
   const expand = useExpandStore((s) => s.expand);
   const openExpand = useExpandStore((s) => s.openExpand);
@@ -305,7 +294,6 @@ export function ClusterView() {
 
   return (
     <div className="cluster-view">
-      <ScopeBanner />
       <SearchOverlay
         isOpen={search.isOpen}
         query={search.query}
@@ -383,7 +371,6 @@ export function ClusterView() {
                     onAccept={() => acceptCluster(cluster)}
                     onAddToGroup={() => addToGroup(cluster)}
                     onDismiss={() => dismissCluster(cluster.id)}
-                    onOpenCompare={() => openCompare(cluster.id)}
                     onToggleSplit={() => toggleSplit(cluster.id)}
                     onOpenExpand={() => openExpand(cluster.id)}
                   />
@@ -433,20 +420,15 @@ export function ClusterView() {
           Groups changed —{" "}
           <button
             className="btn btn-small btn-primary"
-            onClick={() =>
-              clusterData.scope
-                ? runScopedCluster(clusterData.scope.groupIds, { nClusters: clusterData.nClusters })
-                : fetchClusters(clusterData.nClusters)
-            }
+            onClick={() => fetchClusters(clusterData.nClusters)}
           >
-            {clusterData.scope ? "Re-run scoped" : "Re-run clustering"}
+            Re-run clustering
           </button>{" "}
           to incorporate new groups as seeds
         </div>
       )}
 
       <NNResultsModal />
-      {compare && <ComparePanel />}
       {expand && <ExpandModal />}
     </div>
   );

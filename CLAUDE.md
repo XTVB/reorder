@@ -7,12 +7,11 @@ Default to Bun, not Node.
 
 ## What This App Does
 
-Local macOS tool for organizing image directories. Browser UI with four modes:
+Local macOS tool for organizing image directories. Browser UI with three modes:
 
 1. **Reorder** — drag-and-drop, group, rename to sequential numbering, organize into subfolders
-2. **Cluster** — CLIP/PE-Core/DINOv3 visual clustering to discover photoshoot sets
-3. **Cluster Compare** — side-by-side clustering runs for weight tuning
-4. **Merge Suggestions** — DINOv3 patch matching finds groups likely to belong together
+2. **Cluster** — PE-Core-G + DINOv3 + color visual clustering to discover photoshoot sets
+3. **Merge Suggestions** — DINOv3 patch matching finds groups likely to belong together
 
 Workflow is iterative: cluster → accept groups → reorder/rename → re-cluster.
 
@@ -22,7 +21,7 @@ The codebase is module-oriented. Each top-level directory under `src/` has an `i
 
 ### `src/server/` — HTTP layer
 - `index.ts` — `Bun.serve()` + a route dispatcher that walks an array of `RouteHandler`s and returns the first non-null response. No framework.
-- `routes/` — one file per concern (`cluster`, `cluster-extract`, `cluster-scoped`, `constraints`, `delete`, `folders`, `groups`, `images`, `merge`, `nn`, `organize`, `rename`, `tree-nav`). Each exports a single `RouteHandler`.
+- `routes/` — one file per concern (`cluster`, `cluster-extract`, `constraints`, `delete`, `folders`, `groups`, `images`, `merge`, `nn`, `organize`, `rename`, `tree-nav`). Each exports a single `RouteHandler`.
 - `middleware/` — `response` (json/mimeType helpers), `sse` (`sseResponse`, `subscribeProgressSSE` for re-attach), `cluster-job` (`runClusterJobSSE` wraps the 409-or-stream-progress pattern every long-running cluster route shares).
 - Startup runs `recoverPendingRename` inside `withRenameLock`; any GET that depends on rename consistency holds the same lock.
 
@@ -30,38 +29,38 @@ The codebase is module-oriented. Each top-level directory under `src/` has an `i
 Two-phase rename with write-ahead manifest at `.reorder-pending.json`. `withRenameLock` (in `lock.ts`) is a single mutex serializing every FS-mutating op AND any read that must not observe a half-applied rename. Split into `atomic-json`, `content-hashes`, `folder-save`, `groups`, `images`, `organize`, `paths`, `recovery`, `rename`, `tags`, `trash`. `paths.ts` is the single source for cache/log/manifest paths.
 
 ### `src/cluster/` — clustering orchestration
-Drives Python/Rust subprocesses; parses linkage tree; TF-IDF auto-naming; contact sheets; merge suggestions. Notable modules: `pipeline` (extract → linkage → naming), `linkage` (tree cuts: fixed-N / threshold / adaptive), `embeddings` (per-model NPZ load + content-hash mapping), `tfidf`, `constraints` (cannot-link + group-lock), `distance-matrices` (patch + re-rank caches), `imported` (bypass for externally-provided clusters), `scoped` (sub-cluster on a subset), `progress` (broadcast channel for SSE re-attach), `job-mutex` (single in-flight compute slot, abortable via SIGINT). `subprocess.ts` centralises spawning. `binaries.ts` resolves Python + Rust binary paths.
+Drives Python/Rust subprocesses; parses linkage tree; contact sheets; merge suggestions. Notable modules: `pipeline` (extract → linkage → name assignment), `linkage` (tree cuts: fixed-N / threshold / adaptive), `embeddings` (per-model NPZ load + content-hash mapping), `constraints` (cannot-link + group-lock), `distance-matrices` (patch + re-rank caches), `imported` (bypass for externally-provided clusters), `progress` (broadcast channel for SSE re-attach), `job-mutex` (single in-flight compute slot, abortable via SIGINT). `subprocess.ts` centralises spawning. `binaries.ts` resolves Python + Rust binary paths.
 
 The compute-job mutex (`cluster/job-mutex.ts`) is distinct from the FS lock: it guards CPU/GPU work and serves 409 to concurrent compute requests, while `withRenameLock` guards on-disk consistency.
 
 ### `src/client/` — React 19 SPA, built with `Bun.build()` (no Vite)
-- Routing: `useRouter` hook (pushState). Paths: `/reorder`, `/cluster`, `/cluster-compare`, `/merge-suggestions`. Server returns `index.html` for any non-API, non-asset path.
+- Routing: `useRouter` hook (pushState). Paths: `/reorder`, `/cluster`, `/merge-suggestions`. Server returns `index.html` for any non-API, non-asset path.
 - Shell: `AppShell` in `index.tsx` → `components/header/AppShellHeader` + mode-specific view.
-- Components grouped by mode/concern: `cluster/`, `cluster-compare/`, `merge-suggestions/`, `reorder/`, `header/`, `shared/`.
+- Components grouped by mode/concern: `cluster/`, `merge-suggestions/`, `reorder/`, `header/`, `shared/`.
 - `api/` — `client.ts` (`getJson`/`postJson`/`putJson`/`deleteJson`/`postRaw` fetch wrappers; centralised error extraction) and `sse.ts` (`consumeSSE` parser, `startSSE` POSTs and returns either the stream or a 409-conflict signal). Use these instead of bare `fetch`.
 - DnD: `@dnd-kit/core` + `@dnd-kit/sortable`. Virtualization: `@tanstack/react-virtual`.
 - CSS: per-concern files in `src/client/styles/`, copied to `dist/` at build time.
 - Debug: all Zustand stores attached to `window.__stores`.
 
 ### Zustand stores (`src/client/stores/`)
-- `core/` — cross-mode primitives: `selectionStore` (multi-context: `reorder`, `cluster:images`, `cluster:merge`, `compare`, `expand`, `nn`, `trash`, plus per-row contexts), `modalStore`, `lightboxStore`, `toastStore`, `sessionStore`.
-- `modes/cluster/` — split into `listStore` (current `clusterData`), `compareStore`, `expandStore`, `splitStore`, `metricsStore`, `interactionsStore`. `index.ts` is the barrel and installs a single subscription that clears compare/expand/metrics/selection state when the cluster *shape* (id set or per-cluster sizes) changes.
+- `core/` — cross-mode primitives: `selectionStore` (multi-context: `reorder`, `cluster:images`, `cluster:merge`, `expand`, `nn`, `trash`, plus per-row contexts), `modalStore`, `lightboxStore`, `toastStore`, `sessionStore`.
+- `modes/cluster/` — split into `listStore` (current `clusterData`), `expandStore`, `splitStore`, `metricsStore`, `interactionsStore`. `index.ts` is the barrel and installs a single subscription that clears expand/metrics/selection state when the cluster *shape* (id set or per-cluster sizes) changes.
 - Top-level: `imageStore`, `groupStore`, `folderStore`, `dndStore`, `mergeSuggestionsStore`, `constraintsStore`, `nnQueryStore`, `trashStore`. Read the files for shape — they're the source of truth.
 
 ### Clustering Pipeline
 
 ```
 Stage 1: Python (scripts/extract_features.py)
-  CLIP ViT-B/32, DINOv2, DINOv3, PE-Core L/G, color histograms — all on MPS GPU.
+  PE-Core-G, DINOv3, color histograms — all on MPS GPU.
   Per-model version keys (MODEL_VERSIONS dict): only changed models re-extract.
   Content-hash cache (blake2b of first 16KB + filesize) survives renames.
   --models forces re-extract; --required only extracts listed models if missing.
-  → .reorder-cache/{clip_embeddings.npz, clip_hash_cache.npz, *.filenames.json, dinov3_patches.npy}
+  → .reorder-cache/{embeddings_hash_cache.npz, hash_cache_order.json, dinov3_patches_*.npy}
 
 Stage 2: Rust (rust/cluster-tool/, modules: cli/io/distances/linkage/tree)
   Ward's linkage (NNC) matching scipy exactly. Parallel via rayon.
   Pre-seeds confirmed reorder groups as real clusters (true centroid/size/variance).
-  Weighted blend of per-model cosine distances (--clip-weight, --dinov3-weight, etc.)
+  Weighted blend of per-model cosine distances (--pecore-g-weight, --dinov3-weight, --color-weight, --learned-proj-weight)
   Optional: blend in precomputed patch distance matrix (--dist-matrix)
   → .reorder-cache/linkage_tree.bin
 
@@ -71,7 +70,7 @@ Stage 2b: Rust (rust/group-similarity/, modes: merge-suggestions / dist-matrix)
 
 Stage 3: Bun (src/cluster/pipeline.ts + linkage.ts)
   Re-cuts cached linkage tree — three modes: fixed N, distance threshold, HDBSCAN-style adaptive
-  TF-IDF auto-naming: CLIP × 334-term vocabulary, z-score ranking
+  Auto-name = confirmed-group name (when one is pre-seeded) or "Cluster N" placeholder
   Contact sheets via Sharp (cluster/contact-sheets.ts): justified-row layout on a 2000px-wide canvas
 ```
 
@@ -85,7 +84,7 @@ Stage 3: Bun (src/cluster/pipeline.ts + linkage.ts)
 - **Stale tree detection** — client tracks `treeStale` after group changes, prompts re-run
 - **Rename safety** — two-phase with manifest; `recoverPendingRename` runs at startup inside the lock
 - **Imported-clusters bypass** — `/api/cluster/import` stores clusters at `.reorder-cache/imported_clusters.json` and takes precedence over linkage-tree re-cuts on load
-- **Cluster-shape subscription** — selection / compare / expand / metrics state is auto-cleared when cluster ids or sizes change (wired in `stores/modes/cluster/index.ts`)
+- **Cluster-shape subscription** — selection / expand / metrics state is auto-cleared when cluster ids or sizes change (wired in `stores/modes/cluster/index.ts`)
 - **Mixed response envelopes** — server returns `{success}`, `{ok}`, and raw payloads depending on route. `client.ts` does not normalise; only error extraction is centralised.
 
 ## Python Environment

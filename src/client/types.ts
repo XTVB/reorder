@@ -6,7 +6,6 @@ export type {
   ClusterData,
   ClusterMetrics,
   ClusterResultData,
-  ClusterScope,
   DirResponse,
   DistanceProfile,
   ExpandCandidate,
@@ -48,4 +47,4 @@ export type GridItem =
   | { type: "folder"; folderName: string }
   | { type: "folder-image"; folderName: string; filename: string };
 
-export type AppMode = "reorder" | "cluster" | "cluster-compare" | "merge-suggestions";
+export type AppMode = "reorder" | "cluster" | "merge-suggestions";

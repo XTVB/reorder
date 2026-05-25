@@ -8,7 +8,6 @@ import { initLog, log, logError } from "../log.ts";
 import { json, mimeType } from "./middleware/response.ts";
 import { clusterRoutes } from "./routes/cluster.ts";
 import { clusterExtractRoutes } from "./routes/cluster-extract.ts";
-import { clusterScopedRoutes } from "./routes/cluster-scoped.ts";
 import { constraintsRoutes } from "./routes/constraints.ts";
 import { deleteRoutes } from "./routes/delete.ts";
 import { foldersRoutes } from "./routes/folders.ts";
@@ -30,7 +29,6 @@ const ROUTE_HANDLERS: RouteHandler[] = [
   organizeRoutes,
   foldersRoutes,
   treeNavRoutes,
-  clusterScopedRoutes,
   clusterExtractRoutes,
   nnRoutes,
   mergeRoutes,

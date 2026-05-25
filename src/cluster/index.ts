@@ -42,16 +42,13 @@ export {
   runRecutByThreshold,
 } from "./pipeline.ts";
 export { broadcastProgress, getLastProgress, subscribeProgress } from "./progress.ts";
-export { clearScopedCache, runScopedFull, runScopedRecut } from "./scoped.ts";
-export { ensureTextEmbeddings } from "./tfidf.ts";
 
 import { clearPatchDistMatrixCache } from "./distance-matrices.ts";
 import { clearEmbeddingsCache } from "./embeddings.ts";
 import { clearTreeCache } from "./linkage.ts";
 
 /** Clear every in-memory cache held by the cluster modules. Called when the
- * underlying caches/embeddings/tree change on disk. TF-IDF stats are excluded
- * — they're keyed by NPZ mtime in tfidf.ts and self-invalidate on extraction. */
+ * underlying caches/embeddings/tree change on disk. */
 export function invalidateClusterCache(): void {
   clearEmbeddingsCache();
   clearTreeCache();

@@ -257,7 +257,6 @@ export function ReorderToolbar() {
     folders.some((f) => (stripFolderNumber(f.name) !== f.name) !== numberedFolderPrefix);
 
   const hasSelectionActions = selectedIds.size > 0;
-  const hasGroupManagement = !folderModeEnabled && groups.length > 0;
   const showUndo = !folderModeEnabled && canUndo;
   const showSlideshow = !folderModeEnabled && images.length > 0;
   const trashCount = !folderModeEnabled ? markedTrashIds.size : 0;
@@ -299,7 +298,7 @@ export function ReorderToolbar() {
           )}
         </div>
       )}
-      {hasGroupManagement && (
+      {!folderModeEnabled && (
         <div className="toolbar-group">
           <button className="btn btn-secondary" onClick={handleGroupsToTop}>
             Groups to Top

@@ -6,7 +6,7 @@ A small MLP trained on labeled photoshoot data that maps PE-G (1280d) + color (6
 
 The head lives at `~/.cache/reorder/learned_head.pt` + `learned_head.json` (with a content-derived version string). Three places integrate it:
 
-1. **`scripts/extract_features.py`** runs `_maybe_update_learned_proj` at the end of every extraction. It loads the head, pushes the (PE-G, color) features through it, and stores the (N, 256) projection as `learned_proj` in `.reorder-cache/clip_hash_cache.npz` with a `_v_learned_proj` version key. If the head's version differs from what's stored, the projection is recomputed. If the head isn't installed, the step is silently skipped.
+1. **`scripts/extract_features.py`** runs `_maybe_update_learned_proj` at the end of every extraction. It loads the head, pushes the (PE-G, color) features through it, and stores the (N, 256) projection as `learned_proj` in `.reorder-cache/embeddings_hash_cache.npz` with a `_v_learned_proj` version key. If the head's version differs from what's stored, the projection is recomputed. If the head isn't installed, the step is silently skipped.
 
 2. **`rust/cluster-tool`** exposes `--learned-proj-weight`. It reads the `learned_proj` array from the NPZ alongside the other model embeddings and blends them as one more weighted component in the combined feature vector.
 
@@ -36,7 +36,7 @@ python clusteringRefinement/train_final_head.py
 
 Prerequisites for any training dataset:
 - `.reorder-groups.json` with labeled groups
-- `.reorder-cache/clip_hash_cache.npz` containing `pecore_g` and `color`
+- `.reorder-cache/embeddings_hash_cache.npz` containing `pecore_g` and `color`
 - `.reorder-cache/pecore_g_views.npy` + `color_views.npy` (pixel-aug views) — produced by `clusteringRefinement/pixel_aug start`. Optional but recommended; the head trains fine without them, just slightly less well.
 
 After retraining the version string in `learned_head.json` changes. Next time `extract_features.py` runs on any dataset, it detects the mismatch and refreshes that dataset's `learned_proj` slice — automatically, no manual cache wipe.

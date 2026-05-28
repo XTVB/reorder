@@ -67,10 +67,10 @@ cmd_status() {
   ~/.venvs/imgcluster-env/bin/python3 - <<'PY'
 import json, os
 dirs = [
-    "ClusteringBenchmark1", "ClusteringBenchmark2", "ClusteringBenchmark3",
-    "ClusteringBenchmark4", "ClusteringBenchmark5", "ClusteringBenchmark6",
-    "ClusteringBenchmark8", "ClusteringBenchmark9", "ClusteringBenchmark10",
-    "ClusteringBenchmark11", "ClusteringBenchmark12",
+    "ClusteringBenchmark1-austin", "ClusteringBenchmark2-sarah", "ClusteringBenchmark3-eva",
+    "ClusteringBenchmark4-mia", "ClusteringBenchmark5-lily", "ClusteringBenchmark6-sabrina",
+    "ClusteringBenchmark8-evie", "ClusteringBenchmark9-darshelle", "ClusteringBenchmark10-alina",
+    "ClusteringBenchmark11-amanda", "ClusteringBenchmark12-anna",
 ]
 base = "/Users/abdudh/Downloads/PicsStaging"
 total_done = total = 0

@@ -191,9 +191,10 @@ export function ClusterView() {
     for (let i = 0; i < visibleClusters.length; i++) {
       const c = visibleClusters[i]!;
       const nameHit =
-        c.autoName.toLowerCase().includes(normalizedQuery) ||
-        (c.confirmedGroup?.name.toLowerCase().includes(normalizedQuery) ?? false);
-      const fileHit = !nameHit && c.images.some((f) => f.toLowerCase().includes(normalizedQuery));
+        (c.name ?? "").toLowerCase().includes(normalizedQuery) ||
+        (c.confirmedGroup?.name ?? "").toLowerCase().includes(normalizedQuery);
+      const fileHit =
+        !nameHit && c.images.some((f) => (f ?? "").toLowerCase().includes(normalizedQuery));
       if (nameHit || fileHit) indices.push(i);
     }
     return indices;
@@ -216,7 +217,7 @@ export function ClusterView() {
     if (!cluster) return undefined;
     const matches = new Set<string>();
     for (const f of cluster.images) {
-      if (f.toLowerCase().includes(normalizedQuery)) matches.add(f);
+      if ((f ?? "").toLowerCase().includes(normalizedQuery)) matches.add(f);
     }
     return matches;
   }, [currentMatchRowIndex, visibleClusters, normalizedQuery]);

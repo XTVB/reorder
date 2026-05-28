@@ -8,6 +8,7 @@
 // don't false-validate when images are deleted.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import {
   computeCacheSignature,
@@ -190,4 +191,16 @@ export function loadPatchDistMatrix(targetDir: string): { n: number; distances: 
 
 export function clearPatchDistMatrixCache(): void {
   _patchDistMatrixCache = null;
+}
+
+/** Delete the on-disk re-rank distance matrix and its signature sidecar (no-op if absent). */
+export async function removeRerankDistMatrix(targetDir: string): Promise<void> {
+  const base = rerankDistMatrixPath(targetDir);
+  for (const p of [base, sidecarPath(base)]) {
+    try {
+      await unlink(p);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  }
 }

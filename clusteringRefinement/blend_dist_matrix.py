@@ -28,7 +28,7 @@ import numpy as np
 def load_baseline_features(target_dir: str, peg_weight: float, color_weight: float) -> tuple[np.ndarray, list[str]]:
     """Build the concat'd feature vector the rust cluster-tool would build."""
     cache = os.path.join(target_dir, ".reorder-cache")
-    npz = np.load(os.path.join(cache, "clip_hash_cache.npz"), allow_pickle=False)
+    npz = np.load(os.path.join(cache, "embeddings_hash_cache.npz"), allow_pickle=False)
     with open(os.path.join(cache, "content_hashes.json")) as f:
         content_hashes = json.load(f)
     filenames = sorted(content_hashes.keys())

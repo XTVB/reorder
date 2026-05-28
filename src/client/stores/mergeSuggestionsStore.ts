@@ -6,6 +6,8 @@ import { useGroupStore } from "./groupStore.ts";
 
 const MAX_PER_GROUP = 8;
 
+export type MergeSortMode = "topMatch" | "groupOrder";
+
 interface MergeSuggestionsState {
   suggestions: MergeSuggestionRow[] | null;
   loading: boolean;
@@ -16,6 +18,7 @@ interface MergeSuggestionsState {
   threshold: number;
   fullResolution: boolean;
   maxCombinedSize: number;
+  sortMode: MergeSortMode;
 
   collapsedRows: Set<string>;
   undoStack: ImageGroup[][];
@@ -23,6 +26,7 @@ interface MergeSuggestionsState {
   setThreshold: (t: number) => void;
   setFullResolution: (v: boolean) => void;
   setMaxCombinedSize: (n: number) => void;
+  setSortMode: (m: MergeSortMode) => void;
   fetchSuggestions: () => Promise<void>;
   toggleRowCollapse: (groupId: string) => void;
   collapseAllRows: () => void;
@@ -47,6 +51,7 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
   threshold: 0.65,
   fullResolution: false,
   maxCombinedSize: 40,
+  sortMode: "topMatch",
 
   collapsedRows: new Set(),
   undoStack: [],
@@ -54,6 +59,7 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
   setThreshold: (t) => set({ threshold: t }),
   setFullResolution: (v) => set({ fullResolution: v }),
   setMaxCombinedSize: (n) => set({ maxCombinedSize: Math.max(0, Math.floor(n)) }),
+  setSortMode: (m) => set({ sortMode: m }),
 
   fetchSuggestions: async () => {
     const { threshold, fullResolution, maxCombinedSize } = get();

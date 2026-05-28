@@ -203,11 +203,22 @@ export function SearchBar({ gridItems, onScrollToRow, columnCount }: SearchBarPr
     return { gridIndices, orderedIds, ids };
   }, [query, gridItems, groupMap]);
 
-  // Sync shared state after matches change
+  // Skip the update when the id set is identical — every render produces a
+  // fresh Set instance, so without this every keystroke into unrelated state
+  // would re-render every row that reads matchIds.
   useEffect(() => {
-    setMatchIds(ids);
-    setCurrentMatchIndex(0);
+    setMatchIds((prev) => {
+      if (prev.size !== ids.size) return ids;
+      for (const id of ids) if (!prev.has(id)) return ids;
+      return prev;
+    });
   }, [ids, setMatchIds]);
+
+  // Reset the index only on user query change, not on upstream re-renders.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: query is the intentional trigger
+  useEffect(() => {
+    setCurrentMatchIndex(0);
+  }, [query]);
 
   // Update currentMatchId when index or matches change
   useEffect(() => {

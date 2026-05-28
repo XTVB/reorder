@@ -17,8 +17,8 @@ Outputs, per --output-dir:
 
 Usage:
   python scripts/train_projection_head.py \\
-      --dataset M1:/abs/path/ClusteringBenchmark1 \\
-      --dataset M2:/abs/path/ClusteringBenchmark2 \\
+      --dataset M1:/abs/path/ClusteringBenchmark1-austin \\
+      --dataset M2:/abs/path/ClusteringBenchmark2-sarah \\
       --train M1,M2 \\
       --eval M1,M2 \\
       --within-holdout-frac 0.2 \\
@@ -66,6 +66,11 @@ class Dataset:
     # Indices used by the sampler. Built once.
     train_group_to_idxs: dict[int, list[int]] = field(default_factory=dict)
     holdout_group_to_idxs: dict[int, list[int]] = field(default_factory=dict)
+    # Images that are the sole member of an explicit (user-labeled) group.
+    # Used only as background negatives — never anchors or positives.
+    # Distinct from ungrouped images, which we drop entirely (could secretly
+    # belong to an existing shoot).
+    singleton_idxs: list[int] = field(default_factory=list)
     # ArcFace local class indices: original group_id → [0, n_train_groups)
     gid_to_cls: dict[int, int] = field(default_factory=dict)
     # Augmented views: (N, K, D) tensor. None if not loaded. K=0 if no augmented
@@ -78,7 +83,7 @@ class Dataset:
 def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False, use_augmented_views: bool = False) -> Dataset:
     target_dir = os.path.abspath(target_dir)
     cache = os.path.join(target_dir, ".reorder-cache")
-    npz_path = os.path.join(cache, "clip_hash_cache.npz")
+    npz_path = os.path.join(cache, "embeddings_hash_cache.npz")
     ch_path = os.path.join(cache, "content_hashes.json")
     groups_path = os.path.join(target_dir, ".reorder-groups.json")
 
@@ -214,11 +219,13 @@ def split_groups(ds: Dataset, holdout_frac: float, seed: int):
     holdout_set = set(eligible[:n_holdout])
     ds.train_group_to_idxs = {gid: ix for gid, ix in group_to_idxs.items() if gid not in holdout_set and len(ix) >= 2}
     ds.holdout_group_to_idxs = {gid: ix for gid, ix in group_to_idxs.items() if gid in holdout_set}
+    ds.singleton_idxs = [ix[0] for gid, ix in group_to_idxs.items() if len(ix) == 1]
     # Local class indices for ArcFace head (per-dataset = no cross-model gradient)
     ds.gid_to_cls = {gid: ci for ci, gid in enumerate(sorted(ds.train_group_to_idxs.keys()))}
     print(
         f"  [{ds.name}] split: train_groups={len(ds.train_group_to_idxs)} "
-        f"holdout_groups={len(ds.holdout_group_to_idxs)} (singletons dropped from train)",
+        f"holdout_groups={len(ds.holdout_group_to_idxs)} "
+        f"singletons={len(ds.singleton_idxs)} (background negatives only)",
         file=sys.stderr,
     )
 
@@ -397,29 +404,33 @@ def apply_augmentations(
     feature_noise: float,
     peg_dim: int,
     color_dim: int,
+    mixup_end: int | None = None,
 ) -> torch.Tensor:
     """
     feats: (B, D) where rows are grouped in chunks of K (P groups × K images).
     Returns possibly-augmented copy of feats. Augmentations are training-only.
+    mixup_end bounds same-group mixup to [0, mixup_end); the tail (singletons)
+    still gets per-row augs.
     """
     b, _d = feats.shape
     out = feats.clone()
+    mix_b = b if mixup_end is None else mixup_end
 
     # Same-group MixUp: within each K-block, rotate-pair each anchor with a
     # same-group partner and interpolate with λ ~ Beta(α, α). Label is unchanged
     # (both anchor and partner are from the same group). Strengthens the
     # "what does within-group variation look like" signal without changing the
     # contrastive structure.
-    if mixup_alpha > 0 and k >= 2:
+    if mixup_alpha > 0 and k >= 2 and mix_b >= k:
         partner = torch.arange(b, device=feats.device)
-        for g_start in range(0, b, k):
+        for g_start in range(0, mix_b, k):
             block = list(range(g_start, g_start + k))
             shifted = block[1:] + block[:1]
             for i, p in zip(block, shifted):
                 partner[i] = p
         beta = torch.distributions.Beta(mixup_alpha, mixup_alpha)
-        lam = beta.sample((b, 1)).to(feats.device)
-        out = lam * out + (1 - lam) * feats[partner]
+        lam = beta.sample((mix_b, 1)).to(feats.device)
+        out[:mix_b] = lam * out[:mix_b] + (1 - lam) * feats[partner[:mix_b]]
 
     # Drop color: with per-image prob, zero the color slice. Closest feature-
     # space analog to background-masking — color histograms heavily encode
@@ -463,6 +474,13 @@ class PKSampler:
     of the remaining P-1 groups is drawn from the anchor's nearest neighbors in
     raw PE-G centroid space. The rest are drawn uniformly at random. This
     over-represents confusable groups in the contrastive denominator.
+
+    With use_singletons=True, every batch additionally appends ALL singleton-
+    group images for that dataset. They get unique negative-int sentinel labels
+    so they never match any real group (or each other) as positives —
+    sup_con_loss's has_pos mask skips them as anchors, but they show up in
+    every other anchor's denominator. Costs O(n_singletons) extra rows per
+    batch (linear, not K-multiplied), so cheap given singletons are rare.
     """
 
     def __init__(
@@ -474,6 +492,7 @@ class PKSampler:
         seed: int,
         hard_neg_frac: float = 0.0,
         hard_neg_pool_k: int = 20,
+        use_singletons: bool = False,
         peg_dim: int = 1280,
     ):
         self.train_dsets = train_dsets
@@ -482,6 +501,7 @@ class PKSampler:
         self.batches_per_epoch = batches_per_epoch
         self.rng = random.Random(seed)
         self.hard_neg_frac = hard_neg_frac
+        self.use_singletons = use_singletons
 
         # Precompute nearest-neighbor groups (per dataset) for hard-neg sampling.
         # Use PE-G centroid (already L2-normalized) for the similarity — cheap,
@@ -544,6 +564,15 @@ class PKSampler:
                     picks = [self.rng.choice(pool) for _ in range(self.k)]
                 idxs.extend(picks)
                 labels.extend([gid] * self.k)
+
+            # Background negatives: append every singleton-group image. Sentinel
+            # label = -(idx+1) — negative so it can't collide with real (>=0)
+            # group ids, and unique per image so no two singletons match.
+            if self.use_singletons:
+                for pick in ds.singleton_idxs:
+                    idxs.append(pick)
+                    labels.append(-(pick + 1))
+
             yield ds, idxs, labels
 
     def __len__(self):
@@ -703,6 +732,10 @@ def main():
                     help="fraction of in-batch negative groups drawn from each anchor group's nearest neighbors (PE-G centroid). 0 = uniform random sampling.")
     ap.add_argument("--hard-neg-pool-k", type=int, default=20,
                     help="how many nearest-neighbor groups to consider for hard-negative sampling")
+    ap.add_argument("--use-singleton-negatives", action="store_true",
+                    help="append every explicit singleton-group image to each batch "
+                         "as a background negative (unique sentinel label so it never "
+                         "appears as a positive). Cheap: ~0-4 extra rows per batch.")
     ap.add_argument("--temperature", type=float, default=0.1)
     ap.add_argument("--arcface-weight", type=float, default=1.0,
                     help="0 disables ArcFace; total_loss = supcon + arcface_weight * arcface")
@@ -774,6 +807,7 @@ def main():
         train_dsets, p=args.p_groups, k=args.k_images,
         batches_per_epoch=args.batches_per_epoch, seed=args.seed,
         hard_neg_frac=args.hard_neg_frac, hard_neg_pool_k=args.hard_neg_pool_k,
+        use_singletons=args.use_singleton_negatives,
     )
 
     summary = {
@@ -795,6 +829,11 @@ def main():
         ep_arc = 0.0
         n_batches = 0
         for ds, idxs, labels in sampler:
+            # Singletons are appended after the P*K group rows; mixup/ArcFace
+            # operate only on the group prefix, they ride along only as
+            # sup_con_loss negatives.
+            n_group = args.p_groups * args.k_images
+            has_singletons = len(idxs) > n_group
             if ds.views_features is not None:
                 # For each sample, pick view in [0, K] inclusive. 0 = original.
                 # Indices past views_complete_through fall back to original.
@@ -818,22 +857,42 @@ def main():
                     feature_dropout=args.feature_dropout,
                     feature_noise=args.feature_noise,
                     peg_dim=1280, color_dim=693,
+                    mixup_end=n_group if has_singletons else None,
                 )
             supcon_labels = torch.tensor(labels, dtype=torch.long, device=device)
             if args.cross_mixup_prob > 0:
-                batch_feats, pos_weights = apply_cross_mixup(
-                    batch_feats, labels,
-                    alpha=args.cross_mixup_alpha,
-                    prob=args.cross_mixup_prob,
-                    device=device,
-                )
+                if has_singletons:
+                    mixed_group, group_pos_weights = apply_cross_mixup(
+                        batch_feats[:n_group], labels[:n_group],
+                        alpha=args.cross_mixup_alpha,
+                        prob=args.cross_mixup_prob,
+                        device=device,
+                    )
+                    batch_feats = torch.cat([mixed_group, batch_feats[n_group:]], dim=0)
+                    # Singletons have unique sentinel labels → zero pos overlap
+                    # with every other row, so the bottom-right / off-diagonal
+                    # blocks are all zeros.
+                    pos_weights = torch.zeros(len(idxs), len(idxs), device=device)
+                    pos_weights[:n_group, :n_group] = group_pos_weights
+                else:
+                    batch_feats, pos_weights = apply_cross_mixup(
+                        batch_feats, labels,
+                        alpha=args.cross_mixup_alpha,
+                        prob=args.cross_mixup_prob,
+                        device=device,
+                    )
             else:
                 pos_weights = hard_label_weights(supcon_labels)
             z = head(batch_feats)
             l_supcon = sup_con_loss(z, pos_weights, temperature=args.temperature)
             if ds.name in arc_heads:
-                arc_labels = torch.tensor([ds.gid_to_cls[g] for g in labels], dtype=torch.long, device=device)
-                l_arc = arc_heads[ds.name](z, arc_labels)
+                # Singletons are not in gid_to_cls — restrict ArcFace to the
+                # group prefix.
+                arc_labels = torch.tensor(
+                    [ds.gid_to_cls[g] for g in labels[:n_group]],
+                    dtype=torch.long, device=device,
+                )
+                l_arc = arc_heads[ds.name](z[:n_group], arc_labels)
             else:
                 l_arc = torch.zeros((), device=device)
             loss = l_supcon + args.arcface_weight * l_arc

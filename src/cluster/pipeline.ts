@@ -50,11 +50,11 @@ export interface RustOutput {
   treePath: string;
 }
 
-/** Assign autoNames from confirmed-group names with a generic fallback. */
+/** Assign names from confirmed-group names with a generic fallback. */
 function namedClusters(clusters: RawCluster[]): ClusterResultData[] {
   return clusters.map((c, i) => ({
     id: c.id,
-    autoName: c.confirmedGroup?.name ?? `Cluster ${i + 1}`,
+    name: c.confirmedGroup?.name ?? `Cluster ${i + 1}`,
     images: c.images,
     confirmedGroup: c.confirmedGroup,
   }));
@@ -392,6 +392,15 @@ async function buildRecutResult(
   distanceProfile: DistanceProfile,
 ): Promise<ClusterData> {
   const { filenames } = cachedHashMapping(targetDir);
+  // labels are indexed by position in the sorted filename list used at
+  // tree-build time. If the file set has changed since (e.g. deletes), the
+  // cached tree is stale and any mapping back to filenames would be wrong.
+  if (labels.length !== filenames.length) {
+    throw new Error(
+      `Cached linkage tree is stale (tree has ${labels.length} images, ` +
+        `content_hashes.json has ${filenames.length}). Re-run clustering.`,
+    );
+  }
   const clusters = buildClustersFromLabels(targetDir, filenames, labels, { idPrefix: "cluster_" });
   return {
     clusters,

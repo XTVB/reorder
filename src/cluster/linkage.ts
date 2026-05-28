@@ -8,6 +8,7 @@
 //                           per the refactor plan)
 
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { unlink } from "node:fs/promises";
 import { linkageTreePath } from "../fs/paths.ts";
 import type { DistanceProfile } from "../shared/types.ts";
 
@@ -66,6 +67,15 @@ export function loadTree(targetDir: string): LinkageTree {
 
 export function clearTreeCache(): void {
   _treeCache = null;
+}
+
+/** Delete the on-disk linkage tree (no-op if absent). */
+export async function removeLinkageTree(targetDir: string): Promise<void> {
+  try {
+    await unlink(linkageTreePath(targetDir));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
 }
 
 /** Apply pre-merges, then main merges up to `maxMainMerges`, return labels. */

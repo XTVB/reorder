@@ -176,7 +176,7 @@ export const ClusterCard = memo(function ClusterCard({
         {isFullyGrouped && <span className="cluster-check">✓</span>}
 
         <EditableName
-          name={hasGroup ? cluster.confirmedGroup!.name : cluster.autoName}
+          name={hasGroup ? cluster.confirmedGroup!.name : cluster.name}
           clusterId={cluster.id}
           editable={!hasGroup}
         />
@@ -242,7 +242,7 @@ export const ClusterCard = memo(function ClusterCard({
           >
             Find Similar
           </button>
-          <AskClaudeButton images={cluster.images} name={cluster.autoName || cluster.id} />
+          <AskClaudeButton images={cluster.images} name={cluster.name || cluster.id} />
           <button
             className="btn btn-small btn-icon"
             onClick={handleToggleMarkAll}

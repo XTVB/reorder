@@ -133,6 +133,6 @@ export const useExpandStore = create<ExpandSlice>((set, get) => ({
 
     const count = checked.size;
     get().closeExpand();
-    useToastStore.getState().showToast(`Added ${count} images to "${source.autoName}"`, "success");
+    useToastStore.getState().showToast(`Added ${count} images to "${source.name}"`, "success");
   },
 }));

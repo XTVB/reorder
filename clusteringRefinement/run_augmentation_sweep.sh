@@ -28,18 +28,18 @@ B=/Users/abdudh/dev/utilities/reorder/clusteringRefinement/benchmark_clustering.
 BLEND=/Users/abdudh/dev/utilities/reorder/clusteringRefinement/blend_dist_matrix.py
 
 declare -A DIRS=(
-  [M1]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark1
-  [M2]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark2
-  [M3]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark3
-  [M4]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark4
-  [M5]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark5
-  [M6]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark6
-  [M7]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark7
-  [M8]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark8
-  [M9]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark9
-  [M10]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark10
-  [M11]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark11
-  [M12]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark12
+  [M1]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark1-austin
+  [M2]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark2-sarah
+  [M3]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark3-eva
+  [M4]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark4-mia
+  [M5]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark5-lily
+  [M6]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark6-sabrina
+  [M7]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark7-autumn
+  [M8]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark8-evie
+  [M9]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark9-darshelle
+  [M10]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark10-alina
+  [M11]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark11-amanda
+  [M12]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark12-anna
 )
 
 if [[ "$N_MODE" == "n12" ]]; then
@@ -51,7 +51,7 @@ fi
 # Pre-flight check: required caches must exist
 for m in "${ALL[@]}"; do
   D=${DIRS[$m]}
-  if [[ ! -f "$D/.reorder-cache/content_hashes.json" || ! -f "$D/.reorder-cache/clip_hash_cache.npz" ]]; then
+  if [[ ! -f "$D/.reorder-cache/content_hashes.json" || ! -f "$D/.reorder-cache/embeddings_hash_cache.npz" ]]; then
     echo "ERROR: $m missing required cache at $D/.reorder-cache/" >&2
     exit 1
   fi

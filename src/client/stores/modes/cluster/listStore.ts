@@ -282,9 +282,7 @@ export const useListStore = create<ListState>((set, get) => {
       set({
         clusterData: {
           ...clusterData,
-          clusters: clusterData.clusters.map((c) =>
-            c.id === clusterId ? { ...c, autoName: name } : c,
-          ),
+          clusters: clusterData.clusters.map((c) => (c.id === clusterId ? { ...c, name } : c)),
         },
       });
     },
@@ -340,7 +338,7 @@ export const useListStore = create<ListState>((set, get) => {
       if (!clusterData || filenames.length === 0) return;
       const newCluster: ClusterResultData = {
         id: `nn_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        autoName: name || "From NN",
+        name: name || "From NN",
         images: [...new Set(filenames)],
         confirmedGroup: null,
       };

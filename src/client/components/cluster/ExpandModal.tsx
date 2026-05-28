@@ -58,7 +58,7 @@ export function ExpandModal() {
     if (!clusterData) return map;
     function add(c: ClusterResultData) {
       const isConf = !!c.confirmedGroup;
-      const name = c.confirmedGroup?.name ?? c.autoName;
+      const name = c.confirmedGroup?.name ?? c.name;
       for (const f of c.images) {
         if (!map.has(f)) map.set(f, { id: c.id, name, isConfirmedGroup: isConf });
       }
@@ -139,7 +139,7 @@ export function ExpandModal() {
 
   const totalChecked = checked.size;
   const sliderValue = multiplierToLog(expand.thresholdMultiplier);
-  const sourceName = source.confirmedGroup?.name ?? source.autoName;
+  const sourceName = source.confirmedGroup?.name ?? source.name;
 
   const title = (
     <>

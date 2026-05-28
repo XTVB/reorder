@@ -82,15 +82,15 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
   patchesBlended: false,
 
   openForCluster: (cluster) => {
-    const label = cluster.autoName
-      ? `Cluster "${cluster.autoName}" (${cluster.images.length})`
+    const label = cluster.name
+      ? `Cluster "${cluster.name}" (${cluster.images.length})`
       : `${cluster.images.length} images`;
     useSelectionStore.getState().clear("nn");
     set({
       open: true,
       queryLabel: label,
       querySource: { kind: "cluster", clusterId: cluster.id, images: cluster.images },
-      sourceClusterLabel: cluster.confirmedGroup?.name ?? cluster.autoName ?? "this cluster",
+      sourceClusterLabel: cluster.confirmedGroup?.name ?? cluster.name ?? "this cluster",
       results: [],
       error: null,
     });
@@ -322,7 +322,7 @@ export const useNNQueryStore = create<NNQueryState>((set, get) => ({
         return;
       }
       next = { ...cluster, images: [...cluster.images, ...selectedNew] };
-      toastMsg = `Added ${selectedNew.length} to cluster "${cluster.autoName || cluster.id}"`;
+      toastMsg = `Added ${selectedNew.length} to cluster "${cluster.name || cluster.id}"`;
     }
 
     useListStore.getState().applyClusterReplace(cluster.id, next);

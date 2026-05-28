@@ -37,6 +37,7 @@ export function MergeSuggestions() {
   const threshold = useMergeSuggestionsStore((s) => s.threshold);
   const fullResolution = useMergeSuggestionsStore((s) => s.fullResolution);
   const maxCombinedSize = useMergeSuggestionsStore((s) => s.maxCombinedSize);
+  const sortMode = useMergeSuggestionsStore((s) => s.sortMode);
   const collapsedRows = useMergeSuggestionsStore((s) => s.collapsedRows);
   const pendingMerges = useSelectionStore((s) => s.rowSelections["merge-suggestions"]);
   const undoStack = useMergeSuggestionsStore((s) => s.undoStack);
@@ -46,6 +47,7 @@ export function MergeSuggestions() {
   const setThreshold = useMergeSuggestionsStore((s) => s.setThreshold);
   const setFullResolution = useMergeSuggestionsStore((s) => s.setFullResolution);
   const setMaxCombinedSize = useMergeSuggestionsStore((s) => s.setMaxCombinedSize);
+  const setSortMode = useMergeSuggestionsStore((s) => s.setSortMode);
   const fetchSuggestions = useMergeSuggestionsStore((s) => s.fetchSuggestions);
   const clearPendingMerges = useMergeSuggestionsStore((s) => s.clearPendingMerges);
   const applyMerges = useMergeSuggestionsStore((s) => s.applyMerges);
@@ -55,6 +57,12 @@ export function MergeSuggestions() {
   const expandAllRows = useMergeSuggestionsStore((s) => s.expandAllRows);
 
   const fetchGroups = useGroupStore((s) => s.fetchGroups);
+  // Subscribe to a string key of the group id ordering so renames / image
+  // mutations don't re-render this component. Only add / remove / reorder
+  // changes the key.
+  const groupOrderKey = useGroupStore((s) =>
+    sortMode === "groupOrder" ? s.groups.map((g) => g.id).join("|") : "",
+  );
   const setHeaderSubtitle = useSessionStore((s) => s.setHeaderSubtitle);
 
   const [expandedCard, setExpandedCard] = useState<ExpandedCard | null>(null);
@@ -127,8 +135,20 @@ export function MergeSuggestions() {
     return () => setHeaderSubtitle("");
   }, [filteredSuggestions]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: groupOrderKey already encodes the group ordering we care about
+  const sortedSuggestions = useMemo(() => {
+    if (!filteredSuggestions || sortMode !== "groupOrder") return filteredSuggestions;
+    const groups = useGroupStore.getState().groups;
+    const orderById = new Map(groups.map((g, i) => [g.id, i]));
+    return [...filteredSuggestions].sort((a, b) => {
+      const ai = orderById.get(a.refGroupId) ?? Number.MAX_SAFE_INTEGER;
+      const bi = orderById.get(b.refGroupId) ?? Number.MAX_SAFE_INTEGER;
+      return ai - bi;
+    });
+  }, [filteredSuggestions, sortMode, groupOrderKey]);
+
   // Stable reference for empty state
-  const rows = filteredSuggestions ?? EMPTY_ROWS;
+  const rows = sortedSuggestions ?? EMPTY_ROWS;
 
   // Virtualization
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -205,9 +225,11 @@ export function MergeSuggestions() {
         canUndo={undoStack.length > 0}
         fullResolution={fullResolution}
         maxCombinedSize={maxCombinedSize}
+        sortMode={sortMode}
         onThresholdChange={setThreshold}
         onFullResolutionChange={setFullResolution}
         onMaxCombinedSizeChange={setMaxCombinedSize}
+        onSortModeChange={setSortMode}
         onCompute={fetchSuggestions}
         onApply={applyMerges}
         onRejectSelected={handleRejectSelected}

@@ -56,7 +56,7 @@ export interface WeightConfig {
 
 export interface ClusterResultData {
   id: string;
-  autoName: string;
+  name: string;
   images: string[];
   confirmedGroup: { id: string; name: string; images: string[] } | null;
   splitFrom?: string;

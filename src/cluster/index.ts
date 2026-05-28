@@ -12,7 +12,11 @@ export {
   writeResolvedRejectedPairsFile,
 } from "./constraints.ts";
 export { generateContactSheet } from "./contact-sheets.ts";
-export { ensurePatchDistMatrix, loadPatchDistMatrix } from "./distance-matrices.ts";
+export {
+  ensurePatchDistMatrix,
+  loadPatchDistMatrix,
+  removeRerankDistMatrix,
+} from "./distance-matrices.ts";
 export type { ModelEmbedding, ModelKey } from "./embeddings.ts";
 export {
   cachedHashMapping,
@@ -32,6 +36,7 @@ export {
   isClusterJobRunning,
   setClusterJobRunning,
 } from "./job-mutex.ts";
+export { removeLinkageTree } from "./linkage.ts";
 export { computeMergeSuggestions } from "./merge-suggestions.ts";
 export {
   extractFeatures,

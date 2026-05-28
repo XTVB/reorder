@@ -27,17 +27,17 @@ S=/Users/abdudh/dev/utilities/reorder/clusteringRefinement/extract_augmented_vie
 # M7 deliberately skipped: ~149 imgs/group already (4x denser than the next
 # largest), so pixel-aug is mostly redundant signal there. Skipping saves ~3.5h.
 declare -a DIRS=(
-  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark1
-  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark2
-  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark3
-  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark4
-  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark5
-  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark6
-  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark8
-  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark9
-  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark10
-  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark11
-  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark12
+  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark1-austin
+  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark2-sarah
+  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark3-eva
+  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark4-mia
+  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark5-lily
+  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark6-sabrina
+  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark8-evie
+  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark9-darshelle
+  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark10-alina
+  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark11-amanda
+  /Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark12-anna
 )
 
 echo "Pixel-aug pre-extraction starting"

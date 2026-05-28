@@ -144,7 +144,7 @@ export const useInteractionsStore = create<InteractionsState>((set, get) => ({
   },
 
   acceptCluster: (cluster) => {
-    const name = cluster.autoName || `Cluster ${cluster.id}`;
+    const name = cluster.name || `Cluster ${cluster.id}`;
     const { updateGroups, groupsLoaded } = useGroupStore.getState();
     const { images, setImages } = useImageStore.getState();
     const { showToast } = useToastStore.getState();
@@ -191,7 +191,7 @@ export const useInteractionsStore = create<InteractionsState>((set, get) => ({
     const dismissIds = new Set(eligible.map((c) => c.id));
     const newGroups = eligible.map((c) => ({
       id: crypto.randomUUID(),
-      name: c.autoName || `Cluster ${c.id}`,
+      name: c.name || `Cluster ${c.id}`,
       images: c.images,
     }));
 
@@ -306,7 +306,7 @@ export const useInteractionsStore = create<InteractionsState>((set, get) => ({
       newClusters[sourceIdx] = { ...source, images: remaining };
       const newCluster: ClusterResultData = {
         id: `split_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        autoName: "Split",
+        name: "Split",
         images: splitFiles,
         confirmedGroup: null,
         splitFrom: source.id,

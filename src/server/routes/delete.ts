@@ -1,6 +1,10 @@
 // /api/delete — move files to Trash and prune groups + content_hashes.
 
-import { invalidateClusterCache } from "../../cluster/index.ts";
+import {
+  invalidateClusterCache,
+  removeLinkageTree,
+  removeRerankDistMatrix,
+} from "../../cluster/index.ts";
 import { pruneContentHashes } from "../../fs/content-hashes.ts";
 import { executeDelete, loadGroups, withRenameLock, writeGroupsFile } from "../../fs/index.ts";
 import { log, logData, logError } from "../../log.ts";
@@ -60,6 +64,12 @@ export const deleteRoutes: RouteHandler = async (req, ctx) => {
           log("delete", `Pruned groups: ${cleaned.length} remaining`);
         }),
         safeStep("Content hashes cleanup", () => pruneContentHashes(targetDir, deletedSet)),
+        // linkage_tree.bin and rerank_dist_matrix.bin are indexed by image
+        // position in the sorted filename list — any deletion shifts those
+        // indices, so the on-disk artifacts must go. Embeddings (hash-keyed)
+        // survive deletes.
+        safeStep("Linkage tree invalidation", () => removeLinkageTree(targetDir)),
+        safeStep("Rerank matrix invalidation", () => removeRerankDistMatrix(targetDir)),
       ]);
       invalidateClusterCache();
     }

@@ -54,7 +54,7 @@ export async function buildImportedResult(
     const group = confirmed ? (imgToGroup.get(confirmed) ?? null) : null;
     return {
       id: `imported_${i}`,
-      autoName: c.name,
+      name: c.name,
       images: sortedImages,
       confirmedGroup: group ? { id: group.id, name: group.name, images: group.images } : null,
     };

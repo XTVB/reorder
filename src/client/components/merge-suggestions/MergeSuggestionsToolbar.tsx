@@ -1,3 +1,5 @@
+import type { MergeSortMode } from "../../stores/mergeSuggestionsStore.ts";
+
 interface Props {
   threshold: number;
   loading: boolean;
@@ -8,9 +10,11 @@ interface Props {
   canUndo: boolean;
   fullResolution: boolean;
   maxCombinedSize: number;
+  sortMode: MergeSortMode;
   onThresholdChange: (t: number) => void;
   onFullResolutionChange: (v: boolean) => void;
   onMaxCombinedSizeChange: (n: number) => void;
+  onSortModeChange: (m: MergeSortMode) => void;
   onCompute: () => void;
   onApply: () => void;
   onRejectSelected: () => void;
@@ -30,9 +34,11 @@ export function MergeSuggestionsToolbar({
   canUndo,
   fullResolution,
   maxCombinedSize,
+  sortMode,
   onThresholdChange,
   onFullResolutionChange,
   onMaxCombinedSizeChange,
+  onSortModeChange,
   onCompute,
   onApply,
   onRejectSelected,
@@ -107,6 +113,26 @@ export function MergeSuggestionsToolbar({
         {suggestionCount > 0 && (
           <span className="merge-suggestion-count">{suggestionCount} rows</span>
         )}
+
+        <div
+          className="merge-method-toggle"
+          title="Order rows by closest match distance, or by the position of the reference group in the groups list."
+        >
+          <button
+            className={`btn btn-small ${sortMode === "topMatch" ? "btn-active" : ""}`}
+            onClick={() => onSortModeChange("topMatch")}
+            disabled={!suggestionCount}
+          >
+            Top match
+          </button>
+          <button
+            className={`btn btn-small ${sortMode === "groupOrder" ? "btn-active" : ""}`}
+            onClick={() => onSortModeChange("groupOrder")}
+            disabled={!suggestionCount}
+          >
+            Group order
+          </button>
+        </div>
 
         <button className="btn btn-small" onClick={onExpandAll} disabled={!suggestionCount}>
           Expand All

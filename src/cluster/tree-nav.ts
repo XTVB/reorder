@@ -458,7 +458,7 @@ function buildSplitChildren(targetDir: string, a: string[], b: string[]): SplitR
     const confirmed = pickConfirmed(images, fnToGroup);
     return {
       id: `split_${ts}_${rand()}`,
-      autoName: confirmed?.name ?? `Split ${idx + 1}`,
+      name: confirmed?.name ?? `Split ${idx + 1}`,
       images: images.slice().sort(),
       confirmedGroup: confirmed,
     };

@@ -60,27 +60,32 @@ DEFAULT_HYPERPARAMS = {
     "cross_mixup_alpha": 0.4,
     "hard_neg_frac": 0.5,
     "hard_neg_pool_k": 20,
+    "use_singleton_negatives": True,
     "use_augmented_views": True,
     "arcface_weight": 0.0,
 }
 
 # Fallback dataset list (used when no --dataset, --datasets-from, or default config).
 DEFAULT_TRAINING_DATASETS = [
-    ("M1", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark1"),
-    ("M2", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark2"),
-    ("M3", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark3"),
-    ("M4", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark4"),
-    ("M5", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark5"),
-    ("M6", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark6"),
-    ("M7", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark7"),
-    ("M8", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark8"),
-    ("M9", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark9"),
-    ("M10", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark10"),
-    ("M11", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark11"),
-    ("M12", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark12"),
-    ("M13", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark13"),
-    ("M14", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark14-partial"),
-    ("M15", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark15-partial"),
+    ("M1", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark1-austin"),
+    ("M2", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark2-sarah"),
+    ("M3", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark3-eva"),
+    ("M4", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark4-mia"),
+    ("M5", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark5-lily"),
+    ("M6", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark6-sabrina"),
+    ("M7", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark7-autumn"),
+    ("M8", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark8-evie"),
+    ("M9", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark9-darshelle"),
+    ("M10", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark10-alina"),
+    ("M11", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark11-amanda"),
+    ("M12", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark12-anna"),
+    ("M13", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark13-hunny"),
+    ("M14", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark14-vixen-partial"),
+    ("M15", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark15-verity-partial"),
+    ("M16", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark16-zoe"),
+    ("M17", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark17-dusha"),
+    ("M18", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark18-railey"),
+    ("M19", "/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark19-andreea"),
 ]
 
 
@@ -109,7 +114,7 @@ def verify_dataset(name: str, path: str) -> bool:
     """Check that the dataset has the caches the training script needs."""
     cache = os.path.join(path, ".reorder-cache")
     required = [
-        os.path.join(cache, "clip_hash_cache.npz"),
+        os.path.join(cache, "embeddings_hash_cache.npz"),
         os.path.join(cache, "content_hashes.json"),
         os.path.join(path, ".reorder-groups.json"),
     ]
@@ -197,6 +202,8 @@ def main():
         ]
         if hp["use_augmented_views"]:
             cmd.append("--use-augmented-views")
+        if hp["use_singleton_negatives"]:
+            cmd.append("--use-singleton-negatives")
 
         if args.dry_run:
             print("Would run:")

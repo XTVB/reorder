@@ -21,7 +21,7 @@ export function MergeBar({ selection, clusters, onMerge, onCancel, onRemove }: P
       <div className="merge-tags">
         {selected.map((c) => (
           <span key={c.id} className="merge-tag" onClick={() => onRemove(c.id)}>
-            {c.autoName || c.id} ({c.images.length}) ×
+            {c.name || c.id} ({c.images.length}) ×
           </span>
         ))}
       </div>

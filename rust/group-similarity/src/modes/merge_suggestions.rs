@@ -2,7 +2,7 @@ use rayon::prelude::*;
 use reorder_common::LoadedGroup;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::patches::Patches;
@@ -98,22 +98,29 @@ pub(crate) fn run(
 
     // ── Compute patch match scores for all group pairs (parallel) ────────
     let n_full_pairs = n_groups * (n_groups - 1) / 2;
-    let is_rejected = |i: usize, j: usize| -> bool {
-        if rejected.is_empty() {
-            return false;
+    // Pre-resolve rejected id-pairs to index-pairs (i < j) so the per-pair
+    // filter is a hash lookup with no allocation.
+    let rejected_idx: HashSet<(usize, usize)> = if rejected.is_empty() {
+        HashSet::new()
+    } else {
+        let id_to_idx: HashMap<&str, usize> = groups
+            .iter()
+            .enumerate()
+            .map(|(i, g)| (g.id.as_str(), i))
+            .collect();
+        let mut set = HashSet::with_capacity(rejected.len());
+        for (a, b) in &rejected {
+            if let (Some(&i), Some(&j)) = (id_to_idx.get(a.as_str()), id_to_idx.get(b.as_str())) {
+                let (lo, hi) = if i <= j { (i, j) } else { (j, i) };
+                set.insert((lo, hi));
+            }
         }
-        let (a, b) = (&groups[i].id, &groups[j].id);
-        let key = if a <= b {
-            (a.clone(), b.clone())
-        } else {
-            (b.clone(), a.clone())
-        };
-        rejected.contains(&key)
+        set
     };
     let pair_indices: Vec<(usize, usize)> = (0..n_groups)
         .flat_map(|i| ((i + 1)..n_groups).map(move |j| (i, j)))
         .filter(|&(i, j)| {
-            if is_rejected(i, j) {
+            if rejected_idx.contains(&(i, j)) {
                 return false;
             }
             max_combined_size == 0

@@ -74,13 +74,11 @@ export async function computeMergeSuggestions(
     return out;
   };
 
-  // Write the Rust-input rejected-pairs file up front so its mtime can be
-  // folded into the cache-staleness check below. null = no rejections live.
+  // No-ops if rejected-pairs content is unchanged, so cache mtime check stays valid.
   const rejectedPairsPath = await writeResolvedRejectedPairsFile(targetDir);
 
   // Disk cache is valid if newer than the groups file, patches cache,
   // content_hashes, and (if present) the resolved rejected-pairs file.
-  // stat them in parallel so the staleness check is one round-trip.
   try {
     const [cacheStat, groupsStat, patchesStat, hashesStat, rejectedStat] = await Promise.all([
       stat(resultCachePath),

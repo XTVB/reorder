@@ -4,7 +4,7 @@
 // and use camelCase too (matched by `#[serde(rename_all = "camelCase")]` in
 // the Rust deserializer).
 
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadContentHashes } from "../cache-utils.ts";
 import { writeJsonAtomic } from "../fs/atomic-json.ts";
@@ -61,45 +61,42 @@ export function loadConstraints(targetDir: string): Constraints {
   if (_constraintsCache && _constraintsCache.targetDir === targetDir) {
     return _constraintsCache.value;
   }
-  const path = constraintsPath(targetDir);
   let value: Constraints;
-  if (!existsSync(path)) {
-    value = { ...EMPTY_CONSTRAINTS };
-  } else {
-    try {
-      const raw = JSON.parse(readFileSync(path, "utf-8")) as Partial<Constraints>;
-      const rawRejected = Array.isArray(raw.rejectedMergePairs)
-        ? raw.rejectedMergePairs.filter(
-            (p) => p && typeof p.groupA === "string" && typeof p.groupB === "string",
-          )
-        : [];
-      // Normalize and dedupe on load — a malformed file is silently repaired
-      // next time anything writes.
-      const seen = new Set<string>();
-      const rejected: RejectedMergePair[] = [];
-      for (const p of rawRejected) {
-        const n = normalizeMergePair(p.groupA, p.groupB);
-        if (n.groupA === n.groupB) continue;
-        const k = `${n.groupA}\t${n.groupB}`;
-        if (seen.has(k)) continue;
-        seen.add(k);
-        rejected.push(n);
-      }
-      value = {
-        version: 1,
-        imageGroupCannotLink: Array.isArray(raw.imageGroupCannotLink)
-          ? raw.imageGroupCannotLink.filter(
-              (c) => c && typeof c.imageHash === "string" && typeof c.groupId === "string",
-            )
-          : [],
-        lockedGroupIds: Array.isArray(raw.lockedGroupIds)
-          ? raw.lockedGroupIds.filter((id) => typeof id === "string")
-          : [],
-        rejectedMergePairs: rejected,
-      };
-    } catch {
-      value = { ...EMPTY_CONSTRAINTS };
+  try {
+    const raw = JSON.parse(
+      readFileSync(constraintsPath(targetDir), "utf-8"),
+    ) as Partial<Constraints>;
+    const rawRejected = Array.isArray(raw.rejectedMergePairs)
+      ? raw.rejectedMergePairs.filter(
+          (p) => p && typeof p.groupA === "string" && typeof p.groupB === "string",
+        )
+      : [];
+    // Normalize and dedupe on load — a malformed file is silently repaired
+    // next time anything writes.
+    const seen = new Set<string>();
+    const rejected: RejectedMergePair[] = [];
+    for (const p of rawRejected) {
+      const n = normalizeMergePair(p.groupA, p.groupB);
+      if (n.groupA === n.groupB) continue;
+      const k = `${n.groupA}\t${n.groupB}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      rejected.push(n);
     }
+    value = {
+      version: 1,
+      imageGroupCannotLink: Array.isArray(raw.imageGroupCannotLink)
+        ? raw.imageGroupCannotLink.filter(
+            (c) => c && typeof c.imageHash === "string" && typeof c.groupId === "string",
+          )
+        : [],
+      lockedGroupIds: Array.isArray(raw.lockedGroupIds)
+        ? raw.lockedGroupIds.filter((id) => typeof id === "string")
+        : [],
+      rejectedMergePairs: rejected,
+    };
+  } catch {
+    value = { ...EMPTY_CONSTRAINTS };
   }
   _constraintsCache = { targetDir, value };
   return value;
@@ -203,6 +200,10 @@ export async function writeResolvedConstraintFiles(
  * Write the JSON payload that the Rust group-similarity binary consumes via
  * --rejected-pairs. Returns the path written, or null when there's nothing
  * to skip. Rejected pairs whose groups no longer exist are dropped.
+ *
+ * Skips the write when the on-disk content is byte-identical — otherwise
+ * writeJsonAtomic's rename would bump mtime on every Compute and invalidate
+ * the merge-suggestions cache even when no rejection changed.
  */
 export async function writeResolvedRejectedPairsFile(targetDir: string): Promise<string | null> {
   const constraints = loadConstraints(targetDir);
@@ -216,6 +217,10 @@ export async function writeResolvedRejectedPairsFile(targetDir: string): Promise
   if (live.length === 0) return null;
 
   const out = join(cacheDir(targetDir), REJECTED_MERGE_PAIRS_RESOLVED_FILE);
+  const newJson = JSON.stringify(live);
+  try {
+    if (readFileSync(out, "utf-8") === newJson) return out;
+  } catch {}
   await writeJsonAtomic(out, live, { pretty: false });
   return out;
 }

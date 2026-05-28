@@ -8,7 +8,7 @@ interface ResolvedCannotLink {
   currentFilename: string | null;
 }
 
-interface RejectedMergePairWire {
+export interface RejectedMergePair {
   groupA: string;
   groupB: string;
 }
@@ -17,7 +17,7 @@ interface ServerResponse {
   version: 1;
   imageGroupCannotLink: { imageHash: string; groupId: string }[];
   lockedGroupIds: string[];
-  rejectedMergePairs?: RejectedMergePairWire[];
+  rejectedMergePairs?: RejectedMergePair[];
   imageGroupCannotLinkResolved?: ResolvedCannotLink[];
   treeStale?: boolean;
 }
@@ -36,7 +36,7 @@ interface ConstraintsState {
   addImageGroupCannotLink: (pairs: CannotLinkPair[]) => Promise<void>;
   removeImageGroupCannotLink: (pairs: CannotLinkPair[]) => Promise<void>;
   toggleGroupLock: (groupId: string) => Promise<void>;
-  addRejectedMerges: (pairs: RejectedMergePairInput[]) => Promise<void>;
+  addRejectedMerges: (pairs: RejectedMergePair[]) => Promise<void>;
   isCannotLinked: (filename: string, groupId: string) => boolean;
   isGroupLocked: (groupId: string) => boolean;
   isMergeRejected: (groupA: string, groupB: string) => boolean;
@@ -45,11 +45,6 @@ interface ConstraintsState {
 export interface CannotLinkPair {
   filename: string;
   groupId: string;
-}
-
-export interface RejectedMergePairInput {
-  groupA: string;
-  groupB: string;
 }
 
 function mergePairKey(a: string, b: string): string {
@@ -76,7 +71,7 @@ function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
   return true;
 }
 
-function buildRejectedSet(pairs: RejectedMergePairWire[] | undefined): Set<string> {
+function buildRejectedSet(pairs: RejectedMergePair[] | undefined): Set<string> {
   const s = new Set<string>();
   if (!pairs) return s;
   for (const p of pairs) s.add(mergePairKey(p.groupA, p.groupB));

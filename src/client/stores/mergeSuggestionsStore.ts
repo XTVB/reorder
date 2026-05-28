@@ -159,9 +159,6 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
 
     const newUndoStack = [...undoStack, currentGroups].slice(-10);
 
-    // Every candidate id in the pending set gets absorbed into its ref and
-    // then removed. Capture before mutating so we can prune the suggestions
-    // list against the same set.
     const removedIds = new Set<string>();
     for (const candidateIds of pendingMerges.values()) {
       for (const candId of candidateIds) removedIds.add(candId);
@@ -190,10 +187,7 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
       return groups.filter((g) => !removedIds.has(g.id));
     });
 
-    // Locally prune the suggestions to reflect the merge: drop rows whose
-    // ref or sole candidates were absorbed, refresh image lists for groups
-    // whose contents grew. NO recompute — the user iterates merge-by-merge
-    // and hits Compute explicitly when they're ready.
+    // No recompute on Apply — user iterates merge-by-merge and runs Compute when ready.
     const groupById = new Map(useGroupStore.getState().groups.map((g) => [g.id, g]));
     set((s) => {
       if (!s.suggestions) return {};

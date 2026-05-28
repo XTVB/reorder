@@ -13,10 +13,6 @@ import type { OpenCardHandler } from "./MergeSuggestionCard.tsx";
 import { MergeSuggestionRow } from "./MergeSuggestionRow.tsx";
 import { MergeSuggestionsToolbar } from "./MergeSuggestionsToolbar.tsx";
 
-function mergePairKey(a: string, b: string): string {
-  return a <= b ? `${a}|${b}` : `${b}|${a}`;
-}
-
 interface ExpandedCard {
   refGroupId: string;
   /** null means the ref card itself is expanded */
@@ -89,9 +85,7 @@ export function MergeSuggestions() {
 
   const handleClosePopover = useCallback(() => setExpandedCard(null), []);
 
-  // Reject every currently-selected candidate. Persists to constraints and
-  // clears the selection; intentionally does NOT trigger a recompute — the
-  // client-side filter hides the rejected pairs until the user hits Compute.
+  // No recompute — the client-side filter below hides rejected pairs until the next Compute.
   const handleRejectSelected = useCallback(() => {
     const sel = useSelectionStore.getState().rowSelections["merge-suggestions"];
     const pairs: { groupA: string; groupB: string }[] = [];
@@ -110,15 +104,13 @@ export function MergeSuggestions() {
     fetchGroups();
   }, []);
 
-  // Apply rejected-merge filter client-side too, so a freshly-rejected pair
-  // disappears immediately without a recompute. Drop empty rows entirely.
+  // Filter client-side so a freshly-rejected pair disappears without recomputing.
   const filteredSuggestions = useMemo(() => {
     if (!suggestions || rejectedMerges.size === 0) return suggestions;
+    const isRejected = useConstraintsStore.getState().isMergeRejected;
     const out: MergeSuggestionRowType[] = [];
     for (const row of suggestions) {
-      const kept = row.similar.filter(
-        (c) => !rejectedMerges.has(mergePairKey(row.refGroupId, c.groupId)),
-      );
+      const kept = row.similar.filter((c) => !isRejected(row.refGroupId, c.groupId));
       if (kept.length === 0) continue;
       out.push(kept.length === row.similar.length ? row : { ...row, similar: kept });
     }

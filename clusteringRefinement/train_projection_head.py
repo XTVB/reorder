@@ -233,12 +233,32 @@ def split_groups(ds: Dataset, holdout_frac: float, seed: int):
 # ── Model ────────────────────────────────────────────────────────────────────
 
 
+class ManualLayerNorm(nn.Module):
+    """LayerNorm with the affine step done outside the fused MPS kernel.
+    PyTorch ≤ 2.11's MPS fused LayerNorm has a broken backward when affine
+    (weight/bias) is enabled — the weight gradient comes back NaN (or zero),
+    silently NaN-ing every other parameter on the next AdamW step. The fused
+    forward + backward without affine is correct, though, so we call it
+    weight-less and apply our own scale+shift after."""
+
+    def __init__(self, dim: int, eps: float = 1e-5):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.bias = nn.Parameter(torch.zeros(dim))
+        self.dim = dim
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        normalized = F.layer_norm(x, (self.dim,), None, None, self.eps)
+        return normalized * self.weight + self.bias
+
+
 class ProjectionHead(nn.Module):
     """LayerNorm → MLP → L2-normalize. Backbone-free; expects concat features."""
 
     def __init__(self, in_dim: int, hidden: int = 1024, out_dim: int = 256, dropout: float = 0.1):
         super().__init__()
-        self.in_norm = nn.LayerNorm(in_dim)
+        self.in_norm = ManualLayerNorm(in_dim)
         self.net = nn.Sequential(
             nn.Linear(in_dim, hidden),
             nn.GELU(),
@@ -295,6 +315,31 @@ class ArcFaceHead(nn.Module):
 # ── Loss ─────────────────────────────────────────────────────────────────────
 
 
+# Per-(device, B) cache of the (1 - eye) valid-pair mask and the diagonal
+# -1e9 self-pair mask. Batch shape is constant within a run, so caching these
+# across batches avoids re-allocating them every step.
+_MASK_VALID_CACHE: dict[tuple[str, int], torch.Tensor] = {}
+_DIAG_NEGINF_CACHE: dict[tuple[str, int], torch.Tensor] = {}
+
+
+def _mask_valid(b: int, device) -> torch.Tensor:
+    key = (str(device), b)
+    m = _MASK_VALID_CACHE.get(key)
+    if m is None:
+        m = 1.0 - torch.eye(b, device=device)
+        _MASK_VALID_CACHE[key] = m
+    return m
+
+
+def _diag_neginf(b: int, device) -> torch.Tensor:
+    key = (str(device), b)
+    m = _DIAG_NEGINF_CACHE.get(key)
+    if m is None:
+        m = torch.eye(b, device=device) * -1e9
+        _DIAG_NEGINF_CACHE[key] = m
+    return m
+
+
 def sup_con_loss(
     z: torch.Tensor,
     pos_weights: torch.Tensor,
@@ -311,20 +356,20 @@ def sup_con_loss(
     device = z.device
     b = z.shape[0]
     sim = z @ z.t() / temperature
-    sim = sim - sim.max(dim=1, keepdim=True).values.detach()
-    mask_self = torch.eye(b, dtype=torch.bool, device=device)
-    mask_valid = (~mask_self).float()
+    # Pin the self-pair entries to -1e9 so they contribute ~0 to the softmax
+    # denominator; mask_valid still zeros W on the diagonal so the (W * log_prob)
+    # product is finite (0 × big-negative).
+    log_prob = F.log_softmax(sim + _diag_neginf(b, device), dim=1)
 
-    exp_sim = torch.exp(sim) * mask_valid
-    log_prob = sim - torch.log(exp_sim.sum(dim=1, keepdim=True) + 1e-12)
-
+    mask_valid = _mask_valid(b, device)
     W = pos_weights * mask_valid
     pos_weight_sum = W.sum(dim=1)
-    has_pos = pos_weight_sum > 1e-6
-    if not has_pos.any():
-        return torch.zeros((), device=device)
+    has_pos = (pos_weight_sum > 1e-6).float()
+    # Sync-free reduction: weight each row's log-prob by has_pos and divide by
+    # the count, rather than `mean_log_prob_pos[has_pos].mean()` — boolean
+    # masked-select would force a CPU↔GPU sync mid-batch.
     mean_log_prob_pos = (W * log_prob).sum(dim=1) / pos_weight_sum.clamp(min=1e-12)
-    return -mean_log_prob_pos[has_pos].mean()
+    return -(mean_log_prob_pos * has_pos).sum() / has_pos.sum().clamp(min=1.0)
 
 
 def hard_label_weights(labels: torch.Tensor) -> torch.Tensor:
@@ -338,6 +383,11 @@ def apply_cross_mixup(
     alpha: float,
     prob: float,
     device,
+    cross_lam: torch.Tensor | None = None,
+    partner: torch.Tensor | None = None,
+    do_mix: torch.Tensor | None = None,
+    label_col: torch.Tensor | None = None,
+    n_classes: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     For each sample with probability `prob`, pair with a random DIFFERENT-group
@@ -349,33 +399,41 @@ def apply_cross_mixup(
     with a single multinomial draw per sample. Was O(B²) python before.
     """
     b = feats.shape[0]
-    unique_gids = sorted(set(labels))
-    gid_to_col = {g: c for c, g in enumerate(unique_gids)}
-    label_col = torch.tensor([gid_to_col[g] for g in labels], dtype=torch.long, device=device)
+    # Caller may pass precomputed (label_col, n_classes) to skip the per-batch
+    # Python densification + host→device copy. Keep the in-function fallback so
+    # this function still works standalone.
+    if label_col is None or n_classes is None:
+        unique_gids = sorted(set(labels))
+        gid_to_col = {g: c for c, g in enumerate(unique_gids)}
+        label_col = torch.tensor([gid_to_col[g] for g in labels], dtype=torch.long, device=device)
+        n_classes = len(unique_gids)
 
-    # Hard one-hot label table.
-    L = torch.zeros(b, len(unique_gids), device=device)
-    L.scatter_(1, label_col.unsqueeze(1), 1.0)
+    # One-hot label table. F.one_hot is a single op vs zeros+scatter (two ops).
+    L = F.one_hot(label_col, num_classes=n_classes).float()
 
     if prob <= 0 or alpha <= 0:
         return feats.clone(), L @ L.t()
 
-    # Which rows get mixed up?
-    do_mix = torch.rand(b, device=device) < prob               # (B,)
-    # Diff-group candidate matrix: (B, B), 1 if labels differ, 0 otherwise.
-    diff_mat = (label_col.unsqueeze(0) != label_col.unsqueeze(1)).float()
-    # Sample a partner per row from diff-group candidates. Rows where do_mix is
-    # False or no diff-group partner exists get a self-pair (later masked out).
-    row_sums = diff_mat.sum(dim=1, keepdim=True)
-    has_partner = (row_sums.squeeze(1) > 0) & do_mix
-    # multinomial requires non-zero row sums; substitute uniform for rows with no
-    # partners (those rows won't be used since has_partner=False).
-    safe_diff = torch.where(row_sums > 0, diff_mat, torch.ones_like(diff_mat))
-    partner = torch.multinomial(safe_diff, 1).squeeze(1)       # (B,)
+    # Partner and do_mix can be precomputed at epoch start. do_mix is the set of
+    # rows that actually get mixed, so it must already exclude rows with no
+    # different-group partner (possible when a batch has < P distinct groups —
+    # the sampler can draw groups with replacement). Precomputed do_mix passed in
+    # by the caller carries the same guard; see the bulk precompute in main().
+    if partner is None or do_mix is None:
+        diff_mat = (label_col.unsqueeze(0) != label_col.unsqueeze(1)).float()
+        if do_mix is None:
+            do_mix = (torch.rand(b, device=device) < prob) & (diff_mat.sum(dim=1) > 0)
+        if partner is None:
+            rand_mat = torch.rand_like(diff_mat)
+            partner = torch.where(diff_mat > 0, rand_mat, rand_mat.new_full((), -1.0)).argmax(dim=1)
+    has_partner = do_mix
 
     # λ ~ Beta(α, α). Pin λ=1 for rows we don't mix → out_feats[i] == feats[i].
-    beta = torch.distributions.Beta(alpha, alpha)
-    lam = beta.sample((b,)).to(device)
+    if cross_lam is None:
+        beta = torch.distributions.Beta(alpha, alpha)
+        lam = beta.sample((b,)).to(device)
+    else:
+        lam = cross_lam
     lam = torch.where(has_partner, lam, torch.ones_like(lam))
     lam_v = lam.unsqueeze(1)
 
@@ -393,6 +451,22 @@ def apply_cross_mixup(
 # ── Augmentations (feature-space) ────────────────────────────────────────────
 
 
+# Same-group mixup partner index is fully determined by (mix_b, k, device) —
+# cache once per dataset so the hot loop doesn't pay for arange + arithmetic.
+_PARTNER_IDX_CACHE: dict[tuple[str, int, int], torch.Tensor] = {}
+
+
+def _partner_idx(mix_b: int, k: int, device) -> torch.Tensor:
+    key = (str(device), mix_b, k)
+    p = _PARTNER_IDX_CACHE.get(key)
+    if p is None:
+        pos = torch.arange(mix_b, device=device)
+        block_start = (pos // k) * k
+        p = block_start + (pos - block_start + 1) % k
+        _PARTNER_IDX_CACHE[key] = p
+    return p
+
+
 def apply_augmentations(
     feats: torch.Tensor,
     k: int,
@@ -405,6 +479,8 @@ def apply_augmentations(
     peg_dim: int,
     color_dim: int,
     mixup_end: int | None = None,
+    mixup_lam: torch.Tensor | None = None,
+    drop_color_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
     feats: (B, D) where rows are grouped in chunks of K (P groups × K images).
@@ -422,21 +498,24 @@ def apply_augmentations(
     # "what does within-group variation look like" signal without changing the
     # contrastive structure.
     if mixup_alpha > 0 and k >= 2 and mix_b >= k:
-        partner = torch.arange(b, device=feats.device)
-        for g_start in range(0, mix_b, k):
-            block = list(range(g_start, g_start + k))
-            shifted = block[1:] + block[:1]
-            for i, p in zip(block, shifted):
-                partner[i] = p
-        beta = torch.distributions.Beta(mixup_alpha, mixup_alpha)
-        lam = beta.sample((mix_b, 1)).to(feats.device)
-        out[:mix_b] = lam * out[:mix_b] + (1 - lam) * feats[partner[:mix_b]]
+        # Partner = next index within each K-block (last wraps to first). Cached
+        # per (mix_b, k, device) — constant across batches for the same dataset.
+        partner_idx = _partner_idx(mix_b, k, feats.device)
+        if mixup_lam is None:
+            beta = torch.distributions.Beta(mixup_alpha, mixup_alpha)
+            lam = beta.sample((mix_b, 1)).to(feats.device)
+        else:
+            lam = mixup_lam
+        out[:mix_b] = lam * out[:mix_b] + (1 - lam) * feats[partner_idx]
 
     # Drop color: with per-image prob, zero the color slice. Closest feature-
     # space analog to background-masking — color histograms heavily encode
     # backdrop appearance, so this attacks the most plausible shortcut.
     if drop_color_prob > 0 and color_dim > 0:
-        mask = (torch.rand(b, device=feats.device) < drop_color_prob).float().unsqueeze(1)
+        if drop_color_mask is None:
+            mask = (torch.rand(b, device=feats.device) < drop_color_prob).float().unsqueeze(1)
+        else:
+            mask = drop_color_mask
         out[:, peg_dim:peg_dim + color_dim] *= (1 - mask)
 
     # Drop PE-G: symmetric to drop-color. Useful as a sanity check / control.
@@ -810,6 +889,13 @@ def main():
         use_singletons=args.use_singleton_negatives,
     )
 
+    # Move features/views to device after the sampler builds its CPU-side
+    # neighbor pools — saves a host→device copy of ~3MB of features per batch.
+    for ds in datasets.values():
+        ds.features = ds.features.to(device)
+        if ds.views_features is not None:
+            ds.views_features = ds.views_features.to(device)
+
     summary = {
         "args": {k: (v if not isinstance(v, list) else list(v)) for k, v in vars(args).items()},
         "datasets": {n: {"n_images": d.features.shape[0]} for n, d in datasets.items()},
@@ -824,31 +910,112 @@ def main():
         head.train()
         for arc in arc_heads.values():
             arc.train()
-        ep_loss = 0.0
-        ep_supcon = 0.0
-        ep_arc = 0.0
+        # Accumulate on-device — pulling .item() per batch forces a CPU sync
+        # that stalls the MPS queue between every step.
+        ep_loss_t = torch.zeros((), device=device)
+        ep_supcon_t = torch.zeros((), device=device)
+        ep_arc_t = torch.zeros((), device=device)
         n_batches = 0
-        for ds, idxs, labels in sampler:
+        # Drain the sampler upfront and bulk-transfer all idx+label tensors in
+        # two host→device copies instead of one tiny copy per batch.
+        epoch_batches = list(sampler)
+        n_batches_ep = len(epoch_batches)
+        all_idxs = np.concatenate([np.asarray(b[1], dtype=np.int64) for b in epoch_batches])
+        all_labels = np.concatenate([np.asarray(b[2], dtype=np.int64) for b in epoch_batches])
+        offsets = np.concatenate([[0], np.cumsum([len(b[1]) for b in epoch_batches])])
+        all_idxs_t = torch.from_numpy(all_idxs).to(device, non_blocking=True)
+        all_labels_t = torch.from_numpy(all_labels).to(device, non_blocking=True)
+        # Bulk pre-sample per-batch randoms for the whole epoch — one Beta/rand
+        # draw + transfer per augmentation instead of one per batch.
+        n_group_ep = args.p_groups * args.k_images
+        max_b_ep = int(max(len(b[1]) for b in epoch_batches))
+        if args.mixup_alpha > 0:
+            mixup_lams_bulk = (torch.distributions.Beta(args.mixup_alpha, args.mixup_alpha)
+                               .sample((n_batches_ep, n_group_ep, 1))
+                               .to(device, non_blocking=True))
+        else:
+            mixup_lams_bulk = None
+        if args.cross_mixup_prob > 0:
+            cross_lams_bulk = (torch.distributions.Beta(args.cross_mixup_alpha, args.cross_mixup_alpha)
+                               .sample((n_batches_ep, max_b_ep))
+                               .to(device, non_blocking=True))
+        else:
+            cross_lams_bulk = None
+        if args.drop_color_prob > 0:
+            drop_color_bulk = (torch.rand(n_batches_ep, max_b_ep, 1, device=device)
+                               < args.drop_color_prob).float()
+        else:
+            drop_color_bulk = None
+        # Precompute cross-mixup partner indices and do_mix masks for the whole
+        # epoch. Partner selection only operates on the group prefix (first P*K
+        # rows); singletons aren't passed through cross_mixup.
+        if args.cross_mixup_prob > 0:
+            group_labels_np = np.stack([np.asarray(b[2][:n_group_ep], dtype=np.int64)
+                                        for b in epoch_batches])
+            group_labels_t = torch.from_numpy(group_labels_np).to(device, non_blocking=True)
+            diff_bulk = (group_labels_t.unsqueeze(1) != group_labels_t.unsqueeze(2)).float()
+            has_diff_partner_bulk = diff_bulk.sum(dim=-1) > 0
+            rand_partner_bulk = torch.rand(n_batches_ep, n_group_ep, n_group_ep, device=device)
+            partners_bulk = torch.where(
+                diff_bulk > 0, rand_partner_bulk, rand_partner_bulk.new_full((), -1.0)
+            ).argmax(dim=-1)
+            # Free the (n_b, n_group, n_group) intermediates immediately — only
+            # partners and the has-partner mask are needed downstream.
+            del diff_bulk, rand_partner_bulk
+            # Fold the diff-group guard into do_mix: a row with no different-group
+            # partner (degenerate batch with < P distinct groups) must not mix.
+            do_mix_bulk = ((torch.rand(n_batches_ep, n_group_ep, device=device) < args.cross_mixup_prob)
+                           & has_diff_partner_bulk)
+            # Bulk-densify labels: per-batch group ids → [0, n_classes_b) dense
+            # column indices, plus the n_classes value per batch. Done once on
+            # the host then transferred as one (n_b, n_group) tensor.
+            label_cols_np = np.empty((n_batches_ep, n_group_ep), dtype=np.int64)
+            n_classes_per_batch = np.empty(n_batches_ep, dtype=np.int64)
+            for bi, b in enumerate(epoch_batches):
+                grp = b[2][:n_group_ep]
+                unique = sorted(set(grp))
+                gid_to_col = {g: c for c, g in enumerate(unique)}
+                label_cols_np[bi] = [gid_to_col[g] for g in grp]
+                n_classes_per_batch[bi] = len(unique)
+            label_cols_bulk = torch.from_numpy(label_cols_np).to(device, non_blocking=True)
+        else:
+            partners_bulk = None
+            do_mix_bulk = None
+            label_cols_bulk = None
+            n_classes_per_batch = None
+        # Bulk-transfer ArcFace class indices for the whole epoch (one copy vs a
+        # per-batch torch.tensor+to(device)). Rows for datasets without an
+        # ArcFace head are never read, so they can stay uninitialized.
+        if arc_heads:
+            arc_labels_np = np.empty((n_batches_ep, n_group_ep), dtype=np.int64)
+            for bi, (ds_b, _, labels_b) in enumerate(epoch_batches):
+                if ds_b.name in arc_heads:
+                    arc_labels_np[bi] = [ds_b.gid_to_cls[g] for g in labels_b[:n_group_ep]]
+            arc_labels_bulk = torch.from_numpy(arc_labels_np).to(device, non_blocking=True)
+        else:
+            arc_labels_bulk = None
+        for batch_i, (ds, idxs, labels) in enumerate(epoch_batches):
             # Singletons are appended after the P*K group rows; mixup/ArcFace
             # operate only on the group prefix, they ride along only as
             # sup_con_loss negatives.
             n_group = args.p_groups * args.k_images
             has_singletons = len(idxs) > n_group
+            idx_tensor = all_idxs_t[offsets[batch_i]:offsets[batch_i+1]]
             if ds.views_features is not None:
                 # For each sample, pick view in [0, K] inclusive. 0 = original.
                 # Indices past views_complete_through fall back to original.
                 k_views = ds.views_features.shape[1]
-                idx_tensor = torch.tensor(idxs, dtype=torch.long)
-                view_choices = torch.randint(0, k_views + 1, (len(idxs),))
+                view_choices = torch.randint(0, k_views + 1, (len(idxs),), device=device)
                 use_orig = (view_choices == 0) | (idx_tensor >= ds.views_complete_through)
                 orig_feats = ds.features[idx_tensor]
                 aug_view_idx = (view_choices - 1).clamp(min=0)
                 aug_feats = ds.views_features[idx_tensor, aug_view_idx]
-                batch_feats = torch.where(use_orig.unsqueeze(1), orig_feats, aug_feats).to(device)
+                batch_feats = torch.where(use_orig.unsqueeze(1), orig_feats, aug_feats)
             else:
-                batch_feats = ds.features[idxs].to(device)
+                batch_feats = ds.features[idx_tensor]
             if (args.mixup_alpha > 0 or args.drop_color_prob > 0 or args.drop_peg_prob > 0
                     or args.feature_dropout > 0 or args.feature_noise > 0):
+                b_now = len(idxs)
                 batch_feats = apply_augmentations(
                     batch_feats, k=args.k_images,
                     mixup_alpha=args.mixup_alpha,
@@ -858,15 +1025,27 @@ def main():
                     feature_noise=args.feature_noise,
                     peg_dim=1280, color_dim=693,
                     mixup_end=n_group if has_singletons else None,
+                    mixup_lam=mixup_lams_bulk[batch_i] if mixup_lams_bulk is not None else None,
+                    drop_color_mask=drop_color_bulk[batch_i, :b_now] if drop_color_bulk is not None else None,
                 )
-            supcon_labels = torch.tensor(labels, dtype=torch.long, device=device)
+            supcon_labels = all_labels_t[offsets[batch_i]:offsets[batch_i+1]]
             if args.cross_mixup_prob > 0:
+                cross_lam_b = cross_lams_bulk[batch_i] if cross_lams_bulk is not None else None
+                partner_b = partners_bulk[batch_i] if partners_bulk is not None else None
+                do_mix_b = do_mix_bulk[batch_i] if do_mix_bulk is not None else None
+                label_col_b = label_cols_bulk[batch_i] if label_cols_bulk is not None else None
+                n_classes_b = int(n_classes_per_batch[batch_i]) if n_classes_per_batch is not None else None
                 if has_singletons:
                     mixed_group, group_pos_weights = apply_cross_mixup(
                         batch_feats[:n_group], labels[:n_group],
                         alpha=args.cross_mixup_alpha,
                         prob=args.cross_mixup_prob,
                         device=device,
+                        cross_lam=cross_lam_b[:n_group] if cross_lam_b is not None else None,
+                        partner=partner_b,
+                        do_mix=do_mix_b,
+                        label_col=label_col_b,
+                        n_classes=n_classes_b,
                     )
                     batch_feats = torch.cat([mixed_group, batch_feats[n_group:]], dim=0)
                     # Singletons have unique sentinel labels → zero pos overlap
@@ -880,6 +1059,11 @@ def main():
                         alpha=args.cross_mixup_alpha,
                         prob=args.cross_mixup_prob,
                         device=device,
+                        cross_lam=cross_lam_b[:len(idxs)] if cross_lam_b is not None else None,
+                        partner=partner_b,
+                        do_mix=do_mix_b,
+                        label_col=label_col_b,
+                        n_classes=n_classes_b,
                     )
             else:
                 pos_weights = hard_label_weights(supcon_labels)
@@ -888,24 +1072,23 @@ def main():
             if ds.name in arc_heads:
                 # Singletons are not in gid_to_cls — restrict ArcFace to the
                 # group prefix.
-                arc_labels = torch.tensor(
-                    [ds.gid_to_cls[g] for g in labels[:n_group]],
-                    dtype=torch.long, device=device,
-                )
-                l_arc = arc_heads[ds.name](z[:n_group], arc_labels)
+                l_arc = arc_heads[ds.name](z[:n_group], arc_labels_bulk[batch_i])
             else:
                 l_arc = torch.zeros((), device=device)
             loss = l_supcon + args.arcface_weight * l_arc
             opt.zero_grad()
             loss.backward()
             opt.step()
-            ep_loss += loss.item()
-            ep_supcon += l_supcon.item()
-            ep_arc += l_arc.item() if isinstance(l_arc, torch.Tensor) else 0.0
+            with torch.no_grad():
+                ep_loss_t += loss.detach()
+                ep_supcon_t += l_supcon.detach()
+                if isinstance(l_arc, torch.Tensor):
+                    ep_arc_t += l_arc.detach()
             n_batches += 1
-        mean_loss = ep_loss / max(1, n_batches)
-        mean_supcon = ep_supcon / max(1, n_batches)
-        mean_arc = ep_arc / max(1, n_batches)
+        denom = max(1, n_batches)
+        mean_loss = (ep_loss_t / denom).item()
+        mean_supcon = (ep_supcon_t / denom).item()
+        mean_arc = (ep_arc_t / denom).item()
         dt = time.time() - t0
 
         # Eval: holdout-group pair AUC for each training dataset

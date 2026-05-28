@@ -28,18 +28,18 @@ B=/Users/abdudh/dev/utilities/reorder/clusteringRefinement/benchmark_clustering.
 BLEND=/Users/abdudh/dev/utilities/reorder/clusteringRefinement/blend_dist_matrix.py
 
 declare -A DIRS=(
-  [M1]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark1-austin
-  [M2]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark2-sarah
-  [M3]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark3-eva
-  [M4]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark4-mia
-  [M5]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark5-lily
-  [M6]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark6-sabrina
-  [M7]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark7-autumn
-  [M8]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark8-evie
-  [M9]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark9-darshelle
-  [M10]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark10-alina
-  [M11]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark11-amanda
-  [M12]=/Users/abdudh/Downloads/PicsStaging/ClusteringBenchmark12-anna
+  [M1]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark1-austin
+  [M2]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark2-sarah
+  [M3]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark3-eva
+  [M4]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark4-mia
+  [M5]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark5-lily
+  [M6]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark6-sabrina
+  [M7]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark7-autumn
+  [M8]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark8-evie
+  [M9]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark9-darshelle
+  [M10]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark10-alina
+  [M11]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark11-amanda
+  [M12]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark12-anna
 )
 
 if [[ "$N_MODE" == "n12" ]]; then

@@ -22,58 +22,44 @@
 set -e
 
 N_MODE="${1:-n12}"
-PY=~/.venvs/imgcluster-env/bin/python3
-S=/Users/abdudh/dev/utilities/reorder/clusteringRefinement/train_projection_head.py
-B=/Users/abdudh/dev/utilities/reorder/clusteringRefinement/benchmark_clustering.ts
-BLEND=/Users/abdudh/dev/utilities/reorder/clusteringRefinement/blend_dist_matrix.py
+HERE=/Users/abdudh/dev/utilities/reorder/clusteringRefinement
+source "$HERE/common.sh"
+S=$TRAIN   # train_projection_head.py
 
-declare -A DIRS=(
-  [M1]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark1-austin
-  [M2]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark2-sarah
-  [M3]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark3-eva
-  [M4]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark4-mia
-  [M5]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark5-lily
-  [M6]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark6-sabrina
-  [M7]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark7-autumn
-  [M8]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark8-evie
-  [M9]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark9-darshelle
-  [M10]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark10-alina
-  [M11]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark11-amanda
-  [M12]=/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark12-anna
-)
-
+# This sweep predates the M13-M20 datasets; SET is its own N=8/N=12 subset
+# (do NOT reuse common.sh's full 20-entry ALL).
 if [[ "$N_MODE" == "n12" ]]; then
-  ALL=(M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12)
+  SET=(M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12)
 else
-  ALL=(M1 M2 M3 M4 M5 M6 M11 M12)
+  SET=(M1 M2 M3 M4 M5 M6 M11 M12)
 fi
 
 # Pre-flight check: required caches must exist
-for m in "${ALL[@]}"; do
-  D=${DIRS[$m]}
+for m in "${SET[@]}"; do
+  D=$(dir "$m")
   if [[ ! -f "$D/.reorder-cache/content_hashes.json" || ! -f "$D/.reorder-cache/embeddings_hash_cache.npz" ]]; then
     echo "ERROR: $m missing required cache at $D/.reorder-cache/" >&2
     exit 1
   fi
 done
-echo "Pre-flight OK: ${#ALL[@]} datasets ready."
+echo "Pre-flight OK: ${#SET[@]} datasets ready."
 
 run_lomo() {
   local TAG=$1; shift
   local EXTRA=("$@")
   echo ""
   echo "================ Config '$TAG' — args: ${EXTRA[*]} ================"
-  for HELDOUT in "${ALL[@]}"; do
-    TRAIN=""
+  for HELDOUT in "${SET[@]}"; do
+    TRAIN_NAMES=""
     DATASET_ARGS=()
-    for m in "${ALL[@]}"; do
-      DATASET_ARGS+=(--dataset "$m:${DIRS[$m]}")
+    for m in "${SET[@]}"; do
+      DATASET_ARGS+=(--dataset "$m:$(dir "$m")")
       if [[ "$m" != "$HELDOUT" ]]; then
-        [[ -z "$TRAIN" ]] && TRAIN="$m" || TRAIN="$TRAIN,$m"
+        [[ -z "$TRAIN_NAMES" ]] && TRAIN_NAMES="$m" || TRAIN_NAMES="$TRAIN_NAMES,$m"
       fi
     done
-    $PY $S "${DATASET_ARGS[@]}" \
-      --train "$TRAIN" --within-holdout-frac 0 \
+    "$PY" "$S" "${DATASET_ARGS[@]}" \
+      --train "$TRAIN_NAMES" --within-holdout-frac 0 \
       --epochs 15 --batches-per-epoch 400 --p-groups 32 --k-images 8 \
       --out-dim 256 --arcface-weight 0 \
       "${EXTRA[@]}" \
@@ -83,8 +69,8 @@ run_lomo() {
 
   # Generate blends + score
   mkdir -p /tmp/aug_${TAG}_blends
-  for m in "${ALL[@]}"; do
-    $PY $BLEND "${DIRS[$m]}" \
+  for m in "${SET[@]}"; do
+    "$PY" "$BLEND" "$(dir "$m")" \
       --learned /tmp/aug_${TAG}_${m}/${m}_dist_matrix.bin \
       --weights 0.3,0.5,0.7 \
       --output-pattern /tmp/aug_${TAG}_blends/${m}_blend_{w}.bin > /dev/null 2>&1
@@ -93,31 +79,24 @@ run_lomo() {
 
 eval_config() {
   local TAG=$1
-  ari_learned() {
-    bun "$B" "$1" --dist-matrix "$2" --dist-matrix-weight 1.0 --weights pecore_g=0 2>/dev/null | awk '/^  ARI:/{print $2}'
-  }
-  bari() {
-    bun "$B" "$1" 2>/dev/null | awk '/^  ARI:/{print $2}'
-  }
-
   echo ""
   echo "===== Eval config '$TAG' ====="
   printf "%-6s | %-8s | %-8s | %-8s | %-8s | %-8s | %-8s\n" "cold" "baseline" "100%" "30%blend" "50%blend" "70%blend" "Δ best"
   local total=0
-  for m in "${ALL[@]}"; do
-    local d=${DIRS[$m]}
-    local base=$(bari "$d")
-    local pure=$(ari_learned "$d" /tmp/aug_${TAG}_${m}/${m}_dist_matrix.bin)
-    local b30=$(ari_learned "$d" /tmp/aug_${TAG}_blends/${m}_blend_0.3.bin)
-    local b50=$(ari_learned "$d" /tmp/aug_${TAG}_blends/${m}_blend_0.5.bin)
-    local b70=$(ari_learned "$d" /tmp/aug_${TAG}_blends/${m}_blend_0.7.bin)
+  for m in "${SET[@]}"; do
+    local d=$(dir "$m")
+    local base=$(ari "$d")
+    local pure=$(ari "$d" --dist-matrix /tmp/aug_${TAG}_${m}/${m}_dist_matrix.bin --dist-matrix-weight 1.0 --weights pecore_g=0)
+    local b30=$(ari "$d" --dist-matrix /tmp/aug_${TAG}_blends/${m}_blend_0.3.bin --dist-matrix-weight 1.0 --weights pecore_g=0)
+    local b50=$(ari "$d" --dist-matrix /tmp/aug_${TAG}_blends/${m}_blend_0.5.bin --dist-matrix-weight 1.0 --weights pecore_g=0)
+    local b70=$(ari "$d" --dist-matrix /tmp/aug_${TAG}_blends/${m}_blend_0.7.bin --dist-matrix-weight 1.0 --weights pecore_g=0)
     local best=$(echo -e "$pure\n$b30\n$b50\n$b70" | sort -g | tail -1)
     local delta=$(echo "$best - $base" | bc -l)
     total=$(echo "$total + $delta" | bc -l)
     local sign=$(echo "$delta" | awk '{ if ($1 > 0) printf "+"; printf "%.4f", $1 }')
     printf "%-6s | %s   | %s   | %s   | %s   | %s   | %s\n" "$m" "$base" "$pure" "$b30" "$b50" "$b70" "$sign"
   done
-  local avg=$(echo "$total / ${#ALL[@]}" | bc -l)
+  local avg=$(echo "$total / ${#SET[@]}" | bc -l)
   printf "AVG Δ ARI: %+.4f\n" "$avg"
 }
 

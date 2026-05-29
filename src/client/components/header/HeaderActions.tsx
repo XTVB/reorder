@@ -17,10 +17,12 @@ function ClusterActions() {
   const usePatches = useListStore((s) => s.usePatches);
   const useRerank = useListStore((s) => s.useRerank);
   const rerankBlend = useListStore((s) => s.rerankBlend);
+  const linkage = useListStore((s) => s.linkage);
   const setWeights = useListStore((s) => s.setWeights);
   const setUsePatches = useListStore((s) => s.setUsePatches);
   const setUseRerank = useListStore((s) => s.setUseRerank);
   const setRerankBlend = useListStore((s) => s.setRerankBlend);
+  const setLinkage = useListStore((s) => s.setLinkage);
   const fetchClusters = useListStore((s) => s.fetchClusters);
   const recut = useListStore((s) => s.recut);
   const expandAll = useListStore((s) => s.expandAll);
@@ -43,14 +45,15 @@ function ClusterActions() {
       usePatches={usePatches}
       useRerank={useRerank}
       rerankBlend={rerankBlend}
+      linkage={linkage}
       onRun={fetchClusters}
       onRecut={(n) => recut({ nClusters: n })}
-      onRecutByThreshold={(threshold) => recut({ threshold })}
       onRecutAdaptive={(minClusterSize) => recut({ minClusterSize })}
       onWeightsChange={setWeights}
       onUsePatchesChange={setUsePatches}
       onUseRerankChange={setUseRerank}
       onRerankBlendChange={setRerankBlend}
+      onLinkageChange={setLinkage}
       onExpandAll={expandAll}
       onCollapseAll={collapseAll}
       onAcceptAll={acceptAllClusters}

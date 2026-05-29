@@ -16,6 +16,7 @@ export type {
   ImageInfo,
   ImagesResponse,
   ImportClusterInput,
+  LinkageMethod,
   MergeSuggestionRow,
   MergeSuggestionSimilar,
   MergeSuggestionsResponse,

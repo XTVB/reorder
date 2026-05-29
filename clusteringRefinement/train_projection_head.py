@@ -340,10 +340,31 @@ def _diag_neginf(b: int, device) -> torch.Tensor:
     return m
 
 
+# Zero-shot baseline composition, matching blend_dist_matrix.py defaults:
+# concat(peg · 1.0, L2(color) · 0.8) → unit-norm → cosine. PE-G is the first
+# 1280 dims of the head input (already L2-normalized in load_dataset); color is
+# the remainder (raw).
+PEG_DIM = 1280
+BASE_PEG_WEIGHT = 1.0
+BASE_COLOR_WEIGHT = 0.8
+
+
+def zeroshot_base_sim(batch_feats: torch.Tensor) -> torch.Tensor:
+    """(B, B) detached zero-shot cosine-sim matrix for blend-aware training.
+    `batch_feats` is the head input (peg ⊕ color concat). Reconstructs the same
+    weighted-concat the clustering pipeline's baseline uses."""
+    peg = batch_feats[:, :PEG_DIM] * BASE_PEG_WEIGHT
+    col = F.normalize(batch_feats[:, PEG_DIM:], dim=1) * BASE_COLOR_WEIGHT
+    b = F.normalize(torch.cat([peg, col], dim=1), dim=1)
+    return (b @ b.t()).detach()
+
+
 def sup_con_loss(
     z: torch.Tensor,
     pos_weights: torch.Tensor,
     temperature: float = 0.1,
+    base_sim: torch.Tensor | None = None,
+    blend_w: float = 1.0,
 ) -> torch.Tensor:
     """
     Soft-label supervised contrastive loss.
@@ -352,10 +373,23 @@ def sup_con_loss(
                  counts as a positive for anchor i. For hard labels this is just
                  (label[i] == label[j]).float(). For mixed samples (cross-group
                  MixUp) it's the soft-label overlap. Self-pairs are masked.
+    base_sim: optional (B, B) DETACHED zero-shot cosine-similarity matrix. When
+              given, the contrastive logits use the blended similarity that the
+              clustering pipeline actually scores on — blend_w·cos(z) +
+              (1−blend_w)·base_sim — so the head learns to *complement* the
+              zero-shot signal (residual learning) rather than re-learn it.
+              Linearly blending cosines == linearly blending the deployed
+              condensed distances (the constant offset cancels row-wise in the
+              softmax). base_sim is constant w.r.t. the head, so gradients still
+              flow only through z, scaled by blend_w.
+    blend_w: learned-head fraction; should match the inference blend (0.60).
     """
     device = z.device
     b = z.shape[0]
-    sim = z @ z.t() / temperature
+    if base_sim is not None:
+        sim = (blend_w * (z @ z.t()) + (1.0 - blend_w) * base_sim) / temperature
+    else:
+        sim = z @ z.t() / temperature
     # Pin the self-pair entries to -1e9 so they contribute ~0 to the softmax
     # denominator; mask_valid still zeros W on the diagonal so the (W * log_prob)
     # product is finite (0 × big-negative).
@@ -816,6 +850,12 @@ def main():
                          "as a background negative (unique sentinel label so it never "
                          "appears as a positive). Cheap: ~0-4 extra rows per batch.")
     ap.add_argument("--temperature", type=float, default=0.1)
+    ap.add_argument("--blend-aware", action="store_true",
+                    help="Train the contrastive loss on the blended (learned + zero-shot) "
+                         "similarity the clustering pipeline scores on, so the head learns "
+                         "the residual rather than re-learning zero-shot structure.")
+    ap.add_argument("--blend-weight", type=float, default=0.6,
+                    help="Learned-head fraction used by --blend-aware; match the inference blend.")
     ap.add_argument("--arcface-weight", type=float, default=1.0,
                     help="0 disables ArcFace; total_loss = supcon + arcface_weight * arcface")
     ap.add_argument("--arcface-margin", type=float, default=0.3)
@@ -827,6 +867,9 @@ def main():
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--weight-decay", type=float, default=1e-4)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--grad-clip", type=float, default=5.0,
+                    help="max grad norm for clip_grad_norm_ (0 disables). Guards against "
+                         "mid-training divergence in aggressive configs.")
     ap.add_argument("--device", default=None, help="cuda / mps / cpu (auto-detected)")
     args = ap.parse_args()
 
@@ -1068,7 +1111,11 @@ def main():
             else:
                 pos_weights = hard_label_weights(supcon_labels)
             z = head(batch_feats)
-            l_supcon = sup_con_loss(z, pos_weights, temperature=args.temperature)
+            base_sim = zeroshot_base_sim(batch_feats) if args.blend_aware else None
+            l_supcon = sup_con_loss(
+                z, pos_weights, temperature=args.temperature,
+                base_sim=base_sim, blend_w=args.blend_weight,
+            )
             if ds.name in arc_heads:
                 # Singletons are not in gid_to_cls — restrict ArcFace to the
                 # group prefix.
@@ -1078,6 +1125,13 @@ def main():
             loss = l_supcon + args.arcface_weight * l_arc
             opt.zero_grad()
             loss.backward()
+            # Gradient clipping guards against mid-training divergence: aggressive
+            # configs (small K, high LR) can explode the grad norm and run away to
+            # NaN with no containment. Only activates above the threshold, so stable
+            # configs are unaffected. (Distinct from the MPS LayerNorm-backward NaN
+            # workaround in ManualLayerNorm, which is a structural fix.)
+            if args.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(head.parameters(), max_norm=args.grad_clip)
             opt.step()
             with torch.no_grad():
                 ep_loss_t += loss.detach()

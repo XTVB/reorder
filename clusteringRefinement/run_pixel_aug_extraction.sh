@@ -21,40 +21,30 @@ set -e
 
 K="${1:-3}"
 BACKEND="${2:-mlx}"
-PY=~/.venvs/imgcluster-env/bin/python3
-S=/Users/abdudh/dev/utilities/reorder/clusteringRefinement/extract_augmented_views.py
+HERE=/Users/abdudh/dev/utilities/reorder/clusteringRefinement
+source "$HERE/common.sh"
+S=$HERE/extract_augmented_views.py
 
 # M7 deliberately skipped: ~149 imgs/group already (4x denser than the next
-# largest), so pixel-aug is mostly redundant signal there. Skipping saves ~3.5h.
-declare -a DIRS=(
-  /Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark1-austin
-  /Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark2-sarah
-  /Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark3-eva
-  /Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark4-mia
-  /Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark5-lily
-  /Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark6-sabrina
-  /Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark8-evie
-  /Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark9-darshelle
-  /Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark10-alina
-  /Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark11-amanda
-  /Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark12-anna
-)
+# largest), so pixel-aug is mostly redundant signal there (saves ~3.5h). M14/M15
+# are the partial-label sets. 17 datasets.
+MS=(M1 M2 M3 M4 M5 M6 M8 M9 M10 M11 M12 M13 M16 M17 M18 M19 M20)
 
 echo "Pixel-aug pre-extraction starting"
 echo "  K=$K views/image, backend=$BACKEND"
-echo "  ${#DIRS[@]} datasets"
+echo "  ${#MS[@]} datasets"
 echo "  estimate: ~21 hours total at 2 img/s (MLX)"
 echo ""
 
 START_TIME=$(date +%s)
-for D in "${DIRS[@]}"; do
-  name=$(basename "$D")
+for m in "${MS[@]}"; do
+  D=$(dir "$m"); name=$(basename "$D")
   echo "==== $name ===="
   if [[ ! -f "$D/.reorder-cache/content_hashes.json" ]]; then
     echo "  SKIP: content_hashes.json not found (run extract_features.py first)"
     continue
   fi
-  $PY $S "$D" --n-views "$K" --pecore-g-backend "$BACKEND"
+  "$PY" "$S" "$D" --n-views "$K" --pecore-g-backend "$BACKEND"
 done
 
 ELAPSED=$(( $(date +%s) - START_TIME ))

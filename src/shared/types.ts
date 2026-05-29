@@ -54,6 +54,9 @@ export interface WeightConfig {
   learned_proj?: number;
 }
 
+/** Agglomerative linkage method for the cluster tree. */
+export type LinkageMethod = "ward" | "average" | "complete";
+
 export interface ClusterResultData {
   id: string;
   name: string;

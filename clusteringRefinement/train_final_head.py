@@ -41,19 +41,20 @@ HEAD_PT = HEAD_DIR / "learned_head.pt"
 HEAD_CONFIG = HEAD_DIR / "learned_head.json"
 DEFAULT_CONFIG_PATH = Path(os.path.expanduser("~/.config/reorder/training_datasets.txt"))
 
-# Winning hyperparameters from the LOMO sweep series (P=32, K=12, ep=15,
-# pixel-aug, ICOMB augmentations + cross-mixup + hard-neg).
+# Winning hyperparameters from the LOMO sweep series. See LEARNED_HEAD.md for
+# the rationale, results, and the matching inference blend (0.60).
 DEFAULT_HYPERPARAMS = {
     "epochs": 15,
     "batches_per_epoch": 400,
     "p_groups": 32,
     "k_images": 12,
-    "out_dim": 256,
+    "out_dim": 512,
     "hidden": 1024,
     "dropout": 0.1,
-    "temperature": 0.1,
-    "lr": 3e-4,
+    "temperature": 0.07,
+    "lr": 1e-4,
     "weight_decay": 1e-4,
+    "grad_clip": 5.0,
     "mixup_alpha": 0.4,
     "drop_color_prob": 0.5,
     "cross_mixup_prob": 0.3,
@@ -67,26 +68,26 @@ DEFAULT_HYPERPARAMS = {
 
 # Fallback dataset list (used when no --dataset, --datasets-from, or default config).
 DEFAULT_TRAINING_DATASETS = [
-    ("M1", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark1-austin"),
-    ("M2", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark2-sarah"),
-    ("M3", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark3-eva"),
-    ("M4", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark4-mia"),
-    ("M5", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark5-lily"),
-    ("M6", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark6-sabrina"),
-    ("M7", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark7-autumn"),
-    ("M8", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark8-evie"),
-    ("M9", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark9-darshelle"),
-    ("M10", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark10-alina"),
-    ("M11", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark11-amanda"),
-    ("M12", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark12-anna"),
-    ("M13", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark13-hunny"),
-    ("M14", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark14-vixen-partial"),
-    ("M15", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark15-verity-partial"),
-    ("M16", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark16-zoe"),
-    ("M17", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark17-dusha"),
-    ("M18", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark18-railey"),
-    ("M19", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark19-andreea"),
-    ("M20", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarksClusteringBenchmark20-salome"),
+    ("M1", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark1-austin"),
+    ("M2", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark2-sarah"),
+    ("M3", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark3-eva"),
+    ("M4", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark4-mia"),
+    ("M5", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark5-lily"),
+    ("M6", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark6-sabrina"),
+    ("M7", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark7-autumn"),
+    ("M8", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark8-evie"),
+    ("M9", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark9-darshelle"),
+    ("M10", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark10-alina"),
+    ("M11", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark11-amanda"),
+    ("M12", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark12-anna"),
+    ("M13", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark13-hunny"),
+    ("M14", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark14-vixen-partial"),
+    ("M15", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark15-verity-partial"),
+    ("M16", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark16-zoe"),
+    ("M17", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark17-dusha"),
+    ("M18", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark18-railey"),
+    ("M19", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark19-andreea"),
+    ("M20", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark20-salome"),
 ]
 
 
@@ -192,6 +193,7 @@ def main():
             "--temperature", str(hp["temperature"]),
             "--lr", str(hp["lr"]),
             "--weight-decay", str(hp["weight_decay"]),
+            "--grad-clip", str(hp["grad_clip"]),
             "--mixup-alpha", str(hp["mixup_alpha"]),
             "--drop-color-prob", str(hp["drop_color_prob"]),
             "--cross-mixup-prob", str(hp["cross_mixup_prob"]),

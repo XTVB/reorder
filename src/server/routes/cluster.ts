@@ -16,7 +16,7 @@ import {
 } from "../../cluster/index.ts";
 import { contentHashesPath, linkageTreePath } from "../../fs/paths.ts";
 import { log } from "../../log.ts";
-import type { WeightConfig } from "../../shared/types.ts";
+import type { LinkageMethod, WeightConfig } from "../../shared/types.ts";
 import { runClusterJobSSE } from "../middleware/cluster-job.ts";
 import { json } from "../middleware/response.ts";
 import { subscribeProgressSSE } from "../middleware/sse.ts";
@@ -32,13 +32,15 @@ export const clusterRoutes: RouteHandler = async (req, ctx) => {
       usePatches?: boolean;
       useRerank?: boolean;
       rerankBlend?: number;
+      linkage?: LinkageMethod;
     };
     const nClusters = body.nClusters ?? 200;
     const weights = body.weights;
     const options = {
       usePatches: body.usePatches,
-      useRerank: body.useRerank ?? true,
+      useRerank: body.useRerank ?? false,
       rerankBlend: body.rerankBlend,
+      linkage: body.linkage,
     };
 
     log("cluster", `Full cluster request (SSE): n=${nClusters} ${JSON.stringify(options)}`);

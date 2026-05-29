@@ -71,8 +71,14 @@ dirs = [
     "ClusteringBenchmark4-mia", "ClusteringBenchmark5-lily", "ClusteringBenchmark6-sabrina",
     "ClusteringBenchmark8-evie", "ClusteringBenchmark9-darshelle", "ClusteringBenchmark10-alina",
     "ClusteringBenchmark11-amanda", "ClusteringBenchmark12-anna",
+    "ClusteringBenchmark13-hunny",
+    "ClusteringBenchmark16-zoe",
+    "ClusteringBenchmark17-dusha",
+    "ClusteringBenchmark18-railey",
+    "ClusteringBenchmark19-andreea",
+    "ClusteringBenchmark20-salome",
 ]
-base = "/Users/abdudh/Downloads/PicsStaging"
+base = "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks"
 total_done = total = 0
 for d in dirs:
     meta_path = f"{base}/{d}/.reorder-cache/views_meta.json"
@@ -89,10 +95,10 @@ for d in dirs:
         bar_len = 30
         filled = int(bar_len * done / max(n_imgs, 1))
         bar = "█" * filled + "░" * (bar_len - filled)
-        print(f"  {d:<24} : [{bar}] {done:>5}/{n_imgs:<5} ({pct:5.1f}%) K={n_views}")
+        print(f"  {d:<30} : [{bar}] {done:>5}/{n_imgs:<5} ({pct:5.1f}%) K={n_views}")
     else:
         bar = "░" * 30
-        print(f"  {d:<24} : [{bar}] {0:>5}/{n_imgs:<5} (  0.0%) (not started)")
+        print(f"  {d:<30} : [{bar}] {0:>5}/{n_imgs:<5} (  0.0%) (not started)")
     total_done += min(done if os.path.exists(meta_path) else 0, n_imgs)
     total += n_imgs
 print()

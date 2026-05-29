@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useToastStore } from "../../stores/core/toastStore.ts";
-import type { DistanceProfile, ImportClusterInput, WeightConfig } from "../../types.ts";
+import type {
+  DistanceProfile,
+  ImportClusterInput,
+  LinkageMethod,
+  WeightConfig,
+} from "../../types.ts";
 import { getErrorMessage } from "../../utils/helpers.ts";
 import { OverflowMenu, OverflowMenuDivider, OverflowMenuItem } from "../shared/OverflowMenu.tsx";
 
@@ -20,18 +25,6 @@ const WEIGHT_LABELS: { key: keyof Required<WeightConfig>; label: string }[] = [
   { key: "learned_proj", label: "Learned head" },
 ];
 
-/** Binary search: count how many sorted distances are < threshold */
-function countMergesBelow(distances: number[], threshold: number): number {
-  let lo = 0,
-    hi = distances.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
-    if (distances[mid]! < threshold) lo = mid + 1;
-    else hi = mid;
-  }
-  return lo;
-}
-
 interface Props {
   loading: boolean;
   progress: string;
@@ -43,14 +36,15 @@ interface Props {
   usePatches: boolean;
   useRerank: boolean;
   rerankBlend: number;
+  linkage: LinkageMethod;
   onRun: (n?: number) => void;
   onRecut: (n: number) => void;
-  onRecutByThreshold: (threshold: number) => void;
   onRecutAdaptive: (minClusterSize: number) => void;
   onWeightsChange: (w: WeightConfig) => void;
   onUsePatchesChange: (v: boolean) => void;
   onUseRerankChange: (v: boolean) => void;
   onRerankBlendChange: (v: number) => void;
+  onLinkageChange: (v: LinkageMethod) => void;
   onExpandAll: () => void;
   onCollapseAll: () => void;
   onAcceptAll: (minSize: number) => void;
@@ -68,7 +62,6 @@ export function ClusterToolbar({
   weights,
   onRun,
   onRecut,
-  onRecutByThreshold,
   onRecutAdaptive,
   onWeightsChange,
   usePatches,
@@ -77,6 +70,8 @@ export function ClusterToolbar({
   rerankBlend,
   onUseRerankChange,
   onRerankBlendChange,
+  linkage,
+  onLinkageChange,
   onExpandAll,
   onCollapseAll,
   onAcceptAll,
@@ -84,10 +79,9 @@ export function ClusterToolbar({
   onClearImported,
 }: Props) {
   const [customN, setCustomN] = useState(String(nClusters));
-  const [sliderPos, setSliderPos] = useState(500);
-  const [previewCount, setPreviewCount] = useState<number | null>(null);
   const [showWeights, setShowWeights] = useState(false);
-  const [minClusterSize, setMinClusterSize] = useState(5);
+  const [customMin, setCustomMin] = useState("5");
+  const minClusterSize = parseInt(customMin, 10) || 5;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const showToast = useToastStore((s) => s.showToast);
 
@@ -112,61 +106,7 @@ export function ClusterToolbar({
     setCustomN(String(nClusters));
   }, [nClusters]);
 
-  const sliderToThreshold = useCallback(
-    (pos: number): number => {
-      if (!distanceProfile || distanceProfile.distances.length === 0) return 0;
-      const { distances } = distanceProfile;
-      const frac = 1 - pos / 1000;
-      const idx = frac * (distances.length - 1);
-      const lo = Math.floor(idx);
-      const hi = Math.ceil(idx);
-      if (lo === hi) return distances[lo]!;
-      const t = idx - lo;
-      return distances[lo]! * (1 - t) + distances[hi]! * t;
-    },
-    [distanceProfile],
-  );
-
-  const computePreview = useCallback(
-    (pos: number) => {
-      if (!distanceProfile) return null;
-      const threshold = sliderToThreshold(pos);
-      const merges = countMergesBelow(distanceProfile.distances, threshold);
-      return distanceProfile.nAfterPremerge - merges;
-    },
-    [distanceProfile, sliderToThreshold],
-  );
-
-  useEffect(() => {
-    if (!distanceProfile || distanceProfile.distances.length === 0) return;
-    const { distances, nAfterPremerge } = distanceProfile;
-    const mergesNeeded = nAfterPremerge - nClusters;
-    if (mergesNeeded <= 0) {
-      setSliderPos(1000);
-      return;
-    }
-    if (mergesNeeded >= distances.length) {
-      setSliderPos(0);
-      return;
-    }
-    const pos = Math.round((1 - mergesNeeded / (distances.length - 1)) * 1000);
-    setSliderPos(Math.min(1000, Math.max(0, pos)));
-  }, [distanceProfile, nClusters]);
-
-  function handleSliderInput(pos: number) {
-    setSliderPos(pos);
-    setPreviewCount(computePreview(pos));
-  }
-
-  function handleSliderCommit(pos: number) {
-    setPreviewCount(null);
-    if (!distanceProfile) return;
-    const threshold = sliderToThreshold(pos);
-    onRecutByThreshold(threshold);
-  }
-
   const hasProfile = distanceProfile && distanceProfile.distances.length > 0;
-  const displayCount = previewCount ?? totalClusters;
 
   // Active weights summary
   const activeWeightParts = WEIGHT_LABELS.filter(({ key }) => (weights[key] ?? 0) > 0).map(
@@ -242,7 +182,7 @@ export function ClusterToolbar({
 
         <label
           className="cluster-patches-toggle"
-          title="k-reciprocal re-ranking — uses kNN graph structure on top of cosine for more accurate clustering (~3s precompute, recommended)"
+          title="k-reciprocal re-ranking — kNN-graph structure on top of cosine (~3s precompute). Useful on datasets with large, well-separated shoots."
         >
           <input
             type="checkbox"
@@ -281,37 +221,31 @@ export function ClusterToolbar({
           />
           Patches
         </label>
+        <label
+          className="cluster-patches-toggle"
+          title={
+            "Linkage method for the cluster tree:\n" +
+            "• Ward (default) — best for evenly-sized, compact shoots; wins on most sets (e.g. amanda, alina).\n" +
+            "• Average — few large or uneven-sized sets, where Ward's equal-size bias splits them (e.g. lily).\n" +
+            "• Complete — tight clusters of moderately uneven size (e.g. darshelle)."
+          }
+        >
+          Linkage
+          <select
+            className="cluster-linkage-select"
+            value={linkage}
+            onChange={(e) => onLinkageChange(e.target.value as LinkageMethod)}
+          >
+            <option value="ward">Ward</option>
+            <option value="average">Average</option>
+            <option value="complete">Complete</option>
+          </select>
+        </label>
       </div>
 
-      {/* Tuning: threshold slider(s) or N input */}
-      {hasProfile ? (
-        <div className="toolbar-group" title="Cut tuning">
-          <ThresholdSlider
-            label="Cut"
-            title="Drag left for coarser (fewer) clusters, right for finer (more) clusters"
-            min={0}
-            max={1000}
-            value={sliderPos}
-            disabled={loading}
-            onInput={handleSliderInput}
-            onCommit={handleSliderCommit}
-            countText={String(displayCount)}
-            countTitle={`threshold: ${sliderToThreshold(sliderPos).toFixed(4)}`}
-          />
-          <ThresholdSlider
-            label="Min"
-            title="Min cluster size — smaller = more granular clusters"
-            min={2}
-            max={30}
-            value={minClusterSize}
-            disabled={loading}
-            onInput={setMinClusterSize}
-            onCommit={onRecutAdaptive}
-            countText={String(minClusterSize)}
-          />
-        </div>
-      ) : (
-        <label className="cluster-n-selector">
+      {/* Cut tuning: exact cluster count (number input) + optional adaptive min-size */}
+      <div className="toolbar-group" title="Cut tuning">
+        <label className="cluster-n-selector" title="Cut the tree into exactly N clusters">
           N=
           <input
             type="number"
@@ -332,7 +266,34 @@ export function ClusterToolbar({
             Re-cut
           </button>
         </label>
-      )}
+        {hasProfile && (
+          <label
+            className="cluster-n-selector"
+            title="Min cluster size — adaptive (HDBSCAN-style) cut; smaller = more granular clusters"
+          >
+            Min=
+            <input
+              type="number"
+              value={customMin}
+              onChange={(e) => setCustomMin(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onRecutAdaptive(minClusterSize);
+              }}
+              className="cluster-n-input"
+              min={2}
+              max={30}
+              disabled={loading}
+            />
+            <button
+              className="btn btn-small"
+              onClick={() => onRecutAdaptive(minClusterSize)}
+              disabled={loading || !totalClusters}
+            >
+              Re-cut
+            </button>
+          </label>
+        )}
+      </div>
 
       {(loading || hasError) && (
         <span className={`cluster-progress ${hasError ? "cluster-error" : ""}`}>{progress}</span>
@@ -386,51 +347,5 @@ export function ClusterToolbar({
         }}
       />
     </>
-  );
-}
-
-interface ThresholdSliderProps {
-  label: string;
-  title: string;
-  min: number;
-  max: number;
-  value: number;
-  disabled: boolean;
-  onInput: (v: number) => void;
-  onCommit: (v: number) => void;
-  countText: string;
-  countTitle?: string;
-}
-
-function ThresholdSlider({
-  label,
-  title,
-  min,
-  max,
-  value,
-  disabled,
-  onInput,
-  onCommit,
-  countText,
-  countTitle,
-}: ThresholdSliderProps) {
-  return (
-    <label className="cluster-threshold-control" title={title}>
-      <span className="cluster-threshold-label">{label}</span>
-      <input
-        type="range"
-        className="cluster-threshold-slider"
-        min={min}
-        max={max}
-        value={value}
-        onChange={(e) => onInput(parseInt(e.target.value, 10))}
-        onMouseUp={(e) => onCommit(parseInt((e.target as HTMLInputElement).value, 10))}
-        onTouchEnd={(e) => onCommit(parseInt((e.target as HTMLInputElement).value, 10))}
-        disabled={disabled}
-      />
-      <span className="cluster-threshold-count" title={countTitle}>
-        {countText}
-      </span>
-    </label>
   );
 }

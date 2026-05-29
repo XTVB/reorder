@@ -21,6 +21,7 @@ import type {
   ClusterResultData,
   DistanceProfile,
   ImageGroup,
+  LinkageMethod,
   WeightConfig,
 } from "../shared/types.ts";
 import { PYTHON, RUST_BINARY, SCRIPTS_DIR } from "./binaries.ts";
@@ -121,8 +122,6 @@ export async function extractFeatures(
   return result;
 }
 
-export type LinkageMethod = "ward" | "average" | "complete";
-
 const DEFAULT_RERANK_BLEND = 0.7;
 
 /**
@@ -171,6 +170,9 @@ export interface LinkageOptions {
   useRerank?: boolean;
   /** Blend strength for re-rank matrix vs raw cosine. 0=cosine only, 1=rerank only. Default 0.7. */
   rerankBlend?: number;
+  /** Explicit linkage method; defaults to ward when omitted.
+   * Average/complete can beat ward on datasets with few large or uneven-sized clusters. */
+  linkage?: LinkageMethod;
 }
 
 export async function runLinkage(
@@ -206,9 +208,9 @@ export async function runLinkage(
   // Ensure the JSON sidecar exists (regenerate from NPZ if needed)
   ensureHashOrderJson(cache);
 
-  // Linkage method: average works best with re-rank distance; ward is the
-  // historical default for raw cosine.
-  const linkageMethod: LinkageMethod = useRerank ? "average" : "ward";
+  // Linkage method: explicit override wins; ward is the default (it beat average
+  // in the LOMO even with re-rank on — see LEARNED_HEAD.md).
+  const linkageMethod: LinkageMethod = options?.linkage ?? "ward";
 
   const args = [
     RUST_BINARY,

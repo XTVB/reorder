@@ -8,9 +8,11 @@ import type {
   ClusterData,
   ClusterResultData,
   ImportClusterInput,
+  LinkageMethod,
   SplitChildren,
   WeightConfig,
 } from "../../../types.ts";
+
 import { getErrorMessage } from "../../../utils/helpers.ts";
 import { useToastStore } from "../../core/toastStore.ts";
 
@@ -24,6 +26,8 @@ interface ListState {
   useRerank: boolean;
   /** Blend strength for re-rank distance (0=cosine only, 1=rerank only). */
   rerankBlend: number;
+  /** Agglomerative linkage method. */
+  linkage: LinkageMethod;
   collapsedClusters: Set<string>;
   /** Children produced by an inline split, keyed by parent cluster id. Presence == expanded. */
   splitChildren: Record<string, SplitChildren>;
@@ -33,14 +37,11 @@ interface ListState {
   setUsePatches: (v: boolean) => void;
   setUseRerank: (v: boolean) => void;
   setRerankBlend: (v: number) => void;
+  setLinkage: (v: LinkageMethod) => void;
 
   // Pipeline
   fetchClusters: (nClusters?: number) => Promise<void>;
-  recut: (params: {
-    nClusters?: number;
-    threshold?: number;
-    minClusterSize?: number;
-  }) => Promise<void>;
+  recut: (params: { nClusters?: number; minClusterSize?: number }) => Promise<void>;
   loadCachedClusters: () => Promise<void>;
   importClusters: (payload: { clusters: ImportClusterInput[] }) => Promise<void>;
   clearImportedClusters: () => Promise<void>;
@@ -97,10 +98,12 @@ export const useListStore = create<ListState>((set, get) => {
     loading: false,
     progress: "",
     treeStale: false,
-    weights: { pecore_g: 1.0, color: 0.5, learned_proj: 0.45 },
+    weights: { pecore_g: 1.0, color: 0.7, learned_proj: 0.6 },
     usePatches: false,
-    useRerank: true,
+    // Defaults pinned to the best-scoring cluster config — see LEARNED_HEAD.md.
+    useRerank: false,
     rerankBlend: 0.7,
+    linkage: "ward",
     collapsedClusters: new Set(),
     splitChildren: {},
 
@@ -116,6 +119,11 @@ export const useListStore = create<ListState>((set, get) => {
     setRerankBlend: (v) => {
       if (get().rerankBlend === v) return;
       set({ rerankBlend: v, treeStale: true });
+    },
+    setLinkage: (v) => {
+      if (get().linkage === v) return;
+      // Linkage changes the tree itself → needs a full re-run, not a recut.
+      set({ linkage: v, treeStale: true });
     },
 
     applyClusterResult: (data) => {
@@ -206,13 +214,14 @@ export const useListStore = create<ListState>((set, get) => {
     fetchClusters: async (nClusters = 200) => {
       set({ loading: true, progress: "Starting clustering..." });
       try {
-        const { weights, usePatches, useRerank, rerankBlend } = get();
+        const { weights, usePatches, useRerank, rerankBlend, linkage } = get();
         const start = await startSSE("/api/cluster", {
           nClusters,
           weights,
           usePatches,
           useRerank,
           rerankBlend,
+          linkage,
         });
 
         if (start.kind === "conflict") {
@@ -247,8 +256,6 @@ export const useListStore = create<ListState>((set, get) => {
       if (params.minClusterSize != null) {
         body.minClusterSize = params.minClusterSize;
         msg = "Adaptive re-cut...";
-      } else if (params.threshold != null) {
-        body.threshold = params.threshold;
       } else {
         body.nClusters = params.nClusters ?? 200;
       }

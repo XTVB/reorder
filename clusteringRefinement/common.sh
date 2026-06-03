@@ -1,28 +1,34 @@
 # Shared config + helpers for the clusteringRefinement LOMO / eval sweep scripts.
-# Single source of truth for the M-id → ClusterBenchmark dataset registry — it
-# used to be copy-pasted into every script and drifted once into a path-typo bug
-# (ClusterBenchmarksClusteringBenchmark…). Also holds the ari()/npy_bad() helpers
+# Loads the dataset registry from datasets.txt (the single source of truth — add a
+# dataset by appending one line there). Also holds the ari()/npy_bad() helpers
 # every scorer shares.
 #
 # Callers set HERE to this directory, then `source "$HERE/common.sh"`.
-# Override BASE/PY before sourcing if ever needed; everything else is derived.
+# Override BASE/PY/REGISTRY before sourcing if ever needed; everything else is derived.
 
 PY=~/.venvs/imgcluster-env/bin/python3
 HERE=${HERE:-/Users/abdudh/dev/utilities/reorder/clusteringRefinement}
 BASE=${BASE:-/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks}
+REGISTRY=${REGISTRY:-$HERE/datasets.txt}
 TRAIN=$HERE/train_projection_head.py
 BLEND=$HERE/blend_dist_matrix.py
 BENCH=$HERE/benchmark_clustering.ts
 BENCH_CWD=/Users/abdudh/dev/utilities/reorder
 
-# M-id → "<N>-<name>" suffix; dir() expands to the full dataset path.
-declare -A P=(
-  [M1]=1-austin [M2]=2-sarah [M3]=3-eva [M4]=4-mia [M5]=5-lily [M6]=6-sabrina
-  [M7]=7-autumn [M8]=8-evie [M9]=9-darshelle [M10]=10-alina [M11]=11-amanda
-  [M12]=12-anna [M13]=13-hunny [M14]=14-vixen-partial [M15]=15-verity-partial
-  [M16]=16-zoe [M17]=17-dusha [M18]=18-railey [M19]=19-andreea [M20]=20-salome
-)
-ALL=(M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20)
+# Parse datasets.txt (lines: "<n> <name> [flags]") into the registry arrays:
+#   P[M-id]   → "<n>-<name>" suffix     (dir() expands to the full dataset path)
+#   ALL       → every M-id, in file order
+#   PIXEL_AUG → M-ids without the no-pixel-aug flag (the pixel-aug extraction set)
+declare -A P=()
+ALL=()
+PIXEL_AUG=()
+while read -r _n _name _flags; do
+  [[ -z $_n || $_n == \#* ]] && continue
+  P[M$_n]="$_n-$_name"
+  ALL+=("M$_n")
+  [[ " $_flags " != *" no-pixel-aug "* ]] && PIXEL_AUG+=("M$_n")
+done < "$REGISTRY"
+unset _n _name _flags
 dir() { echo "$BASE/ClusteringBenchmark${P[$1]}"; }
 
 # ARI of a benchmark run (optionally with extra benchmark_clustering.ts args).

@@ -365,6 +365,7 @@ def sup_con_loss(
     temperature: float = 0.1,
     base_sim: torch.Tensor | None = None,
     blend_w: float = 1.0,
+    self_idx: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
     Soft-label supervised contrastive loss.
@@ -383,6 +384,15 @@ def sup_con_loss(
               softmax). base_sim is constant w.r.t. the head, so gradients still
               flow only through z, scaled by blend_w.
     blend_w: learned-head fraction; should match the inference blend (0.60).
+    self_idx: optional (B,) long tensor of the source IMAGE index per batch row.
+              When given, ALL same-source-image pairs (not just the literal
+              i==i diagonal) are treated as self-pairs and excluded from both
+              the numerator and the softmax denominator. The PKSampler draws
+              with replacement for groups with < K images, so the same image
+              can land at multiple batch positions; those off-diagonal
+              duplicates would otherwise be perfect (cos=1) positives that also
+              dominate the denominator (exp(1/τ) ≫ everything). When None, falls
+              back to the cached eye-based diagonal masking (legacy behavior).
     """
     device = z.device
     b = z.shape[0]
@@ -391,11 +401,19 @@ def sup_con_loss(
     else:
         sim = z @ z.t() / temperature
     # Pin the self-pair entries to -1e9 so they contribute ~0 to the softmax
-    # denominator; mask_valid still zeros W on the diagonal so the (W * log_prob)
-    # product is finite (0 × big-negative).
-    log_prob = F.log_softmax(sim + _diag_neginf(b, device), dim=1)
+    # denominator; mask_valid still zeros W on those entries so the
+    # (W * log_prob) product is finite (0 × big-negative). With self_idx the
+    # self-pair set is "same source image" (subsumes the diagonal); content
+    # varies per batch so these can't use the (device, b) caches.
+    if self_idx is not None:
+        same = (self_idx.unsqueeze(0) == self_idx.unsqueeze(1))
+        neg_inf = same.float() * -1e9
+        mask_valid = (~same).float()
+    else:
+        neg_inf = _diag_neginf(b, device)
+        mask_valid = _mask_valid(b, device)
+    log_prob = F.log_softmax(sim + neg_inf, dim=1)
 
-    mask_valid = _mask_valid(b, device)
     W = pos_weights * mask_valid
     pos_weight_sum = W.sum(dim=1)
     has_pos = (pos_weight_sum > 1e-6).float()
@@ -633,7 +651,13 @@ class PKSampler:
                     rows = ds.train_group_to_idxs[g]
                     cents[i] = ds.features[rows, :peg_dim].mean(dim=0).numpy()
                 cents /= np.linalg.norm(cents, axis=1, keepdims=True).clip(min=1e-8)
-                sims = cents @ cents.T  # (G, G)
+                # NumPy 2.x's float32 matmul SIMD kernel raises spurious
+                # divide-by-zero / overflow / invalid-value RuntimeWarnings here
+                # even though cents and the result are fully finite (it trips the
+                # FP-exception flags internally). The neighbor pools are correct
+                # regardless; silence the false alarm rather than perturb the math.
+                with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+                    sims = cents @ cents.T  # (G, G)
                 np.fill_diagonal(sims, -1.0)
                 k_pool = min(hard_neg_pool_k, len(gids) - 1)
                 # For each group, top-k_pool nearest groups (descending sim)
@@ -849,6 +873,12 @@ def main():
                     help="append every explicit singleton-group image to each batch "
                          "as a background negative (unique sentinel label so it never "
                          "appears as a positive). Cheap: ~0-4 extra rows per batch.")
+    ap.add_argument("--dedup-self-pairs", action="store_true",
+                    help="Mask ALL same-source-image pairs (not only the i==i "
+                         "diagonal) from the SupCon numerator AND denominator. "
+                         "Fixes tiny groups (<K images) that the PKSampler draws "
+                         "with replacement, which otherwise inject cos=1 "
+                         "self-as-positive pairs that dominate the softmax.")
     ap.add_argument("--temperature", type=float, default=0.1)
     ap.add_argument("--blend-aware", action="store_true",
                     help="Train the contrastive loss on the blended (learned + zero-shot) "
@@ -1115,6 +1145,7 @@ def main():
             l_supcon = sup_con_loss(
                 z, pos_weights, temperature=args.temperature,
                 base_sim=base_sim, blend_w=args.blend_weight,
+                self_idx=idx_tensor if args.dedup_self_pairs else None,
             )
             if ds.name in arc_heads:
                 # Singletons are not in gid_to_cls — restrict ArcFace to the

@@ -25,15 +25,13 @@ HERE=/Users/abdudh/dev/utilities/reorder/clusteringRefinement
 source "$HERE/common.sh"
 S=$HERE/extract_augmented_views.py
 
-# M7 deliberately skipped: ~149 imgs/group already (4x denser than the next
-# largest), so pixel-aug is mostly redundant signal there (saves ~3.5h). M14/M15
-# are the partial-label sets. 17 datasets.
-MS=(M1 M2 M3 M4 M5 M6 M8 M9 M10 M11 M12 M13 M16 M17 M18 M19 M20)
+# Pixel-aug extraction set = datasets.txt minus the no-pixel-aug ones (M7 is
+# already ~149 imgs/group so pixel-aug is redundant; M14/M15 are partial-label).
+MS=("${PIXEL_AUG[@]}")
 
 echo "Pixel-aug pre-extraction starting"
 echo "  K=$K views/image, backend=$BACKEND"
 echo "  ${#MS[@]} datasets"
-echo "  estimate: ~21 hours total at 2 img/s (MLX)"
 echo ""
 
 START_TIME=$(date +%s)

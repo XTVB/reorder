@@ -141,6 +141,25 @@ autumn and the two partial-label sets (vixen, verity) were excluded. Sweep: `clu
 
   At blend 0.60 the per-dataset diff was 7 up / 13 down, avg **−0.0111**. Each config at its own best blend: control 60%→0.7717 vs blend-aware 65%→0.7636 (**−0.0081**), so the regression isn't just a wrong-blend artifact. Note the dev set (M2/M11/M19) gave **+0.0041** — opposite sign from the full LOMO, since 2/3 of those happen to be sets where it helps; a reminder to confirm on the full LOMO. Results in `lomo_blendaware_full.tsv`; reproduce with `EXTRA_ARGS="--blend-aware --blend-weight 0.6" run_deployed_lomo.sh` + `run_blend_curve.sh`. We did not investigate why it regressed.
 
+- **De-duplicating self-pairs in the SupCon loss** (`--dedup-self-pairs`, default off) — when a group has fewer than K images the `PKSampler` draws with replacement, so the same image lands at multiple batch positions. The diagonal self-mask only zeros the literal `i==i` entry, so those off-diagonal duplicates survive as perfect (cos=1) positives that also dominate the softmax denominator (`exp(1/τ)=exp(14.3)≈1.6M` at τ=0.07). The flag masks **all** same-source-image pairs from both the numerator and the denominator. The pathology is real and frequent — **59% of eligible groups have <K=12 images** — but it doesn't actually destabilize training (no divergence even with `--grad-clip 0`), so fixing it changed nothing measurable.
+
+  What we ran: full 20-dataset LOMO, deployed config (512/0.07/1e-4 + grad-clip, full pixel-aug), same seed as the control, scored @ blend 0.60. Avg ARI:
+
+  | metric | control | dedup-self-pairs | Δ |
+  |---|---|---|---|
+  | full-20 | 0.7702 | 0.7678 | **−0.0025** |
+  | 17-set (excl. M7/M14/M15) | 0.8052 | 0.8066 | **+0.0014** |
+
+  Within noise (±0.01–0.02 single-seed floor), 8 up / 11 down / 1 tie; the full-20 spread is dominated by the partial-label / large-group outliers (M14/M15/M7). A grad-clip × dedup 2×2 (full LOMO, aug) confirms the two are **weakly-redundant minor stabilizers**, not safety nets: dedup's full-20 Δ flips from −0.0024 (clip on) to **+0.0044** (clip off), and dropping grad-clip costs −0.0062 with dedup off but +0.0007 with dedup on — each partially substitutes for the other, but no arm beats the deployed clip-on baseline (0.7702). The outlier swings are noise, not mechanism: dedup *hurts* M14/M15 under clip-on yet *helps* them (M14 +0.067) under clip-off. Kept as an opt-in knob. Results in `dedup_ab_full_{baseline,dedup}_aug.tsv`; reproduce with `EXTRA_ARGS="--dedup-self-pairs" USE_AUG=1 run_deployed_lomo.sh` (add `--grad-clip 0` for the no-clip arm).
+
+- **Transductive mean-centering** — subtract each shoot's own per-modality mean embedding before the cosine blend (`center_eval.py`, 17-set). Helps zero-shot (+0.029 full-20) but not the deployed head+ward config: 17-set Δ −0.014 (center peg+color) to −0.005 (center all three); full-20 +0.001 (outlier-driven). Shrinkage PCA-whitening strictly worse (−0.06 @ b=0.60). `center_eval.tsv`.
+
+- **Foreground/background color split** — person-mask each image (torchvision DeepLabV3), compute the 693-d color histogram over fg and bg pixels separately, blend as extra modalities (`extract_fgbg_color.py`, `fgbg_color_eval.py`). Best variant +0.0007 (replace color with fg+bg) / +0.0009 (add bg as 3rd channel) on 17-set @ b=0.60 — within seed noise. Sweep zeroed the fg-color weight; bg-only color ≈ full color. `fgbg_color_eval.tsv`; sidecar caches at `.reorder-cache/fgbg_color_cache.npz`.
+
+- **Pairwise boundary-pair verifier** — learned MLP judges "same set?" for each image's k=40 nearest-neighbor edges, soft-blended into the distance (α=0.3) before Ward; LOMO 17-set (`pairwise_verifier_gate.py`). Pooled peg/color/proj features: 87.2% edge accuracy (+0.9% over the bi-encoder distance threshold on the same edges), end-to-end ARI 0.8046→0.735 (−0.069). Stronger training (richer `[cos,|a−b|,a*b]` features, 1024-wide net, 3-seed ensemble, val early-stopping; `improved_verifier.py`): 88.0% accuracy (+2.0% margin), ARI −0.076. `pairwise_verifier_gate.tsv`.
+
+  Bounds for this approach (`oracle_ceiling.py`, `verifier_accuracy_sweep.py`): a *perfect* verifier on each image's k nearest edges ceilings 17-set ARI at +0.05 (k=5) → +0.14 (k=40) → +0.16 (k=80). Synthetic verifiers (k=40, α=0.3): ~95% edge accuracy needed to break even and ~97% for +0.05 when errors fall on the bi-encoder's hardest edges; 87% already gives +0.07 if errors fall on random edges.
+
 ## Clustering defaults: linkage & re-rank
 
 A full 20-dataset LOMO (oracle-N, `clusteringRefinement/rerank_eval.py`, reusing the

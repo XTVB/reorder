@@ -3,7 +3,7 @@ import { basename, join, resolve } from "node:path";
 import type { Server } from "bun";
 import { listImages } from "./src/fs/index.ts";
 import { createServer } from "./src/server/index.ts";
-import { clearCache, preGenerateThumbnails } from "./src/thumbnails.ts";
+import { clearRegenerableCaches, preGenerateThumbnails } from "./src/thumbnails.ts";
 
 const DEFAULT_PORT = 4928;
 
@@ -105,12 +105,13 @@ async function main() {
   console.log(`  alias reorder="bun run ${scriptPath}"`);
   console.log(`  # Usage: reorder /path/to/image/directory\n`);
 
-  // Graceful shutdown — clear cache for small directories (fast to regenerate)
+  // Graceful shutdown — clear regenerable caches for small directories (fast
+  // to regenerate). Only embedding/patch extraction outputs are preserved.
   const shutdown = () => {
     console.log("\nShutting down...");
     server.stop(true);
     if (imageCount > 0 && imageCount <= 250) {
-      clearCache(absDir).finally(() => process.exit(0));
+      clearRegenerableCaches(absDir).finally(() => process.exit(0));
     } else {
       process.exit(0);
     }

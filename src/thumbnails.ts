@@ -2,8 +2,17 @@ import type { Stats } from "node:fs";
 import { mkdir, readdir, rm, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import sharp from "sharp";
+import {
+  cacheDir,
+  CONTENT_HASHES_FILE,
+  DINOV3_PATCHES_FILE,
+  DINOV3_PATCHES_FULL_FILE,
+  DINOV3_PATCHES_HASHES_FILE,
+  HASH_CACHE_FILE,
+  HASH_ORDER_FILE,
+  LEGACY_HASH_CACHE_FILE,
+} from "./fs/paths.ts";
 
-const CACHE_DIR = ".reorder-cache";
 const THUMB_WIDTH = 400;
 const THUMB_QUALITY = 80;
 
@@ -15,7 +24,7 @@ function cacheKey(ino: number, size: number): string {
 const _ensuredDirs = new Set<string>();
 
 async function ensureCacheDir(targetDir: string): Promise<string> {
-  const dir = join(targetDir, CACHE_DIR);
+  const dir = cacheDir(targetDir);
   if (_ensuredDirs.has(dir)) return dir;
   await mkdir(dir, { recursive: true });
   const noBackup = Bun.file(join(dir, ".nobackup"));
@@ -58,9 +67,51 @@ export async function getThumbnail(targetDir: string, filename: string): Promise
   }
 }
 
-export async function clearCache(targetDir: string): Promise<void> {
-  await rm(join(targetDir, CACHE_DIR), { recursive: true, force: true });
-  _ensuredDirs.delete(join(targetDir, CACHE_DIR));
+/**
+ * Embedding/patch extraction outputs — the only caches worth preserving (the
+ * ~5min extraction). `.nobackup` is kept so the dir stays backup-excluded.
+ * Everything else (thumbnails, contact sheets, linkage tree, dist matrices) is
+ * cheap to regenerate.
+ */
+const KEEP_FILES = new Set([
+  HASH_CACHE_FILE,
+  LEGACY_HASH_CACHE_FILE,
+  HASH_ORDER_FILE,
+  CONTENT_HASHES_FILE,
+  DINOV3_PATCHES_FILE,
+  DINOV3_PATCHES_FULL_FILE,
+  DINOV3_PATCHES_HASHES_FILE,
+  ".nobackup",
+]);
+
+/** Embedding caches whose presence means the cache dir is worth preserving. */
+const EMBEDDING_FILES = [HASH_CACHE_FILE];
+
+/**
+ * Clear regenerable caches (thumbnails, contact sheets, linkage tree, etc.)
+ * while preserving the expensive embedding/patch extraction outputs. If no
+ * embeddings were ever extracted, the whole cache dir is removed instead.
+ */
+export async function clearRegenerableCaches(targetDir: string): Promise<void> {
+  const dir = cacheDir(targetDir);
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return; // no cache dir
+  }
+
+  if (!entries.some((name) => EMBEDDING_FILES.includes(name))) {
+    await rm(dir, { recursive: true, force: true });
+    _ensuredDirs.delete(dir);
+    return;
+  }
+
+  await Promise.all(
+    entries
+      .filter((name) => !KEEP_FILES.has(name))
+      .map((name) => rm(join(dir, name), { recursive: true, force: true })),
+  );
 }
 
 export async function preGenerateThumbnails(

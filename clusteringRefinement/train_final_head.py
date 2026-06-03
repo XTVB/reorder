@@ -66,29 +66,28 @@ DEFAULT_HYPERPARAMS = {
     "arcface_weight": 0.0,
 }
 
+# Dataset registry: single source of truth shared with common.sh and the
+# pixel-aug scripts. Add a dataset by appending one line to datasets.txt.
+DATASET_REGISTRY = SCRIPT_DIR / "datasets.txt"
+DATASET_BASE = Path("/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks")
+
+
+def load_dataset_registry(registry: Path = DATASET_REGISTRY,
+                          base: Path = DATASET_BASE) -> list[tuple[str, str]]:
+    """Parse datasets.txt → [(M-id, full_path)]. Each line is "<n> <name> [flags]".
+    Comments (#) and blank lines ignored. Mirrors the bash parser in common.sh."""
+    out = []
+    for line in registry.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        n, name = line.split()[:2]
+        out.append((f"M{n}", str(base / f"ClusteringBenchmark{n}-{name}")))
+    return out
+
+
 # Fallback dataset list (used when no --dataset, --datasets-from, or default config).
-DEFAULT_TRAINING_DATASETS = [
-    ("M1", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark1-austin"),
-    ("M2", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark2-sarah"),
-    ("M3", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark3-eva"),
-    ("M4", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark4-mia"),
-    ("M5", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark5-lily"),
-    ("M6", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark6-sabrina"),
-    ("M7", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark7-autumn"),
-    ("M8", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark8-evie"),
-    ("M9", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark9-darshelle"),
-    ("M10", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark10-alina"),
-    ("M11", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark11-amanda"),
-    ("M12", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark12-anna"),
-    ("M13", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark13-hunny"),
-    ("M14", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark14-vixen-partial"),
-    ("M15", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark15-verity-partial"),
-    ("M16", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark16-zoe"),
-    ("M17", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark17-dusha"),
-    ("M18", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark18-railey"),
-    ("M19", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark19-andreea"),
-    ("M20", "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks/ClusteringBenchmark20-salome"),
-]
+DEFAULT_TRAINING_DATASETS = load_dataset_registry()
 
 
 def parse_dataset_arg(s: str) -> tuple[str, str]:

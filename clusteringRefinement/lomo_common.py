@@ -1,26 +1,55 @@
 """Shared dataset registry + fold loader for the LOMO clustering-eval harnesses
-(compare_algorithms.py, rerank_eval.py).
+(compare_algorithms.py, rerank_eval.py, and the verifier/center/oracle evals).
 
-Single source of truth for the M-id → ClusterBenchmark mapping and the held-out
-fold loader, which were copy-pasted between the two scripts. Constants match the
-deployed cluster blend (color leaned to 0.7).
+Reads the M-id → ClusterBenchmark mapping from datasets.txt — the single source
+of truth shared with common.sh and train_final_head.py (add a dataset by
+appending one line there). Also holds the held-out fold loader and the eval
+subset constants. Blend constants match the deployed cluster blend (color 0.7).
 """
 from __future__ import annotations
 import json
+import os
+import sys
+from pathlib import Path
 import numpy as np
 
 BASE = "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks"
 LOMO = "/tmp/lomo_postaug"
+REGISTRY = Path(__file__).resolve().parent / "datasets.txt"
 
 # Zero-shot baseline composition: peg ⊕ COLOR_W·color, then unit-norm → cosine.
 PEG_W, COLOR_W = 1.0, 0.7
 
-NAMES = {f"M{i}": n for i, n in enumerate(
-    ["1-austin", "2-sarah", "3-eva", "4-mia", "5-lily", "6-sabrina", "7-autumn",
-     "8-evie", "9-darshelle", "10-alina", "11-amanda", "12-anna", "13-hunny",
-     "14-vixen-partial", "15-verity-partial", "16-zoe", "17-dusha", "18-railey",
-     "19-andreea", "20-salome"], 1)}
-ALL = [f"M{i}" for i in range(1, 21)]
+def _load_registry(path: Path = REGISTRY) -> dict[str, str]:
+    """Parse datasets.txt → {M-id: "<n>-<name>" suffix}, in file order.
+    Each line is "<n> <name> [flags]". Mirrors the bash parser in common.sh and
+    load_dataset_registry in train_final_head.py."""
+    names: dict[str, str] = {}
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        n, name = line.split()[:2]
+        names[f"M{n}"] = f"{n}-{name}"
+    return names
+
+
+# M-id → "<N>-<name>" suffix for every registered dataset.
+NAMES = _load_registry()
+
+# The sweep runs on whichever registered datasets have a held-out fold built
+# under LOMO/ — derived, so a new dataset joins automatically once its fold
+# exists (and is skipped, not crashed on, until then).
+ALL = [m for m in NAMES if os.path.isdir(f"{LOMO}/{m}")]
+_no_fold = [m for m in NAMES if m not in ALL]
+if _no_fold:
+    print(f"[lomo_common] no LOMO fold under {LOMO}, skipping: {' '.join(_no_fold)}",
+          file=sys.stderr)
+
+# Held out of the reported mean: M7 is ~4x denser per group than any other shoot;
+# M14/M15 are partial-label sets whose ARI isn't comparable. EVAL_SET is the rest.
+OUTLIERS = {"M7", "M14", "M15"}
+EVAL_SET = [m for m in ALL if m not in OUTLIERS]
 
 
 def l2(a):

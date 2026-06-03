@@ -12,7 +12,10 @@
 
 PIDFILE=/tmp/pixel_aug.pid
 LOGFILE=/tmp/pixel_aug.log
-RUNNER=/Users/abdudh/dev/utilities/reorder/clusteringRefinement/run_pixel_aug_extraction.sh
+HERE=/Users/abdudh/dev/utilities/reorder/clusteringRefinement
+RUNNER=$HERE/run_pixel_aug_extraction.sh
+# For BASE + the registry arrays (P / PIXEL_AUG) — single source of truth.
+source "$HERE/common.sh"
 
 is_running() {
   [[ -f $PIDFILE ]] && kill -0 "$(cat $PIDFILE)" 2>/dev/null
@@ -64,21 +67,14 @@ cmd_status() {
   fi
   echo ""
   echo "Per-dataset progress:"
-  ~/.venvs/imgcluster-env/bin/python3 - <<'PY'
-import json, os
-dirs = [
-    "ClusteringBenchmark1-austin", "ClusteringBenchmark2-sarah", "ClusteringBenchmark3-eva",
-    "ClusteringBenchmark4-mia", "ClusteringBenchmark5-lily", "ClusteringBenchmark6-sabrina",
-    "ClusteringBenchmark8-evie", "ClusteringBenchmark9-darshelle", "ClusteringBenchmark10-alina",
-    "ClusteringBenchmark11-amanda", "ClusteringBenchmark12-anna",
-    "ClusteringBenchmark13-hunny",
-    "ClusteringBenchmark16-zoe",
-    "ClusteringBenchmark17-dusha",
-    "ClusteringBenchmark18-railey",
-    "ClusteringBenchmark19-andreea",
-    "ClusteringBenchmark20-salome",
-]
-base = "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks"
+  # Dir list comes from the shared registry (pixel-aug subset), passed as argv.
+  local dirs=()
+  local m
+  for m in "${PIXEL_AUG[@]}"; do dirs+=("ClusteringBenchmark${P[$m]}"); done
+  ~/.venvs/imgcluster-env/bin/python3 - "$BASE" "${dirs[@]}" <<'PY'
+import json, os, sys
+base = sys.argv[1]
+dirs = sys.argv[2:]
 total_done = total = 0
 for d in dirs:
     meta_path = f"{base}/{d}/.reorder-cache/views_meta.json"
@@ -87,19 +83,19 @@ for d in dirs:
         print(f"  {d:<24} : (no cache)")
         continue
     n_imgs = len(json.load(open(ch_path)))
+    done = n_views = 0
     if os.path.exists(meta_path):
         m = json.load(open(meta_path))
         done = m.get("completed_through", 0)
         n_views = m.get("n_views", 0)
-        pct = 100.0 * done / max(n_imgs, 1)
-        bar_len = 30
-        filled = int(bar_len * done / max(n_imgs, 1))
-        bar = "█" * filled + "░" * (bar_len - filled)
-        print(f"  {d:<30} : [{bar}] {done:>5}/{n_imgs:<5} ({pct:5.1f}%) K={n_views}")
-    else:
-        bar = "░" * 30
-        print(f"  {d:<30} : [{bar}] {0:>5}/{n_imgs:<5} (  0.0%) (not started)")
-    total_done += min(done if os.path.exists(meta_path) else 0, n_imgs)
+    done = min(done, n_imgs)
+    bar_len = 30
+    filled = int(bar_len * done / max(n_imgs, 1))
+    bar = "█" * filled + "░" * (bar_len - filled)
+    pct = 100.0 * done / max(n_imgs, 1)
+    suffix = f"K={n_views}" if n_views else "(not started)"
+    print(f"  {d:<30} : [{bar}] {done:>5}/{n_imgs:<5} ({pct:5.1f}%) {suffix}")
+    total_done += done
     total += n_imgs
 print()
 print(f"OVERALL: {total_done}/{total} images ({100.0*total_done/max(total,1):.1f}%)")
@@ -132,8 +128,8 @@ Files:
   log     : $LOGFILE
   outputs : <dataset>/.reorder-cache/pecore_g_views.npy + color_views.npy
 
-Configured datasets (M7 skipped — already has very high images/group):
-  M1, M2, M3, M4, M5, M6, M8, M9, M10, M11, M12
+Configured datasets (from datasets.txt, no-pixel-aug entries excluded):
+  ${PIXEL_AUG[*]}
 EOF
 }
 

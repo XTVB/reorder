@@ -1,0 +1,40 @@
+# Dataset registry — single source of truth for the clusteringRefinement sweep.
+#
+# One line per dataset:  <n> <name> [flags]
+#   n      benchmark number; the dataset dir is "ClusteringBenchmark<n>-<name>",
+#          and the M-id used throughout the harness is "M<n>".
+#   name   short label (no spaces).
+#   flags  optional, space-separated. Recognised:
+#            no-pixel-aug  exclude from pixel-aug pre-extraction
+#                          (M7: ~149 imgs/group already, pixel-aug redundant.
+#                           M14/M15: partial-label sets.)
+#
+# Whitespace between columns is free (any spaces/tabs) — no alignment needed.
+# Add a dataset by appending one line. Blank lines and #-comments are ignored.
+# Read by: common.sh, lomo_common.py, train_final_head.py (pixel_aug via common.sh).
+#
+1 austin
+2 sarah
+3 eva
+4 mia
+5 lily
+6 sabrina
+7 autumn no-pixel-aug
+8 evie
+9 darshelle
+10 alina
+11 amanda
+12 anna
+13 hunny
+14 vixen-partial no-pixel-aug
+15 verity-partial no-pixel-aug
+16 zoe
+17 dusha
+18 railey
+19 andreea
+20 salome
+21 alix
+22 alexis
+23 gianna
+24 valentina
+25 rae

@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Controller for overnight intermediate PE-G layer extraction. Wraps
+# run_pe_layer_extraction.sh with start/stop/status/log so it can be paused while
+# the computer is in use and resumed later (checkpointed every 200 images/dataset,
+# so a pause/resume loses at most that many).
+#
+#   pe_layers start    # start (or resume from last checkpoint)
+#   pe_layers stop     # pause cleanly (kills the python process tree)
+#   pe_layers status   # running state + per-dataset progress bars
+#   pe_layers log      # tail the running log
+#   pe_layers help
+
+PIDFILE=/tmp/pe_layers.pid
+LOGFILE=/tmp/pe_layers.log
+HERE=/Users/abdudh/dev/utilities/reorder/clusteringRefinement
+RUNNER=$HERE/run_pe_layer_extraction.sh
+source "$HERE/common.sh"   # BASE + registry arrays (ALL / P)
+
+is_running() { [[ -f $PIDFILE ]] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; }
+
+cmd_start() {
+  if is_running; then
+    echo "Already running (pid $(cat $PIDFILE)). Use 'stop' first or 'status' to monitor."
+    return 1
+  fi
+  nohup "$RUNNER" >>"$LOGFILE" 2>&1 &
+  echo $! > "$PIDFILE"
+  echo "Started pid $(cat $PIDFILE)."
+  echo "  Log: $LOGFILE   (pe_layers log)"
+  echo "  Pause: pe_layers stop      Resume: pe_layers start"
+}
+
+cmd_stop() {
+  if ! is_running; then echo "Not running."; rm -f "$PIDFILE"; return 0; fi
+  local pid; pid=$(cat "$PIDFILE")
+  pkill -P "$pid" 2>/dev/null
+  pkill -f extract_pe_layers.py 2>/dev/null
+  kill "$pid" 2>/dev/null
+  sleep 1
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid" 2>/dev/null; pkill -9 -f extract_pe_layers.py 2>/dev/null
+  fi
+  rm -f "$PIDFILE"
+  echo "Stopped. Run 'pe_layers start' to resume from last checkpoint."
+}
+
+cmd_status() {
+  if is_running; then echo "STATUS: running (pid $(cat $PIDFILE))"; else echo "STATUS: not running"; fi
+  echo ""
+  echo "Per-dataset progress (datasets with a pe_layers cache):"
+  local dirs=() m
+  for m in "${ALL[@]}"; do dirs+=("ClusteringBenchmark${P[$m]}"); done
+  ~/.venvs/imgcluster-env/bin/python3 - "$BASE" "${dirs[@]}" <<'PY'
+import json, os, sys
+base = sys.argv[1]; dirs = sys.argv[2:]
+total_done = total = 0
+for d in dirs:
+    meta = f"{base}/{d}/.reorder-cache/pe_layers_meta.json"
+    ch = f"{base}/{d}/.reorder-cache/content_hashes.json"
+    if not os.path.exists(ch):
+        continue
+    n = len(json.load(open(ch)))
+    done = 0; layers = ""
+    if os.path.exists(meta):
+        m = json.load(open(meta))
+        done = min(m.get("completed_through", 0), n)
+        layers = "L" + ",".join(str(x) for x in m.get("layers", []))
+    else:
+        # not started — skip the noise unless you want every dataset listed
+        continue
+    bar = 30; fill = int(bar * done / max(n, 1))
+    print(f"  {d:<30} : [{'#'*fill}{'.'*(bar-fill)}] {done:>5}/{n:<5} ({100.0*done/max(n,1):5.1f}%) {layers}")
+    total_done += done; total += n
+if total:
+    print(f"\nOVERALL: {total_done}/{total} images ({100.0*total_done/max(total,1):.1f}%)")
+else:
+    print("  (nothing started yet — run 'pe_layers start')")
+PY
+}
+
+cmd_log() {
+  [[ -f $LOGFILE ]] || { echo "No log file yet."; return 1; }
+  echo "Tailing $LOGFILE (Ctrl-C to stop watching; extraction keeps running):"
+  tail -f "$LOGFILE"
+}
+
+cmd_help() {
+  cat <<EOF
+pe_layers — controller for overnight intermediate PE-G layer extraction.
+
+Usage:
+  pe_layers start    Start/resume extraction (resumes from last checkpoint).
+  pe_layers stop     Pause cleanly. Safe to resume later.
+  pe_layers status   Running state + per-dataset progress bars.
+  pe_layers log      Tail the live log.
+  pe_layers help     This message.
+
+Files:
+  pidfile : $PIDFILE
+  log     : $LOGFILE
+  outputs : <dataset>/.reorder-cache/pe_layers_L<NN>_{mean,gem3,attnpool}.npy + pe_layers_meta.json
+
+Config (edit run_pe_layer_extraction.sh): LAYERS=$([[ -n "${LAYERS:-}" ]] && echo "$LAYERS" || echo "42,44,46,47"),
+default 18-dataset set (M1-M20 minus partials). Override: MS_OVERRIDE="M1 M2 ...".
+EOF
+}
+
+case "${1:-help}" in
+  start) cmd_start ;;
+  stop|pause) cmd_stop ;;
+  status) cmd_status ;;
+  log|tail) cmd_log ;;
+  help|--help|-h) cmd_help ;;
+  *) echo "unknown command: $1"; cmd_help; exit 1 ;;
+esac

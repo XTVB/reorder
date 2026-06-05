@@ -39,6 +39,7 @@ interface FolderState {
   dissolveFolder: (folderName: string) => void;
   moveImages: (compoundPaths: string[], toFolder: string) => void;
   reorderWithinFolder: (folderName: string, newOrder: string[]) => void;
+  reorderRootImages: (newOrder: string[]) => void;
 }
 
 function allImages(folders: FolderGroup[], rootImages: string[]): ImageInfo[] {
@@ -216,5 +217,10 @@ export const useFolderStore = create<FolderState>((set, get) => ({
     const { folders, rootImages } = get();
     const updated = folders.map((f) => (f.name === folderName ? { ...f, images: newOrder } : f));
     setFolders(set, get, updated, rootImages);
+  },
+
+  reorderRootImages: (newOrder) => {
+    const { folders } = get();
+    setFolders(set, get, folders, newOrder);
   },
 }));

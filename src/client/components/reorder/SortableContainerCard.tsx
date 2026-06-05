@@ -95,6 +95,22 @@ export const SortableContainerCard = memo(function SortableContainerCard(props: 
     let left = cardCenterX - popWidth / 2;
     left = Math.max(16, Math.min(left, window.innerWidth - popWidth - 16));
     pop.style.left = `${left - card.left}px`;
+
+    // Clamp height to the viewport so the final members stay reachable.
+    // Prefer placing below the card; flip above when there's more room there.
+    const gap = 8;
+    const margin = 16;
+    const spaceBelow = window.innerHeight - card.bottom - gap - margin;
+    const spaceAbove = card.top - gap - margin;
+    if (spaceAbove > spaceBelow) {
+      pop.style.top = "auto";
+      pop.style.bottom = "calc(100% + 8px)";
+      pop.style.setProperty("--popover-max-height", `${Math.max(spaceAbove, 0)}px`);
+    } else {
+      pop.style.top = "calc(100% + 8px)";
+      pop.style.bottom = "auto";
+      pop.style.setProperty("--popover-max-height", `${Math.max(spaceBelow, 0)}px`);
+    }
   }, [isExpanded]);
 
   const frozenTransform = useRef<string | undefined>(undefined);

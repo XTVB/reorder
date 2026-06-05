@@ -216,3 +216,32 @@ class PECoreBigG(nn.Module):
         x = self.attn_pool(x)                # (B, D)
         x = self.head(x)                     # (B, output_dim)
         return x
+
+    def _pool_tokens(self, x: mx.array, pooling: str) -> mx.array:
+        """Pool a block's token sequence (B, N, D) -> (B, D)."""
+        if pooling == "mean":
+            return x.mean(axis=1)
+        if pooling == "gem3":
+            xf = x.astype(mx.float32)
+            return (mx.maximum(xf, 1e-6) ** 3).mean(axis=1) ** (1.0 / 3.0)
+        if pooling == "attnpool":
+            # the model's own pooling head (final LayerNorm + attn-pool) applied to
+            # the intermediate tokens — matches the deployed final-layer pooling.
+            return self.attn_pool(self.norm(x))
+        raise ValueError(f"unknown pooling {pooling!r}")
+
+    def forward_capture(self, x: mx.array, layers, poolings=("mean", "gem3", "attnpool")) -> dict:
+        """Run the vision forward and return {(block_idx, pooling): (B, D)} for the
+        requested 0-based transformer blocks, captured in the single pass (no
+        recompute). Used by the intermediate-layer extraction experiment."""
+        x = self.patch_embed(x)
+        x = x + self.pos_embed
+        x = self.norm_pre(x)
+        want = set(layers)
+        out = {}
+        for idx, blk in enumerate(self.blocks):
+            x = blk(x, self._rope_emb)
+            if idx in want:
+                for p in poolings:
+                    out[(idx, p)] = self._pool_tokens(x, p)
+        return out

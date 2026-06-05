@@ -73,11 +73,10 @@ class Dataset:
     singleton_idxs: list[int] = field(default_factory=list)
     # ArcFace local class indices: original group_id → [0, n_train_groups)
     gid_to_cls: dict[int, int] = field(default_factory=dict)
-    # Augmented views: (N, K, D) tensor. None if not loaded. K=0 if no augmented
-    # views exist for this dataset. views_complete_through tracks the prefix that
-    # has actual augmented data; indices >= it fall back to the original.
+    # Augmented views: (N, K, D) tensor. None if not loaded. views_valid_mask is a
+    # (N,) bool marking rows with real augmented data; the rest fall back to original.
     views_features: torch.Tensor | None = None
-    views_complete_through: int = 0
+    views_valid_mask: torch.Tensor | None = None
 
 
 def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False, use_augmented_views: bool = False) -> Dataset:
@@ -161,7 +160,7 @@ def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False, u
     # (N, K, D_peg+color) tensor; the train loop randomly picks view 0 (original)
     # or one of the K augmented views per sample.
     views_features = None
-    views_complete = 0
+    views_valid_mask = None
     if use_augmented_views:
         peg_v_path = os.path.join(cache, "pecore_g_views.npy")
         col_v_path = os.path.join(cache, "color_views.npy")
@@ -170,6 +169,9 @@ def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False, u
             with open(meta_path) as f:
                 vm = json.load(f)
             views_complete = int(vm.get("completed_through", 0))
+            # Rows with real data. Legacy caches lack view_indices (extracted all),
+            # so the valid set is the [0, completed_through) prefix.
+            view_indices = vm.get("view_indices")
             peg_v = np.load(peg_v_path)   # (N, K, 1280)
             col_v = np.load(col_v_path)   # (N, K, 693)
             if peg_v.shape[0] != n or col_v.shape[0] != n:
@@ -190,7 +192,17 @@ def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False, u
                 else:
                     view_full = view_pegcol
                 views_features = torch.from_numpy(view_full.astype(np.float32))
-                print(f"  [{name}] loaded {peg_v.shape[1]} augmented views (complete through {views_complete}/{n})", file=sys.stderr)
+                # Valid = a target row that's been processed (< completed).
+                mask = np.zeros(n, dtype=bool)
+                if view_indices is None:
+                    mask[:views_complete] = True
+                else:
+                    vi = np.asarray(view_indices, dtype=np.int64)
+                    vi = vi[(vi >= 0) & (vi < views_complete)]
+                    mask[vi] = True
+                views_valid_mask = torch.from_numpy(mask)
+                print(f"  [{name}] loaded {peg_v.shape[1]} augmented views "
+                      f"({int(mask.sum())}/{n} rows valid)", file=sys.stderr)
         else:
             print(f"  [{name}] augmented views not found in {cache}", file=sys.stderr)
 
@@ -201,7 +213,7 @@ def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False, u
         features=torch.from_numpy(features),
         group_id=group_id,
         views_features=views_features,
-        views_complete_through=views_complete,
+        views_valid_mask=views_valid_mask,
     )
 
 
@@ -968,6 +980,7 @@ def main():
         ds.features = ds.features.to(device)
         if ds.views_features is not None:
             ds.views_features = ds.views_features.to(device)
+            ds.views_valid_mask = ds.views_valid_mask.to(device)
 
     summary = {
         "args": {k: (v if not isinstance(v, list) else list(v)) for k, v in vars(args).items()},
@@ -1075,11 +1088,11 @@ def main():
             has_singletons = len(idxs) > n_group
             idx_tensor = all_idxs_t[offsets[batch_i]:offsets[batch_i+1]]
             if ds.views_features is not None:
-                # For each sample, pick view in [0, K] inclusive. 0 = original.
-                # Indices past views_complete_through fall back to original.
+                # Pick view in [0, K] inclusive (0 = original). Rows without valid
+                # augmented data fall back to the original feature.
                 k_views = ds.views_features.shape[1]
                 view_choices = torch.randint(0, k_views + 1, (len(idxs),), device=device)
-                use_orig = (view_choices == 0) | (idx_tensor >= ds.views_complete_through)
+                use_orig = (view_choices == 0) | (~ds.views_valid_mask[idx_tensor])
                 orig_feats = ds.features[idx_tensor]
                 aug_view_idx = (view_choices - 1).clamp(min=0)
                 aug_feats = ds.views_features[idx_tensor, aug_view_idx]

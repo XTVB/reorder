@@ -10,6 +10,7 @@ import {
   isFolderSortId,
   isGroupSortId,
 } from "../utils/helpers.ts";
+import { reverseSelection } from "../utils/reverseSelection.ts";
 
 interface KeyboardShortcutsDeps {
   isLightboxOpen: boolean;
@@ -58,6 +59,8 @@ export function useKeyboardShortcuts({
         if (groupsEnabled && selectedIds.size > 0 && groups.length > 0) {
           useModalStore.getState().openModal("groupPicker");
         }
+      } else if (e.key === "r" || e.key === "R") {
+        if (useSelectionStore.getState().contexts.reorder.size >= 2) reverseSelection();
       } else if (e.key === "d" || e.key === "D") {
         const selection = useSelectionStore.getState().contexts.reorder;
         if (selection.size === 0) return;

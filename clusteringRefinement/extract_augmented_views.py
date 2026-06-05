@@ -15,10 +15,14 @@ Each augmented view goes through:
   - PE-Core-bigG-14-448 → 1280-d L2-normalized feature
   - Color histogram (3×3 HSV + RGB moments, same as extract_features.py) → 693d
 
+Only images in a group of 2..MAX_GROUP_SIZE are extracted — that's all the
+trainer samples views for. Other rows stay zero-filled; `view_indices` in
+views_meta.json lists the real ones so training can fall back to the original.
+
 Outputs in {cache_dir}:
-  - pecore_g_views.npy   shape (N, K, 1280) float32
-  - color_views.npy      shape (N, K, 693)  float32
-  - views_meta.json      {n_views, filenames, completed_through, version}
+  - pecore_g_views.npy   shape (N, K, 1280) float32  (non-target rows are zero)
+  - color_views.npy      shape (N, K, 693)  float32  (non-target rows are zero)
+  - views_meta.json      {n_views, view_indices, completed_through, version}
 
 Resume: re-running picks up from `completed_through` in views_meta.json
 (images < that index are skipped). Checkpoint is written every CHECKPOINT_EVERY
@@ -52,6 +56,8 @@ PEG_HW = 448
 PEG_DIM = 1280
 COLOR_DIM = 693
 CHECKPOINT_EVERY = 200
+# Larger groups already have enough real variety; augmenting them adds little.
+MAX_GROUP_SIZE = 100
 VIEWS_VERSION = "aug-v1-crop0.65-jitter0.2-hflip0.5"
 
 # PE-Core preprocessing constants (verified in extract_features.py — bit-exact
@@ -131,18 +137,22 @@ def load_pecore_g_torch():
     return encode
 
 
-def load_meta(cache_dir: str, n: int, n_views: int) -> dict:
+def load_meta(cache_dir: str, n: int, n_views: int, view_indices: list[int]) -> dict:
     path = os.path.join(cache_dir, "views_meta.json")
     if os.path.exists(path):
         try:
             with open(path) as f:
                 meta = json.load(f)
-            if meta.get("version") == VIEWS_VERSION and meta.get("n_images") == n and meta.get("n_views") == n_views:
+            # view_indices is part of the cache identity — if the group set changed,
+            # the partial run is stale and must restart.
+            if (meta.get("version") == VIEWS_VERSION and meta.get("n_images") == n
+                    and meta.get("n_views") == n_views and meta.get("view_indices") == view_indices):
                 return meta
-            print(f"  views_meta.json mismatch (version/n_images/n_views), starting fresh", file=sys.stderr)
+            print(f"  views_meta.json mismatch (version/n_images/n_views/view_indices), starting fresh", file=sys.stderr)
         except Exception as e:
             print(f"  could not read views_meta.json: {e}, starting fresh", file=sys.stderr)
-    return {"version": VIEWS_VERSION, "n_images": n, "n_views": n_views, "completed_through": 0}
+    return {"version": VIEWS_VERSION, "n_images": n, "n_views": n_views,
+            "view_indices": view_indices, "completed_through": 0}
 
 
 def save_meta(cache_dir: str, meta: dict):
@@ -176,16 +186,40 @@ def main():
     with open(ch_path) as f:
         content_hashes: dict[str, str] = json.load(f)
     filenames = sorted(content_hashes.keys())
+    fn_to_idx = {fn: i for i, fn in enumerate(filenames)}
     n = len(filenames)
     k = args.n_views
-    print(f"  target: {n} images × {k} views = {n*k} augmented embeddings", file=sys.stderr)
+
+    # Only grouped images get views (see docstring). No groups file → extract all.
+    groups_path = os.path.join(args.target_dir, ".reorder-groups.json")
+    if os.path.exists(groups_path):
+        with open(groups_path) as f:
+            groups_raw = json.load(f)
+        groups = groups_raw if isinstance(groups_raw, list) else groups_raw.get("groups", [])
+        target_set: set[int] = set()
+        for g in groups:
+            imgs = g.get("images", [])
+            if len(imgs) < 2 or len(imgs) > MAX_GROUP_SIZE:
+                continue
+            for fn in imgs:
+                j = fn_to_idx.get(fn)
+                if j is not None:
+                    target_set.add(j)
+        print(f"  {len(target_set)}/{n} images in 2–{MAX_GROUP_SIZE}-image groups (pixel-aug targets); "
+              f"skipping {n - len(target_set)} singleton/ungrouped/large-group", file=sys.stderr)
+    else:
+        print(f"  WARN: {groups_path} not found — extracting views for ALL images", file=sys.stderr)
+        target_set = set(range(n))
+    target_indices = sorted(target_set)
+
+    print(f"  target: {len(target_indices)} images × {k} views = {len(target_indices)*k} augmented embeddings", file=sys.stderr)
 
     # Seeded RNG so augmentations are reproducible per run.
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
     # Resume
-    meta = load_meta(cache_dir, n, k)
+    meta = load_meta(cache_dir, n, k, target_indices)
     start_idx = meta["completed_through"]
 
     # Output arrays
@@ -231,9 +265,13 @@ def main():
         batch_filenames = filenames[i:i + bs]
         bs_actual = len(batch_filenames)
 
-        # Load originals once per image (PIL is cheap relative to PE-G).
+        # Load originals once per image (PIL is cheap relative to PE-G). Non-target
+        # images get None, which skips all per-view compute and leaves their rows zero.
         originals: list[Image.Image] = []
-        for fn in batch_filenames:
+        for bi, fn in enumerate(batch_filenames):
+            if (i + bi) not in target_set:
+                originals.append(None)
+                continue
             try:
                 originals.append(Image.open(os.path.join(args.target_dir, fn)).convert("RGB"))
             except Exception as e:

@@ -6,8 +6,6 @@
 #   name   short label (no spaces).
 #   flags  optional, space-separated. Recognised:
 #            no-pixel-aug  exclude from pixel-aug pre-extraction
-#                          (M7: ~149 imgs/group already, pixel-aug redundant.
-#                           M14/M15: partial-label sets.)
 #
 # Whitespace between columns is free (any spaces/tabs) — no alignment needed.
 # Add a dataset by appending one line. Blank lines and #-comments are ignored.
@@ -19,7 +17,7 @@
 4 mia
 5 lily
 6 sabrina
-7 autumn no-pixel-aug
+7 autumn
 8 evie
 9 darshelle
 10 alina
@@ -38,3 +36,4 @@
 23 gianna
 24 valentina
 25 rae
+26 zdank

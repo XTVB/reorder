@@ -5,10 +5,8 @@
 # in the dataset's .reorder-cache/. Each view gets RandomResizedCrop + HorizontalFlip
 # + ColorJitter applied at the pixel level before PE-G.
 #
-# Runtime estimate (PE-G at ~2 img/s on MPS, K=3 views per image, M7 skipped):
-#   total images across 11 datasets ≈ 41,900
-#   total view-extractions = 41,900 × 3 = ~125,700
-#   wall time ≈ 125,700 / 2 = ~17.5 hours
+# Only images in real (≥2-member) groups are extracted — singletons/ungrouped
+# images are never sampled as views by the trainer, so PE-G is skipped for them.
 #
 # Resumable: extract_augmented_views.py checkpoints every 200 images and skips
 # already-done indices on re-run. Safe to Ctrl-C and restart.
@@ -25,8 +23,7 @@ HERE=/Users/abdudh/dev/utilities/reorder/clusteringRefinement
 source "$HERE/common.sh"
 S=$HERE/extract_augmented_views.py
 
-# Pixel-aug extraction set = datasets.txt minus the no-pixel-aug ones (M7 is
-# already ~149 imgs/group so pixel-aug is redundant; M14/M15 are partial-label).
+# Pixel-aug extraction set = datasets.txt minus the no-pixel-aug ones
 MS=("${PIXEL_AUG[@]}")
 
 echo "Pixel-aug pre-extraction starting"

@@ -152,11 +152,16 @@
   background: var(--surface);
   border: 1px solid var(--accent);
   border-radius: var(--radius);
-  padding: 12px;
+  /* No top padding: the sticky header provides it and covers the top edge */
+  padding: 0 12px 12px;
   min-width: 500px;
   width: calc(100vw - 80px);
   max-width: 900px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  /* JS sets --popover-max-height from the available viewport space; the
+     popover itself scrolls so the final members stay reachable. */
+  max-height: var(--popover-max-height, calc(100vh - 120px));
+  overflow-y: auto;
 }
 
 .group-popover-header {
@@ -165,6 +170,15 @@
   gap: 10px;
   margin-bottom: 12px;
   flex-wrap: wrap;
+  /* Stay visible (and keep actions reachable) while the popover scrolls.
+     Top padding lives here (not on the popover) so the header covers the
+     top edge and no thumbnails peek above it when scrolled. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  padding-top: 12px;
+  padding-bottom: 8px;
 }
 
 .group-popover-name {

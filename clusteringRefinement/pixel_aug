@@ -72,9 +72,26 @@ cmd_status() {
   local m
   for m in "${PIXEL_AUG[@]}"; do dirs+=("ClusteringBenchmark${P[$m]}"); done
   ~/.venvs/imgcluster-env/bin/python3 - "$BASE" "${dirs[@]}" <<'PY'
-import json, os, sys
+import bisect, json, os, sys
 base = sys.argv[1]
 dirs = sys.argv[2:]
+MAX_GROUP_SIZE = 100  # mirrors extract_augmented_views.py
+
+# Target filename indices = images in a 2..MAX_GROUP_SIZE group (the pixel-aug set).
+def compute_targets(d, ch):
+    gp = f"{base}/{d}/.reorder-groups.json"
+    if not os.path.exists(gp):
+        return None
+    raw = json.load(open(gp))
+    groups = raw if isinstance(raw, list) else raw.get("groups", [])
+    fn_to_idx = {fn: i for i, fn in enumerate(sorted(ch))}
+    tgt = set()
+    for g in groups:
+        imgs = g.get("images", [])
+        if 2 <= len(imgs) <= MAX_GROUP_SIZE:
+            tgt.update(fn_to_idx[fn] for fn in imgs if fn in fn_to_idx)
+    return sorted(tgt)
+
 total_done = total = 0
 for d in dirs:
     meta_path = f"{base}/{d}/.reorder-cache/views_meta.json"
@@ -82,23 +99,37 @@ for d in dirs:
     if not os.path.exists(ch_path):
         print(f"  {d:<24} : (no cache)")
         continue
-    n_imgs = len(json.load(open(ch_path)))
-    done = n_views = 0
+    ch = json.load(open(ch_path))
+    n_imgs = len(ch)
+    completed = n_views = 0
+    view_indices = None
     if os.path.exists(meta_path):
         m = json.load(open(meta_path))
-        done = m.get("completed_through", 0)
+        completed = m.get("completed_through", 0)
         n_views = m.get("n_views", 0)
-    done = min(done, n_imgs)
+        view_indices = m.get("view_indices")
+    # Progress is measured against the target subset, not all images.
+    # completed_through is a filename-index prefix, so targets-done = how many
+    # target indices fall below it. Prefer the cache's own view_indices; for
+    # pre-filtering caches that lack it, derive targets from the current groups.
+    if view_indices is None:
+        view_indices = compute_targets(d, ch)
+    if view_indices is None:
+        denom = n_imgs
+        done = min(completed, n_imgs)
+    else:
+        denom = len(view_indices)
+        done = bisect.bisect_left(view_indices, completed)
     bar_len = 30
-    filled = int(bar_len * done / max(n_imgs, 1))
+    filled = int(bar_len * done / max(denom, 1))
     bar = "█" * filled + "░" * (bar_len - filled)
-    pct = 100.0 * done / max(n_imgs, 1)
+    pct = 100.0 * done / max(denom, 1)
     suffix = f"K={n_views}" if n_views else "(not started)"
-    print(f"  {d:<30} : [{bar}] {done:>5}/{n_imgs:<5} ({pct:5.1f}%) {suffix}")
+    print(f"  {d:<30} : [{bar}] {done:>5}/{denom:<5} ({pct:5.1f}%) {suffix}")
     total_done += done
-    total += n_imgs
+    total += denom
 print()
-print(f"OVERALL: {total_done}/{total} images ({100.0*total_done/max(total,1):.1f}%)")
+print(f"OVERALL: {total_done}/{total} targets ({100.0*total_done/max(total,1):.1f}%)")
 PY
 }
 

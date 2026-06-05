@@ -66,6 +66,25 @@ export function flattenOrder(
   return out;
 }
 
+/**
+ * Reverse the items at the selected positions in place: the selected slots are
+ * rewritten in reverse order while every unselected item stays exactly where it
+ * is. e.g. reversing {B,E,I} in [A,B,C,D,E,F,G,H,I] → [A,I,C,D,E,F,G,H,B].
+ */
+export function reverseSelectedInPlace(items: string[], selected: Set<string>): string[] {
+  const positions: number[] = [];
+  for (let i = 0; i < items.length; i++) {
+    if (selected.has(items[i]!)) positions.push(i);
+  }
+  const out = [...items];
+  for (let a = 0, b = positions.length - 1; a < b; a++, b--) {
+    const pa = positions[a]!;
+    const pb = positions[b]!;
+    [out[pa], out[pb]] = [out[pb]!, out[pa]!];
+  }
+  return out;
+}
+
 export function consolidateBlock(images: ImageInfo[], filenames: Set<string>): ImageInfo[] {
   const selected = images.filter((i) => filenames.has(i.filename));
   const out: ImageInfo[] = [];

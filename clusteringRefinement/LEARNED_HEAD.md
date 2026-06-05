@@ -112,6 +112,39 @@ Quick guide for manual slider tuning per shoot:
 
 autumn and the two partial-label sets (vixen, verity) were excluded. Sweep: `clusteringRefinement/run_pegcolor_sweep.sh`; full matrix in `/tmp/pegcolor_sweep/per_dataset.tsv`.
 
+### Big-set training ablation & seed-noise floor
+
+Big-set ablation: remove dataset(s) from the full pool, true LOMO over the 22 non-partial targets, deployed config @ blend 0.60 (`run_bigset_ablation.sh`; 10 arms / 203 folds, single seed 42). Avg Δ-ARI = ablation − full-pool baseline (negative = removing it lowered ARI):
+
+| arm (removed, imgs) | avg Δ | | arm | avg Δ |
+|---|---|---|---|---|
+| −M3 eva (8023) | −0.0010 | | −M3,M8 | −0.0029 |
+| −M8 evie (7345) | −0.0004 | | −M10,M9 | −0.0041 |
+| −M2 sarah (5548) | +0.0030 | | −M2,M6 | −0.0046 |
+| −M10 alina (5349) | −0.0006 | | −M3,M8,M2,M10,M9 | −0.0126 |
+| −M9 darshelle (4955) | −0.0036 | | | |
+| −M6 sabrina (4580) | −0.0033 | | | |
+
+Seed-noise floor — same full-pool folds retrained at 5 seeds (42–46), `run_seed_noise.sh`:
+
+| target | mean ARI | seed σ | seed range |
+|---|---|---|---|
+| M4 mia | 0.632 | 0.0101 | 0.028 |
+| M19 andreea | 0.736 | 0.0120 | 0.033 |
+| M22 alexis | 0.786 | 0.0073 | 0.020 |
+| M10 alina | 0.874 | 0.0074 | 0.023 |
+| M11 amanda | 0.902 | 0.0062 | 0.017 |
+| M17 dusha | 0.846 | 0.0188 | 0.053 |
+
+Single-fold seed σ ≈ 0.006–0.019 (mean 0.010). Propagated to a paired LOMO Δ averaged over ~20 datasets: 1σ ≈ ±0.0032, 95% ≈ ±0.0062.
+
+Observations:
+- Every single- and pair-removal avg Δ falls inside the ±0.0062 (95%) noise band; only removing the 5 biggest together (−0.0126) is outside it.
+- The largest single dataset (eva, 8023 imgs) is among the near-zero effects; removal Δ shows no ordering by image count in this run.
+- −M2 (sarah) removal was positive in two independent runs (+0.0030 here, +0.0031 in the earlier M2 LOMO).
+- Reseeding the −M9 arm: avg Δ over 6 targets is +0.0020 ± 0.0029 across seeds 42–46 (single-seed value was −0.0036) — straddles zero.
+- To resolve a ~0.003/dataset effect above this floor, average each fold over ~5 seeds (Δ-noise → ±0.0014), ~5× the compute.
+
 ## What worked
 
 - **Augmentations that simulate within-shoot diversity** — drop-color (analog of "background masking" — color histograms encode backdrop), cross-mixup with soft SupCon labels (smooths between-group boundaries), and pixel-augmented views during training.
@@ -204,17 +237,6 @@ The sweep scripts share `common.sh` (dataset registry + `ari()`/`npy_bad()`/`pfo
 
 In rough order of expected impact:
 
-1. **More diverse training datasets.** The marginal Δ-ARI per added dataset has been roughly:
-   - **N=2 → N=6 (+4 datasets): +0.001 / dataset** (saturated early because the first datasets were similar)
-   - **N=6 → N=8 (+2 datasets): +0.005 / dataset**
-   - **N=8 → N=12 (+4 datasets, with augmentation breakthrough): +0.015 / dataset** (most of this was the augmentation lift; pure data ~+0.003/dataset)
+1. **Augmentation hyperparameter tuning.** mixup_alpha, drop_color_prob, cross_mixup_prob — all swept at single values. Historically estimated at ~+0.005 — below the ±0.006 single-seed noise floor (see "Big-set training ablation & seed-noise floor"), so it needs ~5-seed averaging to detect at all.
 
-   So **roughly +0.003 to +0.008 ARI per non-redundant new dataset** at current N=12. Adding 5 more diverse datasets (different shoot styles, group sizes, photography aesthetics) should push the avg from ~+0.10 toward ~+0.12-0.14. Adding more *similar* datasets (same model type as existing ones) hits diminishing returns fast — probably <+0.001 each.
-
-2. **Per-dataset blend weight at inference**, instead of a single global 0.60. Datasets with low baseline (e.g. M4 at 0.50) want lighter blends (~40%); high-baseline datasets (M11 at 0.81) want heavier (~50%). A simple heuristic ("blend ∝ 1 − baseline_estimate") could capture the variance we see. Not big but easy.
-
-3. **Better label quality on training data.** When you relabeled M1/M2/M3/M5/M6/M12, baselines moved by up to +0.10 and the head's contribution stayed proportionally similar — but if the head trains on cleaner labels it builds a sharper notion of "same shoot". Probably +0.01-0.02 average if labels improve across the board.
-
-4. **Augmentation hyperparameter tuning.** mixup_alpha, drop_color_prob, cross_mixup_prob — all swept at single values. Modest gains likely (+0.005).
-
-5. **LoRA on PE-G itself.** Higher capacity, but our diagnostics suggest the bottleneck is data diversity, not method capacity. Unlikely to help at N=12 without much more data; defer.
+2. **LoRA on PE-G itself.** Higher capacity, but our diagnostics suggested the bottleneck is data diversity, not method capacity. Unlikely to help at N=12 without much more data; Maybe useful now at n=24

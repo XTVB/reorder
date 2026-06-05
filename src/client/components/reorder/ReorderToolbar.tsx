@@ -16,6 +16,7 @@ import {
   selectedImageFilenames as selectedImageFilenamesFromIds,
   stripFolderNumber,
 } from "../../utils/helpers.ts";
+import { reverseSelection } from "../../utils/reverseSelection.ts";
 import { GroupPicker } from "../shared/GroupPicker.tsx";
 import { TrashIcon } from "../shared/TrashIcon.tsx";
 
@@ -269,6 +270,24 @@ export function ReorderToolbar() {
           <button className="btn btn-secondary" onClick={() => openModal("paths")}>
             Paths
           </button>
+          {selectedIds.size >= 2 && (
+            <button
+              className="btn btn-secondary btn-icon"
+              onClick={() => reverseSelection()}
+              title="Reverse the order of the selection (R)"
+              aria-label="Reverse selection order"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" role="presentation">
+                <path
+                  d="M7 4v13M7 17l-3-3M7 17l3-3M17 20V7M17 7l-3 3M17 7l3 3"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          )}
           {!folderModeEnabled && groupsEnabled && (
             <>
               <button className="btn btn-secondary" onClick={createGroupFromSelection}>

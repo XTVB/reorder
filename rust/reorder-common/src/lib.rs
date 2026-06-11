@@ -8,6 +8,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 
+pub mod embeddings;
+
 /// On-disk shape of a confirmed reorder group as written by the TS server
 /// to `.reorder-groups.json`.
 #[derive(Debug, Deserialize)]

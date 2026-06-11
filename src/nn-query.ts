@@ -9,11 +9,11 @@
 
 import type { NNAggregation, NNFilter, NNResult, WeightConfig } from "./client/types.ts";
 import {
+  activeModelsFromWeights,
   cachedHashMapping,
+  l2Norm,
   loadModelEmbedding,
-  MODEL_KEYS,
   type ModelEmbedding,
-  type ModelKey,
 } from "./cluster/index.ts";
 import { loadGroups } from "./fs/groups.ts";
 
@@ -35,22 +35,6 @@ export interface NNQueryResult {
   usedModels: string[];
   queryCount: number;
   patchesBlended: boolean;
-}
-
-function activeModelsFromWeights(weights: WeightConfig): { key: ModelKey; weight: number }[] {
-  const known = new Set<string>(MODEL_KEYS);
-  const out: { key: ModelKey; weight: number }[] = [];
-  for (const [key, val] of Object.entries(weights)) {
-    const w = val ?? 0;
-    if (w > 0 && known.has(key)) out.push({ key: key as ModelKey, weight: w });
-  }
-  return out;
-}
-
-function l2Norm(row: Float32Array | Float64Array): number {
-  let s = 0;
-  for (let i = 0; i < row.length; i++) s += row[i]! * row[i]!;
-  return Math.sqrt(s);
 }
 
 function perModelDistances(
@@ -230,7 +214,11 @@ export function findNearestNeighbors(
     const group = fnToGroup.get(fn);
     if (opts.filter === "in-group" && !group) continue;
     if (opts.filter === "not-in-group" && group) continue;
-    candidates.push({ idx: i, dist: blended[i]! });
+    // A non-finite distance (NaN/Infinity from a corrupt or missing embedding row)
+    // is incomparable: rank it last so it can't displace real matches, and never
+    // let it reach the sort comparator where NaN yields an unstable order.
+    const d = blended[i]!;
+    candidates.push({ idx: i, dist: Number.isFinite(d) ? d : Infinity });
   }
 
   candidates.sort((a, b) => a.dist - b.dist);
@@ -241,7 +229,7 @@ export function findNearestNeighbors(
     const group = fnToGroup.get(fn);
     return {
       filename: fn,
-      distance: c.dist,
+      distance: Number.isFinite(c.dist) ? c.dist : null,
       inGroupId: group?.id ?? null,
       inGroupName: group?.name ?? null,
     };

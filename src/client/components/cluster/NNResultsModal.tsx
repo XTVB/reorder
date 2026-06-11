@@ -151,7 +151,11 @@ export function NNResultsModal() {
               onRangeSelect={() => rangeSelectResults(r.filename)}
               lightboxImages={resultFilenames}
               lightboxIndex={i}
-              bottomLeft={<span className="image-thumb-pill">{r.distance.toFixed(3)}</span>}
+              bottomLeft={
+                <span className="image-thumb-pill">
+                  {r.distance != null ? r.distance.toFixed(3) : "—"}
+                </span>
+              }
               bottomRight={
                 r.inGroupName ? (
                   <span className="image-thumb-pill image-thumb-pill-group" title={r.inGroupName}>

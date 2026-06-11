@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { postJson } from "../../api/client.ts";
+import { consumeSSE, startSSE } from "../../api/sse.ts";
 import { useModalStore } from "../../stores/core/modalStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useSessionStore } from "../../stores/core/sessionStore.ts";
@@ -7,8 +8,21 @@ import { useToastStore } from "../../stores/core/toastStore.ts";
 import { useFolderStore } from "../../stores/folderStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useImageStore } from "../../stores/imageStore.ts";
+import { useMergeSuggestionsStore } from "../../stores/mergeSuggestionsStore.ts";
+import { useListStore } from "../../stores/modes/cluster/listStore.ts";
 import { useTrashStore } from "../../stores/trashStore.ts";
-import type { ImageGroup, OrganizeMapping, RenameMapping, SaveResponse } from "../../types.ts";
+import type {
+  GroupOrderMode,
+  ImageGroup,
+  OrganizeMapping,
+  RenameMapping,
+  SaveResponse,
+} from "../../types.ts";
+import {
+  groupedFilenameSet,
+  groupsInGalleryOrder,
+  withLockedGroupsInPlace,
+} from "../../utils/groups.ts";
 import {
   generateContactSheetsBatch,
   getErrorMessage,
@@ -16,9 +30,48 @@ import {
   selectedImageFilenames as selectedImageFilenamesFromIds,
   stripFolderNumber,
 } from "../../utils/helpers.ts";
+import { reorderImagesWithinSlots, reorderSubsetWithinSlots } from "../../utils/reorder.ts";
 import { reverseSelection } from "../../utils/reverseSelection.ts";
+import { beginSortTransition } from "../../utils/sortFlip.ts";
 import { GroupPicker } from "../shared/GroupPicker.tsx";
 import { TrashIcon } from "../shared/TrashIcon.tsx";
+
+const SORT_MODE_KEY = "reorder-similarity-sort-mode";
+const MINIMAL_LOCALITY_KEY = "reorder-similarity-minimal-locality";
+const SORT_TARGET_KEY = "reorder-similarity-sort-target";
+
+type SortTarget = "groups" | "ungrouped";
+
+const SORT_TARGET_TITLES: Record<SortTarget, string> = {
+  groups:
+    "Sort the groups: similar groups end up adjacent; ungrouped images move along with the consolidation. Locked groups (L) keep their slot",
+  ungrouped:
+    "Sort only the loose ungrouped images: they swap among their own slots so similar ones sit together; every group stays exactly where it is",
+};
+
+const SORT_MODE_TITLES: Record<GroupOrderMode, string> = {
+  chain:
+    "Chain: greedy nearest-neighbor walk from the first group, then 2-opt segment reversal — each group follows its closest match",
+  tree: "Tree: cluster the groups hierarchically and order the leaves optimally — families of related groups stay together as blocks",
+  spectral:
+    "Spectral: arrange all groups along the dominant similarity gradient (Fiedler vector) — one global axis through the collection",
+  minimal:
+    "Minimal: keep the current order, only making small local moves (max 5 positions) where similarity clearly improves",
+};
+
+function loadSortMode(): GroupOrderMode {
+  const v = localStorage.getItem(SORT_MODE_KEY);
+  return v === "chain" || v === "tree" || v === "spectral" || v === "minimal" ? v : "tree";
+}
+
+function loadMinimalLocality(): number {
+  const v = parseInt(localStorage.getItem(MINIMAL_LOCALITY_KEY) ?? "", 10);
+  return Number.isFinite(v) && v >= 1 ? v : 5;
+}
+
+function loadSortTarget(): SortTarget {
+  return localStorage.getItem(SORT_TARGET_KEY) === "ungrouped" ? "ungrouped" : "groups";
+}
 
 export function ReorderToolbar() {
   const images = useImageStore((s) => s.images);
@@ -54,11 +107,38 @@ export function ReorderToolbar() {
 
   const markedTrashIds = useSelectionStore((s) => s.contexts.trash);
   const [generatingSheets, setGeneratingSheets] = useState(false);
+  const [sortingBySimilarity, setSortingBySimilarity] = useState(false);
+  const [sortMode, setSortMode] = useState<GroupOrderMode>(loadSortMode);
+  const [minimalLocality, setMinimalLocality] = useState<number>(loadMinimalLocality);
+  const [sortTarget, setSortTarget] = useState<SortTarget>(loadSortTarget);
+  // Last progress message from a running similarity sort, shown as the header
+  // subtitle so long computations (big ungrouped sets) have visible feedback.
+  const [sortProgress, setSortProgress] = useState<string | null>(null);
+
+  function handleSortModeChange(mode: GroupOrderMode) {
+    localStorage.setItem(SORT_MODE_KEY, mode);
+    setSortMode(mode);
+  }
+
+  function handleSortTargetChange(target: SortTarget) {
+    localStorage.setItem(SORT_TARGET_KEY, target);
+    setSortTarget(target);
+  }
+
+  function handleMinimalLocalityChange(v: number) {
+    localStorage.setItem(MINIMAL_LOCALITY_KEY, String(v));
+    setMinimalLocality(v);
+  }
 
   const selectedImageFilenames = useMemo(
     () => selectedImageFilenamesFromIds(selectedIds),
     [selectedIds],
   );
+
+  const ungroupedCount = useMemo(() => {
+    const grouped = groupedFilenameSet(groups);
+    return images.reduce((acc, i) => acc + (grouped.has(i.filename) ? 0 : 1), 0);
+  }, [groups, images]);
   const selectionAllMarked =
     selectedImageFilenames.length > 0 &&
     selectedImageFilenames.every((fn) => markedTrashIds.has(fn));
@@ -74,7 +154,9 @@ export function ReorderToolbar() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: setHeaderSubtitle is a stable Zustand action
   useEffect(() => {
     let subtitle: string;
-    if (folderModeEnabled) {
+    if (sortProgress) {
+      subtitle = sortProgress;
+    } else if (folderModeEnabled) {
       subtitle =
         selectedIds.size > 0
           ? `${selectedIds.size} selected`
@@ -87,7 +169,7 @@ export function ReorderToolbar() {
     }
     setHeaderSubtitle(subtitle);
     return () => setHeaderSubtitle("");
-  }, [folderModeEnabled, selectedIds.size, folders.length, images.length]);
+  }, [folderModeEnabled, selectedIds.size, folders.length, images.length, sortProgress]);
 
   async function refreshState() {
     if (folderModeEnabled) {
@@ -214,24 +296,166 @@ export function ReorderToolbar() {
   }
 
   function sortGroupsByGalleryOrder(): ImageGroup[] {
-    const imageIndex = new Map(images.map((img, i) => [img.filename, i]));
-    return [...groups].sort((a, b) => {
-      const aIdx = a.images.reduce(
-        (min, fn) => Math.min(min, imageIndex.get(fn) ?? Infinity),
-        Infinity,
-      );
-      const bIdx = b.images.reduce(
-        (min, fn) => Math.min(min, imageIndex.get(fn) ?? Infinity),
-        Infinity,
-      );
-      return aIdx - bIdx;
-    });
+    return groupsInGalleryOrder(groups, images);
   }
 
   function handleGroupsToTop() {
     const sortedGroups = sortGroupsByGalleryOrder();
     const { imageMap, setImages } = useImageStore.getState();
+    beginSortTransition();
     setImages(reorderImagesByGroups(images, imageMap, sortedGroups));
+  }
+
+  /** POST to similarity-order and collect the orderedIds result. */
+  async function fetchSimilarityOrder(body: Record<string, unknown>): Promise<string[] | null> {
+    const start = await startSSE("/api/groups/similarity-order", body);
+    if (start.kind === "conflict") {
+      showToast(start.message, "error");
+      return null;
+    }
+    const outcome: { orderedIds: string[] | null; error: string | null } = {
+      orderedIds: null,
+      error: null,
+    };
+    await consumeSSE<{ orderedIds: string[] }>(start.response, {
+      onProgress: (message) => setSortProgress(message),
+      onResult: (data) => {
+        outcome.orderedIds = data.orderedIds;
+      },
+      onError: (error) => {
+        outcome.error = error;
+      },
+    });
+    if (outcome.error) throw new Error(outcome.error);
+    if (!outcome.orderedIds) throw new Error("Stream ended unexpectedly");
+    return outcome.orderedIds;
+  }
+
+  async function sortGroupsBySimilarity() {
+    const { method, fullResolution } = useMergeSuggestionsStore.getState();
+    const weights = useListStore.getState().weights;
+    // The sort is based on the current gallery order, not the JSON order:
+    // minimal mode preserves it, chain starts from its first group, and
+    // tree/spectral orient their axis toward that group.
+    const galleryOrderedIds = sortGroupsByGalleryOrder().map((g) => g.id);
+    const orderedIds = await fetchSimilarityOrder({
+      method,
+      fullResolution,
+      weights,
+      mode: sortMode,
+      anchorId: galleryOrderedIds[0],
+      orderedGroupIds: galleryOrderedIds,
+      ...(sortMode === "minimal" && { minimalLocality }),
+    });
+    if (!orderedIds) return;
+
+    const pos = new Map(orderedIds.map((id, i) => [id, i]));
+    const current = useGroupStore.getState().groups;
+    const sorted = [...current].sort(
+      (a, b) => (pos.get(a.id) ?? Infinity) - (pos.get(b.id) ?? Infinity),
+    );
+    const { images: imgs, imageMap, setImages } = useImageStore.getState();
+    // Locked groups keep their current gallery slot; the similarity order
+    // fills in around them.
+    const finalOrder = withLockedGroupsInPlace(groupsInGalleryOrder(current, imgs), sorted);
+    beginSortTransition();
+    setImages(reorderImagesByGroups(imgs, imageMap, finalOrder));
+    const unchanged =
+      orderedIds.length === galleryOrderedIds.length &&
+      orderedIds.every((id, i) => id === galleryOrderedIds[i]);
+    const lockedCount = current.filter((g) => g.locked).length;
+    showToast(
+      unchanged
+        ? "Group order already optimal"
+        : `Sorted ${finalOrder.length} groups by similarity${
+            lockedCount > 0 ? ` (${lockedCount} locked in place)` : ""
+          }`,
+      "success",
+    );
+  }
+
+  async function sortUngroupedBySimilarity() {
+    const weights = useListStore.getState().weights;
+    // With images selected, sort just the selection among its own slots —
+    // lets big collections be sorted in batches, and a selection from inside
+    // a group sorts within that group. Otherwise sort all ungrouped images.
+    const selectionScope = selectedImageFilenames.length > 0;
+    let targetOrder: string[];
+    if (selectionScope) {
+      const sel = new Set(selectedImageFilenames);
+      targetOrder = images.filter((i) => sel.has(i.filename)).map((i) => i.filename);
+      if (targetOrder.length < 3) {
+        showToast("Select at least 3 images to sort a selection", "error");
+        return;
+      }
+    } else {
+      const grouped = groupedFilenameSet(useGroupStore.getState().groups);
+      targetOrder = images.filter((i) => !grouped.has(i.filename)).map((i) => i.filename);
+      if (targetOrder.length < 3) {
+        showToast("Not enough ungrouped images to sort", "error");
+        return;
+      }
+    }
+    const orderedIds = await fetchSimilarityOrder({
+      target: "ungrouped",
+      weights,
+      mode: sortMode,
+      orderedImageFilenames: targetOrder,
+      ...(sortMode === "minimal" && { minimalLocality }),
+    });
+    if (!orderedIds) return;
+
+    const { images: imgs, setImages } = useImageStore.getState();
+    beginSortTransition();
+    setImages(reorderImagesWithinSlots(imgs, orderedIds));
+    if (selectionScope) {
+      // Sorted members that live inside a group reorder within that group's
+      // own image list too, so the group popover (and eventual rename order)
+      // reflects the new sequence.
+      useGroupStore.getState().updateGroups((prev) => {
+        let changed = false;
+        const next = prev.map((g) => {
+          const reordered = reorderSubsetWithinSlots(g.images, orderedIds);
+          if (reordered.every((fn, i) => fn === g.images[i])) return g;
+          changed = true;
+          return { ...g, images: reordered };
+        });
+        return changed ? next : prev;
+      });
+    }
+    // Compare against the current order of the images the server actually
+    // covered (filenames without embeddings are dropped from the response).
+    const coveredSet = new Set(orderedIds);
+    const coveredCurrent = targetOrder.filter((fn) => coveredSet.has(fn));
+    const unchanged =
+      orderedIds.length === coveredCurrent.length &&
+      orderedIds.every((fn, i) => fn === coveredCurrent[i]);
+    showToast(
+      unchanged
+        ? `${selectionScope ? "Selection" : "Ungrouped"} order already optimal`
+        : `Sorted ${orderedIds.length} ${selectionScope ? "selected" : "ungrouped"} images by similarity`,
+      "success",
+    );
+  }
+
+  // Gallery-only reorder (like Groups to Top): similar groups (or, with the
+  // Ungrouped target, the loose images) end up adjacent, using the
+  // merge-suggestions pairwise similarity. Nothing is persisted — Save renames
+  // files and Save Order writes the group order to JSON.
+  async function handleSortBySimilarity() {
+    setSortingBySimilarity(true);
+    setSortProgress("Starting similarity sort...");
+    try {
+      // The similarity computation reads groups from disk — flush pending edits.
+      await flushPending();
+      if (sortTarget === "ungrouped") await sortUngroupedBySimilarity();
+      else await sortGroupsBySimilarity();
+    } catch (err) {
+      showToast(getErrorMessage(err, "Sort by similarity failed"), "error");
+    } finally {
+      setSortingBySimilarity(false);
+      setSortProgress(null);
+    }
   }
 
   async function handleSaveJsonOrder() {
@@ -322,6 +546,82 @@ export function ReorderToolbar() {
           <button className="btn btn-secondary" onClick={handleGroupsToTop}>
             Groups to Top
           </button>
+          {(groups.length >= 2 || ungroupedCount >= 3 || selectedImageFilenames.length >= 3) && (
+            <>
+              <button
+                className="btn btn-secondary"
+                onClick={handleSortBySimilarity}
+                disabled={
+                  sortingBySimilarity ||
+                  saving ||
+                  (sortTarget === "groups"
+                    ? groups.length < 2
+                    : selectedImageFilenames.length > 0
+                      ? selectedImageFilenames.length < 3
+                      : ungroupedCount < 3)
+                }
+                title={`${
+                  sortTarget === "ungrouped" && selectedImageFilenames.length > 0
+                    ? `Sort only the ${selectedImageFilenames.length} selected images: they swap among their own slots (including within their groups); everything else stays put`
+                    : SORT_TARGET_TITLES[sortTarget]
+                }. Not persisted — use Save and Save Order to keep it`}
+              >
+                {sortingBySimilarity ? "Sorting..." : "Sort Similar"}
+              </button>
+              <select
+                className="toolbar-select"
+                value={sortTarget}
+                onChange={(e) => handleSortTargetChange(e.target.value as SortTarget)}
+                disabled={sortingBySimilarity}
+                title={SORT_TARGET_TITLES[sortTarget]}
+                aria-label="Sort Similar target"
+              >
+                <option value="groups" title={SORT_TARGET_TITLES.groups}>
+                  Groups
+                </option>
+                <option value="ungrouped" title={SORT_TARGET_TITLES.ungrouped}>
+                  {selectedImageFilenames.length > 0 ? "Selection" : "Ungrouped"}
+                </option>
+              </select>
+              <select
+                className="toolbar-select"
+                value={sortMode}
+                onChange={(e) => handleSortModeChange(e.target.value as GroupOrderMode)}
+                disabled={sortingBySimilarity}
+                title={SORT_MODE_TITLES[sortMode]}
+                aria-label="Sort Similar algorithm"
+              >
+                <option value="tree" title={SORT_MODE_TITLES.tree}>
+                  Tree
+                </option>
+                <option value="chain" title={SORT_MODE_TITLES.chain}>
+                  Chain
+                </option>
+                <option value="spectral" title={SORT_MODE_TITLES.spectral}>
+                  Spectral
+                </option>
+                <option value="minimal" title={SORT_MODE_TITLES.minimal}>
+                  Minimal
+                </option>
+              </select>
+              {sortMode === "minimal" && (
+                <input
+                  type="number"
+                  className="toolbar-input-number"
+                  value={minimalLocality}
+                  min={1}
+                  max={50}
+                  disabled={sortingBySimilarity}
+                  title="Max positions a group may move from its original slot (Minimal mode)"
+                  aria-label="Minimal locality"
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10);
+                    if (Number.isFinite(v) && v >= 1) handleMinimalLocalityChange(v);
+                  }}
+                />
+              )}
+            </>
+          )}
           <button
             className="btn btn-secondary"
             onClick={handleApplyJsonOrder}

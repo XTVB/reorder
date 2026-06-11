@@ -1,8 +1,5 @@
 use clap::Parser;
-use ndarray::Array2;
-use ndarray_npy::NpzReader;
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
 use std::path::Path;
 
 mod cli;
@@ -12,7 +9,6 @@ mod linkage;
 mod tree;
 
 use crate::cli::Cli;
-use crate::distances::build_combined_features_flat;
 use crate::io::{load_cannot_link_pairs, load_groups, load_locked_group_ids};
 use crate::linkage::{linkage_cosine, Linkage};
 use crate::tree::{build_output_from_image_labels, cut_tree, save_linkage_tree};
@@ -62,34 +58,8 @@ fn main() {
         .map(|(i, f)| (f.as_str(), i))
         .collect();
 
-    // Load hash_cache_order.json → NPZ row mapping
-    let hash_order: Vec<String> = {
-        let content = std::fs::read_to_string(&cli.hash_order)
-            .unwrap_or_else(|_| panic!("Missing hash_cache_order.json: {}", cli.hash_order));
-        serde_json::from_str(&content)
-            .unwrap_or_else(|_| panic!("Invalid hash_cache_order.json: {}", cli.hash_order))
-    };
-    let hash_to_cache_row: HashMap<&str, usize> = hash_order
-        .iter()
-        .enumerate()
-        .map(|(i, h)| (h.as_str(), i))
-        .collect();
-
-    // Build filename → NPZ cache row mapping
-    let fname_to_cache_row: Vec<usize> = filenames
-        .iter()
-        .map(|f| {
-            let hash = content_hashes
-                .get(f)
-                .unwrap_or_else(|| panic!("No hash for {}", f));
-            *hash_to_cache_row.get(hash.as_str()).unwrap_or_else(|| {
-                panic!(
-                    "Hash {} (file {}) not found in cache — re-run extraction",
-                    hash, f
-                )
-            })
-        })
-        .collect();
+    let fname_to_cache_row =
+        reorder_common::embeddings::load_fname_to_cache_row(&cli.hash_order, &content_hashes, &filenames);
 
     // Load groups
     let groups = load_groups(&cli.groups, &fname_to_idx);
@@ -99,14 +69,12 @@ fn main() {
     // skipped embedding loading whenever --dist-matrix was provided, which made
     // blending the precomputed matrix with embedding distances impossible. Now
     // the two coexist: with both, linkage.rs blends them via dist_matrix_weight.
-    let emb_specs: Vec<(&str, f32, bool)> = vec![
-        ("dinov3", cli.dinov3_weight, false),
-        ("pecore_g", cli.pecore_g_weight, false),
-        ("color", cli.color_weight, true),
-        // Learned head output: already L2-normalized by the projection head's
-        // final F.normalize(), so we don't re-normalize here.
-        ("learned_proj", cli.learned_proj_weight, false),
-    ];
+    let emb_specs = reorder_common::embeddings::emb_specs(
+        cli.color_weight,
+        cli.dinov3_weight,
+        cli.pecore_g_weight,
+        cli.learned_proj_weight,
+    );
     let any_active = emb_specs.iter().any(|(_, w, _)| *w > 0.0);
     let features_flat: Vec<f32>;
     let feat_dim: usize;
@@ -116,46 +84,13 @@ fn main() {
         features_flat = vec![];
         feat_dim = 0;
     } else {
-        eprintln!("Loading embeddings from {:?}...", cli.hash_cache);
-        let file = File::open(&cli.hash_cache).expect("Failed to open hash cache file");
-        let mut npz = NpzReader::new(file).expect("Failed to read npz");
-
-        let loaded: Vec<(Array2<f32>, f32, bool)> = emb_specs
-            .iter()
-            .filter(|(_, w, _)| *w > 0.0)
-            .filter_map(|(name, w, norm)| {
-                match npz.by_name::<ndarray::OwnedRepr<f32>, ndarray::Ix2>(name) {
-                    Ok(hash_ordered_arr) => {
-                        // Reindex from hash/cache order to filename order
-                        let dim = hash_ordered_arr.ncols();
-                        let mut arr = Array2::<f32>::zeros((n_images, dim));
-                        for (i, &cache_row) in fname_to_cache_row.iter().enumerate() {
-                            arr.row_mut(i).assign(&hash_ordered_arr.row(cache_row));
-                        }
-                        Some((arr, *w, *norm))
-                    }
-                    Err(_) => {
-                        eprintln!(
-                            "WARNING: '{}' array not found in hash cache (weight={:.1}), skipping",
-                            name, w
-                        );
-                        None
-                    }
-                }
-            })
-            .collect();
-
-        let active_desc: Vec<String> = emb_specs
-            .iter()
-            .filter(|(_, w, _)| *w > 0.0)
-            .zip(loaded.iter())
-            .map(|((name, w, _), (arr, _, _))| format!("{}={}d×{}", name, arr.ncols(), w))
-            .collect();
-        eprintln!("Loaded {} images, active: {}", n_images, active_desc.join(", "));
-
-        let emb_arrays: Vec<(&Array2<f32>, f32, bool)> =
-            loaded.iter().map(|(a, w, n)| (a, *w, *n)).collect();
-        let (ff, fd) = build_combined_features_flat(&emb_arrays, n_images);
+        let loaded = reorder_common::embeddings::load_model_arrays(
+            &cli.hash_cache,
+            &fname_to_cache_row,
+            &emb_specs,
+        );
+        let (ff, fd) =
+            reorder_common::embeddings::build_combined_features_flat(&loaded, n_images, false);
         features_flat = ff;
         feat_dim = fd;
         eprintln!("Combined feature dim: {}", feat_dim);

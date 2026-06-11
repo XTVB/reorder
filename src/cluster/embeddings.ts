@@ -10,9 +10,29 @@ import {
   resolveHashCachePath,
 } from "../cache-utils.ts";
 import { cacheDir, contentHashesPath } from "../fs/paths.ts";
+import type { WeightConfig } from "../shared/types.ts";
 
 export const MODEL_KEYS = ["dinov3", "pecore_g", "color", "learned_proj"] as const;
 export type ModelKey = (typeof MODEL_KEYS)[number];
+
+/** The models with positive weight, restricted to known MODEL_KEYS. */
+export function activeModelsFromWeights(
+  weights: WeightConfig,
+): { key: ModelKey; weight: number }[] {
+  const known = new Set<string>(MODEL_KEYS);
+  const out: { key: ModelKey; weight: number }[] = [];
+  for (const [key, val] of Object.entries(weights)) {
+    const w = val ?? 0;
+    if (w > 0 && known.has(key)) out.push({ key: key as ModelKey, weight: w });
+  }
+  return out;
+}
+
+export function l2Norm(row: Float32Array | Float64Array): number {
+  let s = 0;
+  for (let i = 0; i < row.length; i++) s += row[i]! * row[i]!;
+  return Math.sqrt(s);
+}
 
 export class ModelMissingError extends Error {
   constructor(public modelKey: string) {

@@ -1,11 +1,15 @@
-// Merge suggestions: DINOv3 patch-based group similarity. Computed by the
-// Rust group-similarity binary in "merge-suggestions" mode. Cached in
-// merge_suggestions[_full][_mN].json keyed by groups+patches+content_hashes
-// mtimes; one-time invalidation if the cache is in pre-camelCase format.
+// Merge suggestions: pairwise group similarity. Two methods, both computed by
+// the Rust group-similarity binary and sharing one wire shape (GroupPairResult):
+//   - "patches"    — DINOv3 patch matching ("merge-suggestions" mode).
+//   - "embeddings" — weighted blend of CLS embeddings ("embeddings" mode),
+//                    reusing the same per-model weights as the cluster pipeline.
+// Cached in merge_suggestions{_full|_emb_<sig>}{_mN}.json keyed by the relevant
+// inputs' mtimes; one-time invalidation if the cache is in pre-camelCase format.
 
 import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
+import { ensureHashOrderJson, resolveHashCachePath } from "../cache-utils.ts";
 import {
   cacheDir,
   contentHashesPath,
@@ -13,11 +17,29 @@ import {
   DINOV3_PATCHES_FULL_FILE,
   DINOV3_PATCHES_HASHES_FILE,
   groupsPath,
+  HASH_ORDER_FILE,
 } from "../fs/paths.ts";
 import { log } from "../log.ts";
+import type { WeightConfig } from "../shared/types.ts";
 import { GROUP_SIM_BINARY } from "./binaries.ts";
 import { writeResolvedRejectedPairsFile } from "./constraints.ts";
+import { rescaleLearnedProjWeight } from "./pipeline.ts";
 import { spawn } from "./subprocess.ts";
+
+export type MergeMethod = "patches" | "embeddings";
+
+/** Stable short signature of the rescaled weights, for the embeddings cache filename. */
+function weightSignature(weights: WeightConfig): string {
+  const rescaled = rescaleLearnedProjWeight(weights);
+  // Deterministic key order; round so float noise doesn't churn the cache.
+  const parts = (["pecore_g", "dinov3", "color", "learned_proj"] as const)
+    .map((k) => `${k}:${(rescaled[k] ?? 0).toFixed(4)}`)
+    .join("|");
+  // djb2 → base36 keeps the filename short and filesystem-safe.
+  let h = 5381;
+  for (let i = 0; i < parts.length; i++) h = (h * 33) ^ parts.charCodeAt(i);
+  return (h >>> 0).toString(36);
+}
 
 export interface GroupPairResult {
   groupA: string;
@@ -34,33 +56,76 @@ export async function computeMergeSuggestions(
   targetDir: string,
   minScore = 0.55,
   options?: {
+    method?: MergeMethod;
     fullResolution?: boolean;
     maxCombinedSize?: number;
+    weights?: WeightConfig;
     onProgress?: (msg: string) => void;
   },
 ): Promise<GroupPairResult[]> {
   const cache = cacheDir(targetDir);
+  const method: MergeMethod = options?.method ?? "embeddings";
   const fullRes = options?.fullResolution ?? false;
   const maxCombinedSize = Math.max(0, Math.floor(options?.maxCombinedSize ?? 0));
-  const patchesCachePath = join(cache, fullRes ? DINOV3_PATCHES_FULL_FILE : DINOV3_PATCHES_FILE);
-  const patchesHashesPath = join(cache, DINOV3_PATCHES_HASHES_FILE);
   const contentHashesP = contentHashesPath(targetDir);
   const groupsP = groupsPath(targetDir);
-  const resSuffix = fullRes ? "_full" : "";
   const sizeSuffix = maxCombinedSize > 0 ? `_m${maxCombinedSize}` : "";
-  const resultCachePath = join(cache, `merge_suggestions${resSuffix}${sizeSuffix}.json`);
 
-  if (!existsSync(patchesCachePath)) {
-    throw new Error(
-      fullRes
-        ? "Full-resolution DINOv3 patches cache not found. Re-run feature extraction with --required dinov3 to generate it."
-        : "DINOv3 patches cache not found. Run feature extraction with --required dinov3 first.",
-    );
-  }
   if (!existsSync(GROUP_SIM_BINARY)) {
     throw new Error(
       `group-similarity binary not found at ${GROUP_SIM_BINARY}. Build with: cd rust/group-similarity && cargo build --release`,
     );
+  }
+
+  // Per-method setup: the primary input file (whose mtime gates the cache), the
+  // result cache path, the extra subprocess args, and a progress label.
+  let primaryInputPath: string;
+  let resultCachePath: string;
+  const args = [GROUP_SIM_BINARY, "--content-hashes", contentHashesP, "--groups", groupsP];
+  let label: string;
+  let loadingMsg: string;
+
+  if (method === "embeddings") {
+    const hashCachePath = resolveHashCachePath(cache);
+    if (!existsSync(hashCachePath)) {
+      throw new Error(
+        "Embeddings cache not found. Run feature extraction (Compute in Cluster mode) first.",
+      );
+    }
+    const weights = options?.weights ?? {};
+    if (!Object.values(weights).some((v) => (v ?? 0) > 0)) {
+      throw new Error("Embeddings merge mode requires at least one positive model weight.");
+    }
+    ensureHashOrderJson(cache); // regenerate the hash_cache_order.json sidecar if stale
+    const hashOrderPath = join(cache, HASH_ORDER_FILE);
+    primaryInputPath = hashCachePath;
+    resultCachePath = join(
+      cache,
+      `merge_suggestions_emb_${weightSignature(weights)}${sizeSuffix}.json`,
+    );
+    args.push("--mode", "embeddings", "--hash-cache", hashCachePath, "--hash-order", hashOrderPath);
+    // Rescale learned_proj the same way the cluster pipeline does, then pass each weight.
+    const rescaled = rescaleLearnedProjWeight(weights);
+    for (const [key, val] of Object.entries(rescaled)) {
+      if (val !== undefined) args.push(`--${key.replace(/_/g, "-")}-weight`, String(val));
+    }
+    label = "merge-suggestions-emb";
+    loadingMsg = "Loading embeddings...";
+  } else {
+    const patchesCachePath = join(cache, fullRes ? DINOV3_PATCHES_FULL_FILE : DINOV3_PATCHES_FILE);
+    if (!existsSync(patchesCachePath)) {
+      throw new Error(
+        fullRes
+          ? "Full-resolution DINOv3 patches cache not found. Re-run feature extraction with --required dinov3 to generate it."
+          : "DINOv3 patches cache not found. Run feature extraction with --required dinov3 first.",
+      );
+    }
+    const patchesHashesPath = join(cache, DINOV3_PATCHES_HASHES_FILE);
+    primaryInputPath = patchesCachePath;
+    resultCachePath = join(cache, `merge_suggestions${fullRes ? "_full" : ""}${sizeSuffix}.json`);
+    args.push("--patches-cache", patchesCachePath, "--patches-hashes", patchesHashesPath);
+    label = fullRes ? "merge-suggestions-full" : "merge-suggestions";
+    loadingMsg = `Loading ${fullRes ? "14x14 full-res" : "7x7 pooled"} patches...`;
   }
 
   const applyFilters = (rows: GroupPairResult[]) => {
@@ -77,19 +142,20 @@ export async function computeMergeSuggestions(
   // No-ops if rejected-pairs content is unchanged, so cache mtime check stays valid.
   const rejectedPairsPath = await writeResolvedRejectedPairsFile(targetDir);
 
-  // Disk cache is valid if newer than the groups file, patches cache,
-  // content_hashes, and (if present) the resolved rejected-pairs file.
+  // Disk cache is valid if newer than the groups file, the primary input
+  // (patches cache or embeddings NPZ), content_hashes, and (if present) the
+  // resolved rejected-pairs file.
   try {
-    const [cacheStat, groupsStat, patchesStat, hashesStat, rejectedStat] = await Promise.all([
+    const [cacheStat, groupsStat, inputStat, hashesStat, rejectedStat] = await Promise.all([
       stat(resultCachePath),
       stat(groupsP),
-      stat(patchesCachePath),
+      stat(primaryInputPath),
       stat(contentHashesP),
       rejectedPairsPath ? stat(rejectedPairsPath) : Promise.resolve(null),
     ]);
     if (
       cacheStat.mtimeMs > groupsStat.mtimeMs &&
-      cacheStat.mtimeMs > patchesStat.mtimeMs &&
+      cacheStat.mtimeMs > inputStat.mtimeMs &&
       cacheStat.mtimeMs > hashesStat.mtimeMs &&
       (rejectedStat === null || cacheStat.mtimeMs > rejectedStat.mtimeMs)
     ) {
@@ -101,29 +167,17 @@ export async function computeMergeSuggestions(
         cached[0] &&
         "group_a" in (cached[0] as object)
       ) {
-        log("merge-suggestions", "Old-format cache detected, recomputing");
+        log(label, "Old-format cache detected, recomputing");
       } else {
-        log("merge-suggestions", `Using cached results (${fullRes ? "full-res" : "pooled"})`);
+        log(label, "Using cached results");
         options?.onProgress?.("Using cached results");
         return applyFilters(cached as GroupPairResult[]);
       }
     }
   } catch {}
 
-  const args = [
-    GROUP_SIM_BINARY,
-    "--patches-cache",
-    patchesCachePath,
-    "--content-hashes",
-    contentHashesP,
-    "--patches-hashes",
-    patchesHashesPath,
-    "--groups",
-    groupsP,
-    // Compute unfiltered so the cache can serve any threshold; TS re-filters on return.
-    "--min-score",
-    "0",
-  ];
+  // Compute unfiltered so the cache can serve any threshold; TS re-filters on return.
+  args.push("--min-score", "0");
   if (maxCombinedSize > 0) {
     args.push("--max-combined-size", String(maxCombinedSize));
   }
@@ -131,9 +185,8 @@ export async function computeMergeSuggestions(
     args.push("--rejected-pairs", rejectedPairsPath);
   }
 
-  const label = fullRes ? "merge-suggestions-full" : "merge-suggestions";
   log(label, `Running group-similarity: ${args.join(" ")}`);
-  options?.onProgress?.(`Loading ${fullRes ? "14x14 full-res" : "7x7 pooled"} patches...`);
+  options?.onProgress?.(loadingMsg);
 
   const { stdout } = await spawn(args, {
     label,

@@ -49,10 +49,13 @@ export function useKeyboardShortcuts({
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === "g") {
-        const { groupsEnabled } = useGroupStore.getState();
+      if (e.key === "g" || e.key === "G") {
+        const { groupsEnabled, createGroupFromSelectionAutoNamed } = useGroupStore.getState();
         const selectedIds = useSelectionStore.getState().contexts.reorder;
-        if (groupsEnabled && selectedIds.size > 0) createGroupRef.current();
+        if (groupsEnabled && selectedIds.size > 0) {
+          if (e.shiftKey) createGroupFromSelectionAutoNamed();
+          else createGroupRef.current();
+        }
       } else if (e.key === "h") {
         const { groupsEnabled, groups } = useGroupStore.getState();
         const selectedIds = useSelectionStore.getState().contexts.reorder;
@@ -61,6 +64,15 @@ export function useKeyboardShortcuts({
         }
       } else if (e.key === "r" || e.key === "R") {
         if (useSelectionStore.getState().contexts.reorder.size >= 2) reverseSelection();
+      } else if (e.key === "l" || e.key === "L") {
+        // Toggle the sort lock on selected groups. Guard against the lightbox
+        // and modals — the grouping-sort modal uses l/h for navigation.
+        if (lightboxOpenRef.current) return;
+        if (Object.values(useModalStore.getState().open).some(Boolean)) return;
+        const groupIds = [...useSelectionStore.getState().contexts.reorder]
+          .filter(isGroupSortId)
+          .map(fromGroupSortId);
+        if (groupIds.length > 0) useGroupStore.getState().toggleGroupsLocked(groupIds);
       } else if (e.key === "d" || e.key === "D") {
         const selection = useSelectionStore.getState().contexts.reorder;
         if (selection.size === 0) return;

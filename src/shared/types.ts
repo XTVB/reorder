@@ -13,6 +13,20 @@ export interface ImageGroup {
   id: string;
   name: string;
   images: string[];
+  /**
+   * Category/subcategory labels this group was explicitly bucketed into during
+   * a grouping-sort Apply, e.g. ["Keep", "Keep - Top"]. Used for metadata
+   * search / resuming a partial categorisation; absent on never-categorised
+   * groups. See `explicitGroupTags` / `configOwnedTags` in reviewConfigs.ts for
+   * how a config builds and merges/replaces its slice of these tags.
+   */
+  tags?: string[];
+  /**
+   * Locked groups keep their gallery slot when a sort is applied (Sort
+   * Similar / Review Apply Order) — only unlocked groups move around them.
+   * Toggled with L on selected groups; absent means unlocked.
+   */
+  locked?: boolean;
 }
 
 export interface FolderGroup {
@@ -56,6 +70,15 @@ export interface WeightConfig {
 
 /** Agglomerative linkage method for the cluster tree. */
 export type LinkageMethod = "ward" | "average" | "complete";
+
+/**
+ * Algorithm for ordering groups by pairwise similarity (reorder page's
+ * Sort Similar): "chain" = greedy nearest-neighbor + 2-opt, "tree" =
+ * average-linkage clustering + optimal leaf ordering, "spectral" = Fiedler-
+ * vector seriation, "minimal" = keep the current order, applying only small
+ * local moves where similarity clearly improves.
+ */
+export type GroupOrderMode = "chain" | "tree" | "spectral" | "minimal";
 
 export interface ClusterResultData {
   id: string;
@@ -114,7 +137,8 @@ export type NNFilter = "any" | "in-group" | "not-in-group";
 
 export interface NNResult {
   filename: string;
-  distance: number;
+  // null when the embedding is incomparable (corrupt/missing row → non-finite distance).
+  distance: number | null;
   inGroupId: string | null;
   inGroupName: string | null;
 }

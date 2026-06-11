@@ -31,6 +31,7 @@ export function MergeSuggestions() {
   const computeTimeMs = useMergeSuggestionsStore((s) => s.computeTimeMs);
   const progress = useMergeSuggestionsStore((s) => s.progress);
   const threshold = useMergeSuggestionsStore((s) => s.threshold);
+  const method = useMergeSuggestionsStore((s) => s.method);
   const fullResolution = useMergeSuggestionsStore((s) => s.fullResolution);
   const maxCombinedSize = useMergeSuggestionsStore((s) => s.maxCombinedSize);
   const sortMode = useMergeSuggestionsStore((s) => s.sortMode);
@@ -41,6 +42,7 @@ export function MergeSuggestions() {
   const addRejectedMerges = useConstraintsStore((s) => s.addRejectedMerges);
 
   const setThreshold = useMergeSuggestionsStore((s) => s.setThreshold);
+  const setMethod = useMergeSuggestionsStore((s) => s.setMethod);
   const setFullResolution = useMergeSuggestionsStore((s) => s.setFullResolution);
   const setMaxCombinedSize = useMergeSuggestionsStore((s) => s.setMaxCombinedSize);
   const setSortMode = useMergeSuggestionsStore((s) => s.setSortMode);
@@ -215,10 +217,12 @@ export function MergeSuggestions() {
         suggestionCount={rows.length}
         pendingCount={count}
         canUndo={undoStack.length > 0}
+        method={method}
         fullResolution={fullResolution}
         maxCombinedSize={maxCombinedSize}
         sortMode={sortMode}
         onThresholdChange={setThreshold}
+        onMethodChange={setMethod}
         onFullResolutionChange={setFullResolution}
         onMaxCombinedSizeChange={setMaxCombinedSize}
         onSortModeChange={setSortMode}

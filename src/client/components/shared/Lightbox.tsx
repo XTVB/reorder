@@ -9,8 +9,11 @@ import { TrashIcon } from "./TrashIcon.tsx";
 
 export function Lightbox() {
   const open = useLightboxStore((s) => s.open);
+  const seq = useLightboxStore((s) => s.seq);
   if (!open) return null;
-  return <LightboxInner />;
+  // Key on the session counter so re-opening (e.g. the categorisation flow
+  // moving the lightbox to the next item) remounts with a freshly seeded index.
+  return <LightboxInner key={seq} />;
 }
 
 function LightboxInner() {

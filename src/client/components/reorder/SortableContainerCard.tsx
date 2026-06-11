@@ -66,6 +66,7 @@ export const SortableContainerCard = memo(function SortableContainerCard(props: 
     props.variant === "group"
       ? { "data-group-id": props.group.id }
       : { "data-folder-name": props.folder.name };
+  const isLocked = props.variant === "group" && Boolean(props.group.locked);
 
   const {
     attributes,
@@ -149,12 +150,22 @@ export const SortableContainerCard = memo(function SortableContainerCard(props: 
         isCurrentSearchMatch && "card-search-current",
         isMarkedForTrash && "card-marked-trash",
       )}
+      data-flip-id={sortId}
       {...dataAttr}
       onClick={handleClick}
       {...attributes}
       {...listeners}
     >
       <GroupThumbGrid images={images} />
+      {isLocked && (
+        <span
+          className="card-lock-badge"
+          title="Locked — keeps its place when sorting (L to unlock)"
+          aria-label="Locked in place"
+        >
+          🔒
+        </span>
+      )}
       {isMarkedForTrash && <TrashBadge />}
       <div className="card-info">
         <span className="card-badge">{gridIndex + 1}</span>

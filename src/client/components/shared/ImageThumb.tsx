@@ -23,6 +23,9 @@ interface ImageThumbProps {
   lightboxIndex?: number;
   showSelectButton?: boolean;
 
+  /** Tags the root for the sort FLIP animation (see utils/sortFlip.ts). */
+  flipId?: string;
+
   footer?: React.ReactNode;
   topRight?: React.ReactNode;
   bottomLeft?: React.ReactNode;
@@ -50,6 +53,7 @@ export const ImageThumb = memo(function ImageThumb({
   lightboxImages,
   lightboxIndex,
   showSelectButton = false,
+  flipId,
   footer,
   topRight,
   bottomLeft,
@@ -79,6 +83,7 @@ export const ImageThumb = memo(function ImageThumb({
     <div
       ref={dnd?.setNodeRef}
       style={dnd?.style}
+      data-flip-id={flipId}
       className={cn(
         "image-thumb",
         Boolean(footer) && "image-thumb-has-footer",

@@ -14,6 +14,7 @@ import {
   type ReviewConfig,
   reviewColorVar,
   shortcutForSlot,
+  slotForKeyEvent,
 } from "../../utils/reviewConfigs.ts";
 import { Modal } from "./Modal.tsx";
 import { ReviewConfigEditor } from "./ReviewConfigEditor.tsx";
@@ -56,6 +57,13 @@ export interface GroupingSortModalProps<T> {
   modalClassName?: string;
   getId: (t: T) => string;
   getName: (t: T) => string;
+  /**
+   * Optional per-config seed: recover in-progress assignments for a config
+   * from existing item state (e.g. persisted tags) so items already bucketed
+   * by a previous Apply show their category/sub on open. Evaluated once per
+   * known config at mount.
+   */
+  initialStateFor?: (config: ReviewConfig) => SortState | null;
   /** Category an unassigned item falls into when filtering a bucket, or null. */
   defaultCategoryId: (cfg: ReviewConfig) => string | null;
   /** Singular, lowercase nouns used in prompts/hints, e.g. "category"/"group". */
@@ -69,6 +77,14 @@ export interface GroupingSortModalProps<T> {
   renderSubtitle: (item: T, info: CurrentInfo) => ReactNode;
   renderMedia: (item: T) => ReactNode;
   renderProgressExtra?: (ctx: SortContext<T>) => ReactNode;
+  /**
+   * Optional: the lightbox content for an item. While the lightbox is open over
+   * the modal the categorisation slot keys stay live (assign + advance), and
+   * when the cursor moves to a new item the open lightbox is reopened on this
+   * target so it follows along. Return null to close the lightbox for an item
+   * with no media.
+   */
+  getLightboxTarget?: (item: T) => { filenames: string[]; index: number } | null;
   apply: {
     /** Derive the Apply button state from the current assignments (one pass). */
     describe: (ctx: SortContext<T>) => { label: string; disabled: boolean; title?: string };
@@ -93,6 +109,7 @@ export function GroupingSortModal<T>({
   modalClassName,
   getId,
   getName,
+  initialStateFor,
   defaultCategoryId,
   terms,
   titleText,
@@ -103,6 +120,7 @@ export function GroupingSortModal<T>({
   renderSubtitle,
   renderMedia,
   renderProgressExtra,
+  getLightboxTarget,
   apply,
   onClose,
 }: GroupingSortModalProps<T>) {
@@ -117,7 +135,18 @@ export function GroupingSortModal<T>({
   const [editor, setEditor] = useState<{ initial: ReviewConfig; isNew: boolean } | null>(null);
 
   // Per-config so switching configs and back restores the in-progress sort.
-  const [stateByConfig, setStateByConfig] = useState<Map<string, SortState>>(() => new Map());
+  // Seeded once from existing item state (e.g. persisted tags) so groups that
+  // were already bucketed show their category/sub on open.
+  const [stateByConfig, setStateByConfig] = useState<Map<string, SortState>>(() => {
+    const m = new Map<string, SortState>();
+    if (initialStateFor) {
+      for (const c of boot.configs) {
+        const seed = initialStateFor(c);
+        if (seed && (seed.statuses.size > 0 || seed.subs.size > 0)) m.set(c.id, seed);
+      }
+    }
+    return m;
+  });
   const stateForConfig = stateByConfig.get(activeConfigId) ?? EMPTY_STATE;
   const { statuses, subs } = stateForConfig;
 
@@ -305,6 +334,7 @@ export function GroupingSortModal<T>({
     onClose: () => void;
     exitBucket: () => void;
     addCategoryViaShortcut: () => void;
+    gotoNextUncategorised: () => void;
     bucket: string | null;
   }>(null!);
   handlersRef.current = {
@@ -313,25 +343,17 @@ export function GroupingSortModal<T>({
     onClose,
     exitBucket,
     addCategoryViaShortcut,
+    gotoNextUncategorised,
     bucket,
   };
 
-  const slotKeyMap = useMemo(() => {
-    const map = new Map<string, number>();
-    const slots = bucketCategory
-      ? bucketCategory.subcategories.length
-      : activeConfig.categories.length;
-    for (let i = 0; i < slots; i++) {
-      const k = shortcutForSlot(i);
-      if (k) map.set(k, i);
-    }
-    return map;
-  }, [bucketCategory, activeConfig]);
-  const slotKeyMapRef = useRef(slotKeyMap);
-  slotKeyMapRef.current = slotKeyMap;
+  const slotCount = bucketCategory
+    ? bucketCategory.subcategories.length
+    : activeConfig.categories.length;
+  const slotCountRef = useRef(slotCount);
+  slotCountRef.current = slotCount;
 
   useEffect(() => {
-    if (lightboxOpen) return;
     if (editor) return;
     function handleKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLElement) {
@@ -339,6 +361,18 @@ export function GroupingSortModal<T>({
         if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       }
       const h = handlersRef.current;
+      // With the lightbox open over the modal, keep only the categorisation slot
+      // keys live: the digit assigns the inspected item and advances, and the
+      // open lightbox follows the cursor (see the sync effect below). Esc /
+      // navigation / add-category stay with the lightbox so they don't fight it.
+      if (lightboxOpen) {
+        const slot = slotForKeyEvent(e);
+        if (slot !== null && slot < slotCountRef.current) {
+          e.preventDefault();
+          h.chooseAndAdvance(slot);
+        }
+        return;
+      }
       if (e.key === "Escape") {
         if (h.bucket !== null) h.exitBucket();
         else h.onClose();
@@ -349,8 +383,14 @@ export function GroupingSortModal<T>({
         h.addCategoryViaShortcut();
         return;
       }
-      const slot = slotKeyMapRef.current.get(e.key);
-      if (slot !== undefined) {
+      if (e.key === "Tab") {
+        e.preventDefault();
+        h.gotoNextUncategorised();
+        return;
+      }
+      const slot = slotForKeyEvent(e);
+      if (slot !== null && slot < slotCountRef.current) {
+        e.preventDefault();
         h.chooseAndAdvance(slot);
         return;
       }
@@ -365,6 +405,35 @@ export function GroupingSortModal<T>({
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [lightboxOpen, editor]);
+
+  // Keep an open lightbox pinned to the item under the cursor. When
+  // categorising via slot keys advances to a new item (or the cursor otherwise
+  // moves while the lightbox is up), reopen it on that item's media so the
+  // inspected image follows along; close it if the new item has none.
+  const currentId = current ? getId(current) : null;
+  const getLightboxTargetRef = useRef(getLightboxTarget);
+  getLightboxTargetRef.current = getLightboxTarget;
+  const syncedLightboxIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!lightboxOpen) {
+      syncedLightboxIdRef.current = null;
+      return;
+    }
+    // First observation after opening: adopt whatever item the caller opened it
+    // on (it already picked the image) without reopening over their choice.
+    if (syncedLightboxIdRef.current === null) {
+      syncedLightboxIdRef.current = currentId;
+      return;
+    }
+    if (currentId === syncedLightboxIdRef.current) return;
+    syncedLightboxIdRef.current = currentId;
+    const getTarget = getLightboxTargetRef.current;
+    if (!getTarget) return;
+    const target = current ? getTarget(current) : null;
+    const lb = useLightboxStore.getState();
+    if (target && target.filenames.length > 0) lb.openLightbox(target.filenames, target.index);
+    else lb.close();
+  }, [lightboxOpen, currentId, current]);
 
   const topCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -388,6 +457,25 @@ export function GroupingSortModal<T>({
     return counts;
   }, [filtered, subs, bucketCategory]);
 
+  // Index of the next item after the cursor that hasn't been bucketed yet — at
+  // top level that means no category assigned; inside a bucket, no subcategory
+  // for that category. -1 when everything ahead is already sorted.
+  const nextUncategorisedIndex = useMemo(() => {
+    for (let i = currentIndex + 1; i < total; i++) {
+      const id = getIdRef.current(filtered[i]!);
+      const assigned = bucket
+        ? subs.get(id)?.categoryId === bucket
+        : statuses.get(id) !== undefined;
+      if (!assigned) return i;
+    }
+    return -1;
+  }, [filtered, currentIndex, total, bucket, statuses, subs]);
+
+  function gotoNextUncategorised() {
+    if (nextUncategorisedIndex < 0) return;
+    (bucket ? setSubIndex : setTopIndex)(nextUncategorisedIndex);
+  }
+
   const ctx: SortContext<T> = { items, config: activeConfig, statuses, subs };
   const applyState = apply.describe(ctx);
 
@@ -409,7 +497,28 @@ export function GroupingSortModal<T>({
 
   function handleEditorSave(next: ReviewConfig) {
     commitConfig(next);
-    selectConfig(next.id);
+    // Editing mid-sort should keep the cursor where it is — category/sub ids are
+    // preserved across an edit, so in-progress assignments stay valid. Avoid
+    // selectConfig() here: it would reset bucket/topIndex/subIndex to the start.
+    const oldId = activeConfigId;
+    if (next.id !== oldId) {
+      // The editor forked a read-only built-in into a new id. Carry the
+      // in-progress assignments over and switch to the fork without rewinding.
+      setStateByConfig((prev) => {
+        const existing = prev.get(oldId);
+        if (!existing) return prev;
+        const out = new Map(prev);
+        out.set(next.id, {
+          statuses: new Map(existing.statuses),
+          subs: new Map(existing.subs),
+        });
+        return out;
+      });
+      setActiveConfigId(next.id);
+      store.saveLastConfigId(next.id);
+    }
+    // If the category we were refining was deleted in the edit, drop to top level.
+    if (bucket && !next.categories.some((c) => c.id === bucket)) setBucket(null);
     setEditor(null);
   }
 
@@ -609,11 +718,25 @@ export function GroupingSortModal<T>({
               >
                 Next →
               </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-small review-single-skip"
+                onClick={gotoNextUncategorised}
+                disabled={nextUncategorisedIndex < 0}
+                title="Jump to the next item you haven't sorted yet"
+              >
+                Next uncategorised ⇥
+              </button>
             </div>
 
             {renderMedia(current)}
 
-            <div className="review-single-actions">
+            <div
+              className={cn(
+                "review-single-actions",
+                slotItems.length > 10 && "review-single-actions-dense",
+              )}
+            >
               {bucketCategory && slotItems.length === 0 && (
                 <span className="review-single-no-subs">
                   No {terms.sub}s yet — press <kbd>n</kbd> to add one.

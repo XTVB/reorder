@@ -97,6 +97,58 @@
   padding: 2px 8px;
 }
 
+/* Compact dropdown inside a toolbar-group (e.g. Sort Similar mode) */
+.toolbar-select {
+  font-size: 13px;
+  padding: 4px;
+  margin: 0 2px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.toolbar-select:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.toolbar-select:disabled {
+  color: var(--text-muted);
+}
+
+.toolbar-select option {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Compact number input inside a toolbar-group (e.g. Minimal locality) */
+.toolbar-input-number {
+  font-size: 13px;
+  padding: 4px;
+  margin: 0 2px;
+  width: 6ch;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.toolbar-input-number::-webkit-inner-spin-button,
+.toolbar-input-number::-webkit-outer-spin-button {
+  opacity: 1;
+}
+
+.toolbar-input-number:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.toolbar-input-number:disabled {
+  color: var(--text-muted);
+}
+
 /* Overflow menu — kebab trigger + dropdown panel for rare options */
 .overflow-menu {
   position: relative;

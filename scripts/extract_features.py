@@ -60,17 +60,32 @@ CHECKPOINT_SEC = 300  # periodic cache save interval during extraction
 
 
 def _compute_learned_proj(peg_arr, color_arr):
-    """Project (PE-G, color) features through the trained head at ~/.cache/reorder/.
+    """Project (PE-G, color) features through the trained head(s) at ~/.cache/reorder/.
     Returns (proj_array, version_string) or None if no head is installed.
-    PE-G is L2-renormalized before concat (defensive — should already be unit norm
-    but extract paths vary across backends)."""
+
+    Ensemble: cfg["head_files"] lists one or more head weight files (legacy
+    configs without it = single learned_head.pt). Each head's L2-normed
+    projection is one block; blocks are concatenated and scaled by 1/√n_heads,
+    so the rows stay unit-norm and their dot product equals the ensemble-MEAN
+    cosine similarity — the downstream blend needs no changes.
+
+    PE-G is L2-renormalized before concat (defensive — should already be unit
+    norm but extract paths vary across backends)."""
     head_dir = os.environ.get("REORDER_HEAD_DIR", os.path.expanduser("~/.cache/reorder"))
-    head_pt = os.path.join(head_dir, "learned_head.pt")
     head_cfg_path = os.path.join(head_dir, "learned_head.json")
-    if not (os.path.exists(head_pt) and os.path.exists(head_cfg_path)):
+    if not os.path.exists(head_cfg_path):
         return None
     with open(head_cfg_path) as f:
         cfg = json.load(f)
+    head_files = cfg.get("head_files", ["learned_head.pt"])
+    head_paths = [os.path.join(head_dir, hf) for hf in head_files]
+    if not all(os.path.exists(p) for p in head_paths):
+        missing = [p for p in head_paths if not os.path.exists(p)]
+        if head_files == ["learned_head.pt"]:
+            return None  # no head installed at all
+        raise FileNotFoundError(
+            f"learned_head.json lists ensemble heads but {missing} missing — rerun train_final_head.py"
+        )
 
     # Lazy imports — torch is heavy; only pay the cost if we have a head.
     import torch  # noqa: PLC0415
@@ -82,29 +97,39 @@ def _compute_learned_proj(peg_arr, color_arr):
         sys.path.insert(0, refinement_dir)
     from train_projection_head import ProjectionHead  # noqa: PLC0415
 
-    head = ProjectionHead(
-        in_dim=cfg["input_dim_total"],
-        hidden=cfg["hidden"],
-        out_dim=cfg["out_dim"],
-        dropout=cfg.get("dropout", 0.1),
-    )
-    head.load_state_dict(torch.load(head_pt, map_location="cpu", weights_only=True))
-    head.eval()
+    def _l2(a):
+        return a / np.linalg.norm(a, axis=1, keepdims=True).clip(min=1e-8)
 
-    # L2-renormalize PE-G defensively, keep color raw (matches training-time loader).
-    peg = peg_arr.astype(np.float32, copy=False)
-    peg = peg / np.linalg.norm(peg, axis=1, keepdims=True).clip(min=1e-8)
-    feats = np.concatenate([peg, color_arr.astype(np.float32, copy=False)], axis=1)
+    heads = []
+    for p in head_paths:
+        head = ProjectionHead(
+            in_dim=cfg["input_dim_total"],
+            hidden=cfg["hidden"],
+            out_dim=cfg["out_dim"],
+            dropout=cfg.get("dropout", 0.1),
+        )
+        head.load_state_dict(torch.load(p, map_location="cpu", weights_only=True))
+        head.eval()
+        heads.append(head)
+
+    feats = np.concatenate(
+        [_l2(peg_arr.astype(np.float32, copy=False)), color_arr.astype(np.float32, copy=False)],
+        axis=1,
+    )
     assert feats.shape[1] == cfg["input_dim_total"], (
         f"learned_proj input dim mismatch: got {feats.shape[1]}, head expects {cfg['input_dim_total']}"
     )
 
-    out = np.empty((feats.shape[0], cfg["out_dim"]), dtype=np.float32)
-    with torch.no_grad():
-        for i in range(0, feats.shape[0], 512):
-            batch = torch.from_numpy(feats[i:i + 512])
-            out[i:i + 512] = head(batch).numpy()
-    return out, cfg["version"]
+    def _project(head, x):
+        out = np.empty((x.shape[0], cfg["out_dim"]), dtype=np.float32)
+        with torch.no_grad():
+            for i in range(0, x.shape[0], 512):
+                out[i:i + 512] = head(torch.from_numpy(x[i:i + 512])).numpy()
+        return out  # already L2-normed by the head's forward
+
+    blocks = [_project(head, feats) for head in heads]
+    lp = np.concatenate(blocks, axis=1) / np.sqrt(len(blocks))
+    return lp, cfg["version"]
 
 
 def _maybe_update_learned_proj(npz_path):
@@ -140,7 +165,7 @@ def _maybe_update_learned_proj(npz_path):
     arrays = {k: data[k] for k in data.files if k not in ("learned_proj", "_v_learned_proj")}
     arrays["learned_proj"] = lp_arr
     arrays["_v_learned_proj"] = np.array(lp_version)
-    np.savez_compressed(npz_path, **arrays)
+    np.savez(npz_path, **arrays)
     print(f"  learned_proj: updated NPZ ({lp_arr.shape[0]} × {lp_arr.shape[1]}d, head {lp_version})",
           file=sys.stderr)
 
@@ -388,16 +413,23 @@ def _run_pass(items, transform, fallback_hw, batch_size, label, inference_fn,
     """Run batched inference with multi-batch-ahead prefetch.
 
     `inference_fn(batch)` receives a torch.Tensor (already on device for the
-    pytorch path) or a numpy NHWC batch (for the MLX path; signaled by
+    pytorch path) or an mx.array NHWC batch (for the MLX path; signaled by
     `mlx_dtype` being non-None). Must return a numpy float32 array of shape
     (B, dim), already L2-normalized.
+
+    For the MLX path, `transform` must map a PIL image to a numpy HWC float32
+    array — torch is never imported. For the pytorch path it's the usual
+    torchvision Compose producing a CHW tensor.
 
     `ctx` carries shared state: image_dir, interrupted flag, checkpoint timer.
     Respects ctx.interrupted — breaks early.
     """
-    import torch
     from concurrent.futures import ThreadPoolExecutor
     from PIL import Image
+
+    is_mlx = mlx_dtype is not None
+    if not is_mlx:
+        import torch
 
     n = len(items)
     if n == 0:
@@ -413,8 +445,11 @@ def _run_pass(items, transform, fallback_hw, batch_size, label, inference_fn,
                 tensors.append(transform(img))
             except Exception as e:
                 print(f"  WARNING: skipping {fname}: {e}", file=sys.stderr)
-                tensors.append(torch.zeros(3, fallback_hw, fallback_hw))
-        return torch.stack(tensors)
+                if is_mlx:
+                    tensors.append(np.zeros((fallback_hw, fallback_hw, 3), dtype=np.float32))
+                else:
+                    tensors.append(torch.zeros(3, fallback_hw, fallback_hw))
+        return np.stack(tensors) if is_mlx else torch.stack(tensors)
 
     results = []
     t0 = time.time()
@@ -431,7 +466,7 @@ def _run_pass(items, transform, fallback_hw, batch_size, label, inference_fn,
 
         for batch_start in batch_starts:
             batch_end = min(batch_start + batch_size, n)
-            batch_torch = futures.popleft().result()
+            batch_data = futures.popleft().result()
 
             if submitted < len(batch_starts) and not ctx.interrupted:
                 bs = batch_starts[submitted]
@@ -439,11 +474,10 @@ def _run_pass(items, transform, fallback_hw, batch_size, label, inference_fn,
                 futures.append(pool.submit(_prepare_batch, range(bs, be)))
                 submitted += 1
 
-            if mlx_dtype is not None:
-                # MLX path: torch tensor → NHWC numpy → mx.array → model → numpy
+            if is_mlx:
+                # MLX path: NHWC numpy → mx.array → model → numpy
                 import mlx.core as mx
-                np_batch = batch_torch.numpy().transpose(0, 2, 3, 1)
-                mlx_batch = mx.array(np_batch).astype(mlx_dtype)
+                mlx_batch = mx.array(batch_data).astype(mlx_dtype)
                 embs = inference_fn(mlx_batch)
                 mx.eval(embs)
                 embs_np = np.array(embs).astype(np.float32)
@@ -452,7 +486,7 @@ def _run_pass(items, transform, fallback_hw, batch_size, label, inference_fn,
                 results.append(embs_np)
             else:
                 # PyTorch path
-                batch_tensor = batch_torch.to(ctx.device)
+                batch_tensor = batch_data.to(ctx.device)
                 with torch.no_grad():
                     embs = inference_fn(batch_tensor)
                     embs = embs / embs.norm(dim=-1, keepdim=True)
@@ -520,7 +554,7 @@ def extract_open_clip(key, model_name, pretrained, hw, batch_size_eff, label,
 
     if use_mlx_pecore_g:
         import mlx.core as mx
-        from torchvision import transforms
+        from PIL import Image
         mlx_pe_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mlx_pe_core")
         if mlx_pe_dir not in sys.path:
             sys.path.insert(0, mlx_pe_dir)
@@ -533,16 +567,27 @@ def extract_open_clip(key, model_name, pretrained, hw, batch_size_eff, label,
             from convert import convert as _mlx_convert
             _mlx_convert(weights_path, dtype="float32")
 
-        # Verified bit-exact vs open_clip.create_model_and_transforms('PE-Core-bigG-14-448').
-        preprocess = transforms.Compose([
-            transforms.Resize(hw, interpolation=transforms.InterpolationMode.BICUBIC, antialias=True),
-            transforms.CenterCrop(hw),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=(0.48145466, 0.4578275, 0.40821073),
-                std=(0.26862954, 0.26130258, 0.27577711),
-            ),
-        ])
+        # Pure PIL+numpy clone of open_clip's preprocess (Resize shorter side →
+        # CenterCrop → scale → normalize). Verified bit-exact vs torchvision's
+        # Compose — torchvision dispatches PIL inputs to these same PIL calls.
+        # Keeps torch/torchvision out of the MLX path entirely.
+        _mean = np.array((0.48145466, 0.4578275, 0.40821073), dtype=np.float32)
+        _std = np.array((0.26862954, 0.26130258, 0.27577711), dtype=np.float32)
+
+        def preprocess(img, _hw=hw):
+            w, h = img.size
+            # Long-side size truncates (int(), not round()) — torchvision's
+            # _compute_resized_output_size semantics, required for bit-exactness.
+            if w <= h:
+                nw, nh = _hw, int(h * _hw / w)
+            else:
+                nh, nw = _hw, int(w * _hw / h)
+            img = img.resize((nw, nh), Image.BICUBIC)
+            left = int(round((nw - _hw) / 2.0))
+            top = int(round((nh - _hw) / 2.0))
+            img = img.crop((left, top, left + _hw, top + _hw))
+            arr = np.asarray(img, dtype=np.float32) / 255.0  # HWC
+            return (arr - _mean) / _std
         mlx_dtype = getattr(mx, args.pecore_g_mlx_dtype)
         mlx_model = PECoreBigG()
         mlx_model.load_weights(weights_path, strict=False)
@@ -692,12 +737,10 @@ class ExtractCtx:
         import gc
         for o in objs:
             del o
-        try:
+        if "torch" in sys.modules:  # don't pay the import just to clear a cache
             import torch
             if hasattr(torch.mps, "empty_cache"):
                 torch.mps.empty_cache()
-        except ImportError:
-            pass
         gc.collect()
 
 
@@ -853,9 +896,13 @@ def main():
 
     prev_sigint = signal.signal(signal.SIGINT, _handle_sigint)
 
-    # Only import torch if a neural model pass is needed.
-    _neural_keys = {"pecore_g", "dinov3"}
-    if any(items_map[k] for k in _neural_keys):
+    # Only import torch if a pass actually runs on the torch/MPS stack.
+    # PE-Core-G on the (default) MLX backend doesn't need torch at all —
+    # preprocessing is pure PIL+numpy and inference is MLX.
+    _needs_torch = bool(items_map["dinov3"]) or (
+        bool(items_map["pecore_g"]) and args.pecore_g_backend == "pytorch"
+    )
+    if _needs_torch:
         import torch
         ctx.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
         print(f"  Using device: {ctx.device}", file=sys.stderr)
@@ -898,7 +945,10 @@ def main():
 
         _mem_versions[f"_v_{key}"] = np.array(MODEL_VERSIONS[key])
 
-        np.savez_compressed(
+        # Uncompressed savez: float embeddings deflate by only ~20% but cost
+        # ~1s/2.8k images per write, and this runs once per model per run.
+        # np.load reads both formats, so old compressed caches stay valid.
+        np.savez(
             hash_cache_path,
             hashes=np.array(all_h_list),
             **_mem_versions,
@@ -1065,9 +1115,10 @@ def main():
         # No models had any data; build an empty hash list constrained to current.
         final_hash_list = sorted(current_hash_set)
 
-    # Save hash-keyed cache with per-model version keys
+    # Save hash-keyed cache with per-model version keys (uncompressed — see
+    # _save_model_to_cache for rationale)
     version_keys = {f"_v_{k}": np.array(v) for k, v in MODEL_VERSIONS.items() if k in all_arrays}
-    np.savez_compressed(
+    np.savez(
         hash_cache_path,
         hashes=np.array(final_hash_list),
         **version_keys,

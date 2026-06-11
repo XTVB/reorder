@@ -36,6 +36,7 @@ export const SortableCard = React.memo(function SortableCard({
   return (
     <ImageThumb
       filename={image.filename}
+      flipId={image.filename}
       isSelected={isSelected}
       isGhost={isGhost}
       isDragging={isDragging}

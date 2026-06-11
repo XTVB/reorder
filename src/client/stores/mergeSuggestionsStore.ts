@@ -3,10 +3,31 @@ import { consumeSSE, startSSE } from "../api/sse.ts";
 import type { ImageGroup, MergeSuggestionRow, MergeSuggestionsResponse } from "../types.ts";
 import { useSelectionStore } from "./core/selectionStore.ts";
 import { useGroupStore } from "./groupStore.ts";
+import { useListStore } from "./modes/cluster/listStore.ts";
 
 const MAX_PER_GROUP = 8;
 
 export type MergeSortMode = "topMatch" | "groupOrder";
+/** "patches" = DINOv3 patch matching; "embeddings" = weighted CLS-embedding blend. */
+export type MergeMethod = "patches" | "embeddings";
+
+/**
+ * Per-method "Min similarity" slider bounds + default. Embedding-cosine scores
+ * sit higher and span a wider band than patch-match scores (medians observed
+ * ~0.40–0.83), so the embeddings range is wider and shifted up.
+ */
+export const METHOD_THRESHOLDS: Record<
+  MergeMethod,
+  { min: number; max: number; step: number; default: number }
+> = {
+  patches: { min: 0.5, max: 0.8, step: 0.01, default: 0.65 },
+  embeddings: { min: 0.55, max: 0.9, step: 0.01, default: 0.7 },
+};
+
+const clampThreshold = (t: number, method: MergeMethod) => {
+  const { min, max } = METHOD_THRESHOLDS[method];
+  return Math.min(max, Math.max(min, t));
+};
 
 interface MergeSuggestionsState {
   suggestions: MergeSuggestionRow[] | null;
@@ -16,6 +37,7 @@ interface MergeSuggestionsState {
   progress: string | null;
 
   threshold: number;
+  method: MergeMethod;
   fullResolution: boolean;
   maxCombinedSize: number;
   sortMode: MergeSortMode;
@@ -24,6 +46,7 @@ interface MergeSuggestionsState {
   undoStack: ImageGroup[][];
 
   setThreshold: (t: number) => void;
+  setMethod: (m: MergeMethod) => void;
   setFullResolution: (v: boolean) => void;
   setMaxCombinedSize: (n: number) => void;
   setSortMode: (m: MergeSortMode) => void;
@@ -48,7 +71,8 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
   computeTimeMs: null,
   progress: null,
 
-  threshold: 0.65,
+  threshold: METHOD_THRESHOLDS.embeddings.default,
+  method: "embeddings",
   fullResolution: false,
   maxCombinedSize: 40,
   sortMode: "topMatch",
@@ -57,19 +81,25 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
   undoStack: [],
 
   setThreshold: (t) => set({ threshold: t }),
+  // Clamp the threshold into the new method's range so the slider stays valid.
+  setMethod: (m) => set((s) => ({ method: m, threshold: clampThreshold(s.threshold, m) })),
   setFullResolution: (v) => set({ fullResolution: v }),
   setMaxCombinedSize: (n) => set({ maxCombinedSize: Math.max(0, Math.floor(n)) }),
   setSortMode: (m) => set({ sortMode: m }),
 
   fetchSuggestions: async () => {
-    const { threshold, fullResolution, maxCombinedSize } = get();
+    const { threshold, method, fullResolution, maxCombinedSize } = get();
     set({ loading: true, error: null, progress: "Starting..." });
     try {
+      // Embeddings mode reuses the cluster pipeline's per-model weights.
+      const weights = useListStore.getState().weights;
       const start = await startSSE("/api/merge-suggestions", {
         threshold,
         maxPerGroup: MAX_PER_GROUP,
+        method,
         fullResolution,
         maxCombinedSize,
+        weights,
       });
       if (start.kind === "conflict") {
         set({ loading: false, progress: null, error: start.message });

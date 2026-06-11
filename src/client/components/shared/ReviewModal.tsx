@@ -3,14 +3,25 @@ import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useImageStore } from "../../stores/imageStore.ts";
 import type { ImageGroup } from "../../types.ts";
+import { groupsInGalleryOrder, withLockedGroupsInPlace } from "../../utils/groups.ts";
 import { imageUrl, reorderImagesByGroups } from "../../utils/helpers.ts";
 import {
+  assignmentFromTags,
   colorForId,
+  configOwnedTags,
+  explicitGroupTags,
   type ReviewCategory,
+  type ReviewConfig,
   reviewColorVar,
   reviewConfigStore,
 } from "../../utils/reviewConfigs.ts";
-import { GroupingSortModal, type SortContext } from "./GroupingSortModal.tsx";
+import { beginSortTransition } from "../../utils/sortFlip.ts";
+import {
+  GroupingSortModal,
+  type SortContext,
+  type SortState,
+  type SubAssignment,
+} from "./GroupingSortModal.tsx";
 
 interface ReviewModalProps {
   onClose: () => void;
@@ -21,9 +32,27 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
     useGroupStore.getState().groups.map((g) => ({ ...g, images: g.images.slice() })),
   );
 
-  function openGroupLightbox(groupImages: string[], index: number) {
+  // Pre-seed a config's assignments from each group's persisted tags so groups
+  // already bucketed by a previous Apply open on their category/subcategory.
+  function initialStateFor(config: ReviewConfig): SortState {
+    const statuses = new Map<string, string>();
+    const subs = new Map<string, SubAssignment>();
+    for (const g of snapshot) {
+      const a = assignmentFromTags(config, g.tags);
+      if (!a) continue;
+      statuses.set(g.id, a.categoryId);
+      if (a.sub) subs.set(g.id, a.sub);
+    }
+    return { statuses, subs };
+  }
+
+  function groupLightboxItems(groupImages: string[]): string[] {
     const imageMap = useImageStore.getState().imageMap;
-    const items = groupImages.filter((fn) => imageMap.has(fn));
+    return groupImages.filter((fn) => imageMap.has(fn));
+  }
+
+  function openGroupLightbox(groupImages: string[], index: number) {
+    const items = groupLightboxItems(groupImages);
     if (items.length === 0) return;
     useLightboxStore.getState().openLightbox(items, index);
   }
@@ -68,9 +97,29 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
       newOrder.push(...sortBucket(cat, buckets.get(cat.id) ?? []));
     }
 
+    // Replace this config's slice of each group's tags while keeping tags owned
+    // by other configs (see configOwnedTags / explicitGroupTags).
+    const owned = configOwnedTags(config);
+    const tagged = newOrder.map((g) => {
+      const newTags = explicitGroupTags(config, statuses, subs, g.id);
+      const kept = (g.tags ?? []).filter((t) => !owned.has(t));
+      const finalTags = Array.from(new Set([...kept, ...newTags]));
+      if (finalTags.length === 0) {
+        return g.tags && g.tags.length > 0 ? { ...g, tags: undefined } : g;
+      }
+      return { ...g, tags: finalTags };
+    });
+
+    beginSortTransition();
     const { images, imageMap, setImages } = useImageStore.getState();
-    setImages(reorderImagesByGroups(images, imageMap, newOrder));
-    useGroupStore.getState().updateGroups(() => newOrder);
+    // Locked groups keep their current gallery slot; the categorised order
+    // fills in around them.
+    const finalOrder = withLockedGroupsInPlace(
+      groupsInGalleryOrder(useGroupStore.getState().groups, images),
+      tagged,
+    );
+    setImages(reorderImagesByGroups(images, imageMap, finalOrder));
+    useGroupStore.getState().updateGroups(() => finalOrder);
 
     onClose();
   }
@@ -81,6 +130,7 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
       items={snapshot}
       getId={(g) => g.id}
       getName={(g) => g.name}
+      initialStateFor={initialStateFor}
       defaultCategoryId={(cfg) => cfg.defaultCategoryId}
       terms={{ group: "category", sub: "subcategory" }}
       titleText={(b) => (b ? `Refine ${b}` : "Review Groups")}
@@ -116,6 +166,10 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
           )}
         </>
       )}
+      getLightboxTarget={(group) => {
+        const items = groupLightboxItems(group.images);
+        return items.length > 0 ? { filenames: items, index: 0 } : null;
+      }}
       renderMedia={(group) => (
         <div className="review-single-thumbs">
           {group.images.map((fn, i) => (

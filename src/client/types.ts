@@ -12,6 +12,7 @@ export type {
   ExpandResult,
   FolderData,
   FolderGroup,
+  GroupOrderMode,
   ImageGroup,
   ImageInfo,
   ImagesResponse,

@@ -15,7 +15,7 @@ import {
 } from "@dnd-kit/sortable";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useDragHandlers } from "../../hooks/useDragHandlers.ts";
 import { useGridLayout } from "../../hooks/useGridLayout.ts";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts.ts";
@@ -27,6 +27,7 @@ import { useDndStore } from "../../stores/dndStore.ts";
 import { useFolderStore } from "../../stores/folderStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useImageStore } from "../../stores/imageStore.ts";
+import { useSortHistoryStore } from "../../stores/sortHistoryStore.ts";
 import { useTrashStore } from "../../stores/trashStore.ts";
 import { computeGridItems, gridItemId } from "../../utils/gridItems.ts";
 import {
@@ -40,6 +41,7 @@ import {
   toFolderSortId,
   toGroupSortId,
 } from "../../utils/helpers.ts";
+import { captureFlipRects, PEEK_FLIP_MS, playPendingFlip } from "../../utils/sortFlip.ts";
 import { CreateGroupsModal } from "../shared/CreateGroupsModal.tsx";
 import { FolderPopover } from "../shared/FolderPopover.tsx";
 import { GroupPopover } from "../shared/GroupPopover.tsx";
@@ -132,18 +134,76 @@ export function ReorderView() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
+  // ---- ⌥-peek: show the pre-sort order while Option is held ----
+  const previousOrder = useSortHistoryStore((s) => s.previousOrder);
+  const isPeeking = useSortHistoryStore((s) => s.peeking);
+  const peekActive = isPeeking && previousOrder !== null && !folderModeEnabled;
+
+  // The snapshot may reference images deleted since the sort — prune to what
+  // still exists so stale entries don't render broken thumbnails.
+  const peekImages = useMemo(() => {
+    if (!peekActive || !previousOrder) return null;
+    return previousOrder.images.filter((i) => imageMap.has(i.filename));
+  }, [peekActive, previousOrder, imageMap]);
+
+  const peekGroups = useMemo(() => {
+    if (!peekActive || !previousOrder) return null;
+    return previousOrder.groups
+      .map((g) => ({ ...g, images: g.images.filter((fn) => imageMap.has(fn)) }))
+      .filter((g) => g.images.length > 0);
+  }, [peekActive, previousOrder, imageMap]);
+
+  const effectiveImages = peekImages ?? images;
+  const effectiveGroups = peekGroups ?? groups;
+  const effectiveGroupMap = useMemo(
+    () => (peekGroups ? new Map(peekGroups.map((g) => [g.id, g])) : groupMap),
+    [peekGroups, groupMap],
+  );
+
+  // Hold ⌥ (without other interactions in flight) to compare against the
+  // order from before the last sort; release to snap back. Both directions
+  // play a quick FLIP so groups visibly slide between the two arrangements.
+  useEffect(() => {
+    if (!previousOrder || folderModeEnabled) return;
+    function startPeek(e: KeyboardEvent) {
+      if (e.key !== "Alt" || e.repeat) return;
+      if (useSortHistoryStore.getState().peeking) return;
+      if (useLightboxStore.getState().open) return;
+      if (Object.values(useModalStore.getState().open).some(Boolean)) return;
+      if (useSessionStore.getState().slideshow.open) return;
+      if (useDndStore.getState().activeId !== null) return;
+      captureFlipRects(PEEK_FLIP_MS);
+      useSortHistoryStore.getState().setPeeking(true);
+    }
+    function endPeek(e: Event) {
+      if (e instanceof KeyboardEvent && e.key !== "Alt") return;
+      if (!useSortHistoryStore.getState().peeking) return;
+      captureFlipRects(PEEK_FLIP_MS);
+      useSortHistoryStore.getState().setPeeking(false);
+    }
+    window.addEventListener("keydown", startPeek);
+    window.addEventListener("keyup", endPeek);
+    window.addEventListener("blur", endPeek);
+    return () => {
+      window.removeEventListener("keydown", startPeek);
+      window.removeEventListener("keyup", endPeek);
+      window.removeEventListener("blur", endPeek);
+      useSortHistoryStore.getState().setPeeking(false);
+    };
+  }, [previousOrder, folderModeEnabled]);
+
   // ---- Computed grid ----
   const gridItems = useMemo(
     () =>
       computeGridItems(
-        images,
+        effectiveImages,
         folderModeEnabled
           ? { mode: "folders", folders, expandedFolderName }
-          : { mode: "groups", groups, enabled: groupsEnabled, expandedGroupId },
+          : { mode: "groups", groups: effectiveGroups, enabled: groupsEnabled, expandedGroupId },
       ),
     [
-      images,
-      groups,
+      effectiveImages,
+      effectiveGroups,
       groupsEnabled,
       expandedGroupId,
       folders,
@@ -151,6 +211,13 @@ export function ReorderView() {
       expandedFolderName,
     ],
   );
+
+  // Replay a captured FLIP snapshot (sort apply / ⌥-peek toggle) once the
+  // reordered grid is in the DOM, before paint. No-op without a capture.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: gridItems is the trigger — the flip must replay after the reordered grid renders
+  useLayoutEffect(() => {
+    playPendingFlip();
+  }, [gridItems]);
   const gridIds = useMemo(() => gridItems.map(gridItemId), [gridItems]);
 
   const handleImageSelect = useCallback(
@@ -410,7 +477,17 @@ export function ReorderView() {
                 onScrollToRow={scrollToRow}
                 columnCount={columnCount}
               />
-              <div ref={scrollContainerRef} className="grid-scroll-container">
+              {peekActive && (
+                <div className="sort-peek-banner">
+                  Order before last sort — release <kbd>⌥</kbd> to return
+                </div>
+              )}
+              <div
+                ref={scrollContainerRef}
+                className={
+                  peekActive ? "grid-scroll-container grid-peeking" : "grid-scroll-container"
+                }
+              >
                 <div ref={measureRowRef} className="grid-measure-row" aria-hidden />
                 <div style={{ height: totalHeight, width: "100%", position: "relative" }}>
                   {virtualRows.map((virtualRow) => {
@@ -485,7 +562,7 @@ export function ReorderView() {
                           }
 
                           if (item.type === "group") {
-                            const group = groupMap.get(item.groupId);
+                            const group = effectiveGroupMap.get(item.groupId);
                             if (!group) return null;
                             const gid = item.groupId;
                             const isExp = expandedGroupId === gid;

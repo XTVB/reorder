@@ -9,6 +9,7 @@ import { useSelectionStore } from "./core/selectionStore.ts";
 import { useSessionStore } from "./core/sessionStore.ts";
 import { useToastStore } from "./core/toastStore.ts";
 import { useImageStore } from "./imageStore.ts";
+import { useSortHistoryStore } from "./sortHistoryStore.ts";
 import { useTrashStore } from "./trashStore.ts";
 
 const GROUPS_ENABLED_KEY = "reorder-groups-enabled";
@@ -41,11 +42,18 @@ interface GroupState {
 
   // Hoisted business actions (previously closures in useGroupOperations / App.tsx)
   createGroupFromSelection: () => void;
+  createGroupFromSelectionAutoNamed: () => void;
   addImagesToGroup: (groupId: string, filenames: string[]) => void;
   reorderGroup: (groupId: string, newOrder: string[]) => void;
   removeFromGroup: (groupId: string, filename: string) => void;
   renameGroupPrompt: (groupId: string) => void;
   deleteGroup: (groupId: string) => void;
+  /**
+   * Toggle the sort lock on the given groups: locks all of them unless every
+   * one is already locked, in which case all are unlocked. Locked groups keep
+   * their gallery slot when a sort is applied.
+   */
+  toggleGroupsLocked: (groupIds: string[]) => void;
 
   saveRenames: () => Promise<void>;
   applyOrganize: () => Promise<void>;
@@ -53,6 +61,32 @@ interface GroupState {
 
 function deriveGroupMap(groups: ImageGroup[]) {
   return new Map(groups.map((g) => [g.id, g]));
+}
+
+// Shared body for the create-group actions: consolidates the selection into a
+// contiguous block, appends a new group with `name`, and clears the selection.
+function createGroupWithName(get: () => GroupState, name: string) {
+  const sel = useSelectionStore.getState();
+  const selectedIds = sel.contexts.reorder;
+  if (selectedIds.size === 0) return;
+
+  const { images, setImages } = useImageStore.getState();
+  const id = crypto.randomUUID();
+  const selectedInOrder = images.filter((i) => selectedIds.has(i.filename)).map((i) => i.filename);
+
+  setImages(consolidateBlock(images, selectedIds));
+  get().updateGroups((prev) => appendNewGroup(prev, { id, name, images: selectedInOrder }));
+  sel.clear("reorder");
+}
+
+// Next "Cluster N" name based on existing auto-named groups (max + 1, starting at 1).
+function nextClusterName(groups: ImageGroup[]) {
+  let max = 0;
+  for (const g of groups) {
+    const m = /^Cluster (\d+)$/.exec(g.name.trim());
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `Cluster ${max + 1}`;
 }
 
 export const useGroupStore = create<GroupState>((set, get) => ({
@@ -108,23 +142,13 @@ export const useGroupStore = create<GroupState>((set, get) => ({
   },
 
   createGroupFromSelection: () => {
-    const sel = useSelectionStore.getState();
-    const selectedIds = sel.contexts.reorder;
-    if (selectedIds.size === 0) return;
     const name = prompt("Enter group name:");
     if (!name?.trim()) return;
+    createGroupWithName(get, name.trim());
+  },
 
-    const { images, setImages } = useImageStore.getState();
-    const id = crypto.randomUUID();
-    const selectedInOrder = images
-      .filter((i) => selectedIds.has(i.filename))
-      .map((i) => i.filename);
-
-    setImages(consolidateBlock(images, selectedIds));
-    get().updateGroups((prev) =>
-      appendNewGroup(prev, { id, name: name.trim(), images: selectedInOrder }),
-    );
-    sel.clear("reorder");
+  createGroupFromSelectionAutoNamed: () => {
+    createGroupWithName(get, nextClusterName(get().groups));
   },
 
   addImagesToGroup: (groupId, filenames) => {
@@ -187,6 +211,29 @@ export const useGroupStore = create<GroupState>((set, get) => ({
     if (expandedGroupId === groupId) collapseGroup();
   },
 
+  toggleGroupsLocked: (groupIds) => {
+    const { groupMap, updateGroups } = get();
+    const targets = groupIds.filter((id) => groupMap.has(id));
+    if (targets.length === 0) return;
+    const lock = !targets.every((id) => groupMap.get(id)!.locked);
+    const idSet = new Set(targets);
+    updateGroups((prev) =>
+      prev.map((g) => {
+        if (!idSet.has(g.id) || Boolean(g.locked) === lock) return g;
+        // `undefined` rather than `false` keeps the persisted JSON clean.
+        return { ...g, locked: lock ? true : undefined };
+      }),
+    );
+    useToastStore
+      .getState()
+      .showToast(
+        lock
+          ? `Locked ${targets.length} group${targets.length === 1 ? "" : "s"} — kept in place when sorting`
+          : `Unlocked ${targets.length} group${targets.length === 1 ? "" : "s"}`,
+        "success",
+      );
+  },
+
   saveRenames: async () => {
     const session = useSessionStore.getState();
     const modal = useModalStore.getState();
@@ -208,6 +255,8 @@ export const useGroupStore = create<GroupState>((set, get) => ({
       if (!data.success) throw new Error("Rename failed");
       const renames = (data.renames ?? []) as RenameMapping[];
       useTrashStore.getState().remap(renames);
+      // Filenames just changed on disk — the pre-sort ⌥-peek snapshot is stale.
+      useSortHistoryStore.getState().clearPreviousOrder();
       if (data.warnings && data.warnings.length > 0) {
         showToast(`Files renamed (${data.warnings.length} warning(s))`, "warning");
       } else {
@@ -239,6 +288,7 @@ export const useGroupStore = create<GroupState>((set, get) => ({
       });
       get().updateGroups(() => []);
       get().collapseGroup();
+      useSortHistoryStore.getState().clearPreviousOrder();
       showToast("Files organized into folders", "success");
       await Promise.all([fetchImages(), session.checkUndo()]);
     } catch (err) {

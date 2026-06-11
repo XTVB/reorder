@@ -52,11 +52,16 @@ export function CreateGroupsModal({ onClose }: CreateGroupsModalProps) {
       .filter((fn) => !grouped.has(fn));
   });
 
-  function openImageLightbox(filtered: string[], current: string) {
+  function imageLightboxTarget(current: string): { filenames: string[]; index: number } | null {
     const imageMap = useImageStore.getState().imageMap;
-    const items = filtered.filter((fn) => imageMap.has(fn));
-    if (items.length === 0) return;
-    useLightboxStore.getState().openLightbox(items, Math.max(0, items.indexOf(current)));
+    const items = snapshot.filter((fn) => imageMap.has(fn));
+    const index = items.indexOf(current);
+    return index >= 0 ? { filenames: items, index } : null;
+  }
+
+  function openImageLightbox(current: string) {
+    const target = imageLightboxTarget(current);
+    if (target) useLightboxStore.getState().openLightbox(target.filenames, target.index);
   }
 
   function applyCreate(ctx: SortContext<string>) {
@@ -133,13 +138,10 @@ export function CreateGroupsModal({ onClose }: CreateGroupsModalProps) {
           "unassigned"
         )
       }
+      getLightboxTarget={(fn) => imageLightboxTarget(fn)}
       renderMedia={(fn) => (
         <div className="cg-single-image">
-          <button
-            type="button"
-            onClick={() => openImageLightbox(snapshot, fn)}
-            aria-label={`Open ${fn}`}
-          >
+          <button type="button" onClick={() => openImageLightbox(fn)} aria-label={`Open ${fn}`}>
             <img src={fullImageUrl(fn)} alt="" loading="lazy" draggable={false} />
           </button>
         </div>

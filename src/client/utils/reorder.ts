@@ -102,6 +102,38 @@ export function consolidateBlock(images: ImageInfo[], filenames: Set<string>): I
   return out;
 }
 
+/**
+ * Rewrite the slots occupied by `orderedSubset` members so they appear in
+ * `orderedSubset` order; every other item keeps its position. Subset entries
+ * missing from `items` are ignored, so a partial ordering (e.g. images
+ * without embeddings dropped server-side) leaves the uncovered items alone.
+ */
+export function reorderSubsetWithinSlots(items: string[], orderedSubset: string[]): string[] {
+  const present = new Set(items);
+  const queue: string[] = [];
+  const covered = new Set<string>();
+  for (const it of orderedSubset) {
+    if (present.has(it) && !covered.has(it)) {
+      queue.push(it);
+      covered.add(it);
+    }
+  }
+  let q = 0;
+  return items.map((it) => (covered.has(it) ? queue[q++]! : it));
+}
+
+/** `reorderSubsetWithinSlots` over the gallery's ImageInfo array. */
+export function reorderImagesWithinSlots(
+  images: ImageInfo[],
+  orderedFilenames: string[],
+): ImageInfo[] {
+  const byName = new Map(images.map((i) => [i.filename, i]));
+  return reorderSubsetWithinSlots(
+    images.map((i) => i.filename),
+    orderedFilenames,
+  ).map((fn) => byName.get(fn)!);
+}
+
 export function repositionBlock(imgs: ImageInfo[], orderedFilenames: string[]): ImageInfo[] {
   const set = new Set(orderedFilenames);
   const imgMap = new Map(imgs.map((i) => [i.filename, i]));

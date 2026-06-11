@@ -19,11 +19,15 @@ export {
 } from "./distance-matrices.ts";
 export type { ModelEmbedding, ModelKey } from "./embeddings.ts";
 export {
+  activeModelsFromWeights,
   cachedHashMapping,
+  l2Norm,
   loadModelEmbedding,
   MODEL_KEYS,
   ModelMissingError,
 } from "./embeddings.ts";
+export { orderGroupsBySimilarity } from "./group-ordering.ts";
+export { orderImagesBySimilarity } from "./image-ordering.ts";
 export {
   buildImportedResult,
   clearImportedClusters,
@@ -37,7 +41,7 @@ export {
   setClusterJobRunning,
 } from "./job-mutex.ts";
 export { removeLinkageTree } from "./linkage.ts";
-export { computeMergeSuggestions } from "./merge-suggestions.ts";
+export { computeMergeSuggestions, type MergeMethod } from "./merge-suggestions.ts";
 export {
   extractFeatures,
   runFullCluster,

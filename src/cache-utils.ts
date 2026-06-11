@@ -70,6 +70,13 @@ export function parseNpyFromNpz(npzBuf: Buffer, entryName: string): Float32Array
   const data = extractNpyEntry(npzBuf, entryName);
   const headerLen = data.readUInt16LE(8);
   const arrayData = data.subarray(10 + headerLen);
+  if (arrayData.byteOffset % 4 !== 0) {
+    // STORED (uncompressed) entries are views into the zip buffer at arbitrary
+    // offsets; Float32Array requires 4-byte alignment, so copy in that case.
+    return new Float32Array(
+      arrayData.buffer.slice(arrayData.byteOffset, arrayData.byteOffset + arrayData.byteLength),
+    );
+  }
   return new Float32Array(arrayData.buffer, arrayData.byteOffset, arrayData.byteLength / 4);
 }
 

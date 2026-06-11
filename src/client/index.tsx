@@ -31,6 +31,7 @@ import {
   useMetricsStore,
   useSplitStore,
 } from "./stores/modes/cluster/index.ts";
+import { useSortHistoryStore } from "./stores/sortHistoryStore.ts";
 import { useTrashStore } from "./stores/trashStore.ts";
 
 // Expose all stores on window for console access / debugging
@@ -51,6 +52,7 @@ import { useTrashStore } from "./stores/trashStore.ts";
   mergeSuggestions: useMergeSuggestionsStore,
   constraints: useConstraintsStore,
   trash: useTrashStore,
+  sortHistory: useSortHistoryStore,
 };
 
 function AppShell() {

@@ -100,12 +100,39 @@ export function colorForId(id: string, index: number): string {
   return KNOWN_COLORS[id] ?? PALETTE[index % PALETTE.length]!;
 }
 
-// Number-key shortcuts: 1..9 then 0 for slot 10. Slots beyond 10 have no key.
+// Number-key shortcuts. Two bands of ten:
+//   slots 0..9  → 1..9 then 0
+//   slots 10..19 → ⇧1..⇧9 then ⇧0
+// Slots beyond 20 have no key.
+const SLOT_DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+
 export function shortcutForSlot(slot: number): string | null {
-  if (slot < 0) return null;
-  if (slot < 9) return String(slot + 1);
-  if (slot === 9) return "0";
-  return null;
+  if (slot < 0 || slot >= 20) return null;
+  const digit = SLOT_DIGITS[slot % 10]!;
+  return slot < 10 ? digit : `⇧${digit}`;
+}
+
+// Maps a digit-row code ("Digit1".."Digit9","Digit0") to its 0-based position.
+// Using `code` (not `key`) keeps this layout-robust and survives Shift turning
+// "1" into "!".
+const DIGIT_CODE_SLOT: Record<string, number> = {
+  Digit1: 0,
+  Digit2: 1,
+  Digit3: 2,
+  Digit4: 3,
+  Digit5: 4,
+  Digit6: 5,
+  Digit7: 6,
+  Digit8: 7,
+  Digit9: 8,
+  Digit0: 9,
+};
+
+/** Resolve a keydown to a slot index, or null if it isn't a slot shortcut. */
+export function slotForKeyEvent(e: { code: string; shiftKey: boolean }): number | null {
+  const base = DIGIT_CODE_SLOT[e.code];
+  if (base === undefined) return null;
+  return e.shiftKey ? base + 10 : base;
 }
 
 export function isValidConfig(c: unknown): c is ReviewConfig {
@@ -241,6 +268,75 @@ export const createGroupsConfigStore = makeConfigStore({
   lastIdKey: "reorder.lastCreateGroupsConfigId",
   builtin: CREATE_GROUPS_BUILTIN_CONFIG,
 });
+
+// Tags to persist on a group from its *explicit* bucket assignment in a
+// grouping sort. Untouched groups (no explicit category/sub — even if Apply
+// sorts them into the default category) yield no tags, so a partial
+// categorisation can be resumed by finding the still-untagged groups.
+//
+//   category only       → ["Keep"]
+//   category + sub       → ["Keep", "Keep - Top"]
+//   nothing assigned     → []
+//
+// A group may carry a sub assignment without an explicit category status (it
+// was refined while sitting in a default-category bucket); the sub's own
+// categoryId supplies the category in that case.
+export function explicitGroupTags(
+  config: ReviewConfig,
+  statuses: Map<string, string>,
+  subs: Map<string, { categoryId: string; subId: string }>,
+  groupId: string,
+): string[] {
+  const sub = subs.get(groupId);
+  const categoryId = statuses.get(groupId) ?? sub?.categoryId;
+  if (!categoryId) return [];
+  const category = config.categories.find((c) => c.id === categoryId);
+  if (!category) return [];
+  const tags = [category.label];
+  if (sub && sub.categoryId === category.id) {
+    const subcategory = category.subcategories.find((s) => s.id === sub.subId);
+    if (subcategory) tags.push(`${category.label} - ${subcategory.label}`);
+  }
+  return tags;
+}
+
+// Every tag string a config can emit: each category label, plus "Category -
+// Sub" for each subcategory. On Apply a config replaces *its own* slice of a
+// group's tags (recomputed from the current assignment) while leaving tags
+// owned by other configs intact — so changing a previously-matching tag
+// replaces it, but categorisations from different schemes still accumulate.
+export function configOwnedTags(config: ReviewConfig): Set<string> {
+  const out = new Set<string>();
+  for (const c of config.categories) {
+    out.add(c.label);
+    for (const s of c.subcategories) out.add(`${c.label} - ${s.label}`);
+  }
+  return out;
+}
+
+// Reverse of explicitGroupTags: recover the (category, optional sub) a group
+// was bucketed into from its persisted tags, matched against `config` by
+// label. Returns the first category whose label appears in the tags, or null
+// if none do. Used to pre-seed a grouping sort from existing tags.
+export function assignmentFromTags(
+  config: ReviewConfig,
+  tags: string[] | undefined,
+): { categoryId: string; sub?: { categoryId: string; subId: string } } | null {
+  if (!tags || tags.length === 0) return null;
+  const tagSet = new Set(tags);
+  for (const cat of config.categories) {
+    if (!tagSet.has(cat.label)) continue;
+    let sub: { categoryId: string; subId: string } | undefined;
+    for (const s of cat.subcategories) {
+      if (tagSet.has(`${cat.label} - ${s.label}`)) {
+        sub = { categoryId: cat.id, subId: s.id };
+        break;
+      }
+    }
+    return { categoryId: cat.id, sub };
+  }
+  return null;
+}
 
 export function makeId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID()}`;

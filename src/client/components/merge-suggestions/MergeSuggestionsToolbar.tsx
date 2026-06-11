@@ -1,4 +1,8 @@
-import type { MergeSortMode } from "../../stores/mergeSuggestionsStore.ts";
+import {
+  METHOD_THRESHOLDS,
+  type MergeMethod,
+  type MergeSortMode,
+} from "../../stores/mergeSuggestionsStore.ts";
 
 interface Props {
   threshold: number;
@@ -8,10 +12,12 @@ interface Props {
   suggestionCount: number;
   pendingCount: number;
   canUndo: boolean;
+  method: MergeMethod;
   fullResolution: boolean;
   maxCombinedSize: number;
   sortMode: MergeSortMode;
   onThresholdChange: (t: number) => void;
+  onMethodChange: (m: MergeMethod) => void;
   onFullResolutionChange: (v: boolean) => void;
   onMaxCombinedSizeChange: (n: number) => void;
   onSortModeChange: (m: MergeSortMode) => void;
@@ -32,10 +38,12 @@ export function MergeSuggestionsToolbar({
   suggestionCount,
   pendingCount,
   canUndo,
+  method,
   fullResolution,
   maxCombinedSize,
   sortMode,
   onThresholdChange,
+  onMethodChange,
   onFullResolutionChange,
   onMaxCombinedSizeChange,
   onSortModeChange,
@@ -54,32 +62,54 @@ export function MergeSuggestionsToolbar({
           {loading ? "Computing..." : "Compute"}
         </button>
 
-        <div className="merge-method-toggle">
+        <div
+          className="merge-method-toggle"
+          title="Patches: DINOv3 patch matching. Embeddings: weighted blend of PE-G + color + learned-head (uses the same model weights as Cluster mode)."
+        >
           <button
-            className={`btn btn-small ${!fullResolution ? "btn-active" : ""}`}
-            onClick={() => onFullResolutionChange(false)}
+            className={`btn btn-small ${method === "patches" ? "btn-active" : ""}`}
+            onClick={() => onMethodChange("patches")}
             disabled={loading}
-            title="7x7 averaged patches — fast (~20s)"
           >
-            Fast
+            Patches
           </button>
           <button
-            className={`btn btn-small ${fullResolution ? "btn-active" : ""}`}
-            onClick={() => onFullResolutionChange(true)}
+            className={`btn btn-small ${method === "embeddings" ? "btn-active" : ""}`}
+            onClick={() => onMethodChange("embeddings")}
             disabled={loading}
-            title="14x14 full-resolution patches — slower (~4 min) but slightly more accurate"
           >
-            Full-res
+            Embeddings
           </button>
         </div>
+
+        {method === "patches" && (
+          <div className="merge-method-toggle">
+            <button
+              className={`btn btn-small ${!fullResolution ? "btn-active" : ""}`}
+              onClick={() => onFullResolutionChange(false)}
+              disabled={loading}
+              title="7x7 averaged patches — fast (~20s)"
+            >
+              Fast
+            </button>
+            <button
+              className={`btn btn-small ${fullResolution ? "btn-active" : ""}`}
+              onClick={() => onFullResolutionChange(true)}
+              disabled={loading}
+              title="14x14 full-resolution patches — slower (~4 min) but slightly more accurate"
+            >
+              Full-res
+            </button>
+          </div>
+        )}
 
         <label className="merge-threshold-control">
           <span className="merge-threshold-label">Min similarity</span>
           <input
             type="range"
-            min="0.50"
-            max="0.80"
-            step="0.01"
+            min={METHOD_THRESHOLDS[method].min}
+            max={METHOD_THRESHOLDS[method].max}
+            step={METHOD_THRESHOLDS[method].step}
             value={threshold}
             onChange={(e) => onThresholdChange(parseFloat(e.target.value))}
             disabled={loading}

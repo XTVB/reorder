@@ -540,6 +540,8 @@ dependencies = [
 name = "reorder-common"
 version = "0.1.0"
 dependencies = [
+ "ndarray",
+ "ndarray-npy",
  "serde",
  "serde_json",
 ]

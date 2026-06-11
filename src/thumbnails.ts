@@ -3,8 +3,8 @@ import { mkdir, readdir, rm, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import sharp from "sharp";
 import {
-  cacheDir,
   CONTENT_HASHES_FILE,
+  cacheDir,
   DINOV3_PATCHES_FILE,
   DINOV3_PATCHES_FULL_FILE,
   DINOV3_PATCHES_HASHES_FILE,

@@ -30,6 +30,33 @@
   z-index: 150;
 }
 
+/* ⌥-peek: grid shows the pre-sort order — block interactions while comparing */
+.grid-peeking {
+  pointer-events: none;
+}
+
+.sort-peek-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.sort-peek-banner kbd {
+  font-family: inherit;
+  color: var(--accent);
+}
+
 /* Hidden measuring row — in normal flow so it gets the same content width as real rows.
    height:0 + overflow:hidden collapses it visually; grid tracks still resolve along the
    width axis so getComputedStyle().gridTemplateColumns is correct. */

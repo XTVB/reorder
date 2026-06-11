@@ -77,9 +77,15 @@ class Dataset:
     # (N,) bool marking rows with real augmented data; the rest fall back to original.
     views_features: torch.Tensor | None = None
     views_valid_mask: torch.Tensor | None = None
+    # Shoot context: mean feature vector over ALL images of this dataset
+    # (labels not used — computable on an unlabeled folder at inference).
+    # Appended to every input row when --shoot-context is on.
+    context: torch.Tensor | None = None
 
 
-def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False, use_augmented_views: bool = False) -> Dataset:
+def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False,
+                 use_augmented_views: bool = False, pe_layer: str | None = None,
+                 use_global_color: bool = False) -> Dataset:
     target_dir = os.path.abspath(target_dir)
     cache = os.path.join(target_dir, ".reorder-cache")
     npz_path = os.path.join(cache, "embeddings_hash_cache.npz")
@@ -114,6 +120,29 @@ def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False, u
     peg /= np.linalg.norm(peg, axis=1, keepdims=True).clip(min=1e-8)
     parts = [peg, col]
 
+    if use_global_color:
+        # Global (un-gridded) 77-d color histograms from the extract_global_color.py
+        # sidecar, concatenated directly after the 3x3 grid color so the two form one
+        # contiguous color slice — drop-color augmentation must zero both (a live
+        # global histogram would leak most of what drop-color removes). Kept raw,
+        # same as grid color. NOTE: pixel-aug views carry augmented grid color only;
+        # the global block rides along un-augmented (stitched via the extra-dim path).
+        gc_path = os.path.join(cache, "global_color_cache.npz")
+        if not os.path.exists(gc_path):
+            sys.exit(f"[{name}] --global-color: {gc_path} missing "
+                     f"(run extract_global_color.py --datasets {name})")
+        gz = np.load(gc_path, allow_pickle=False)
+        g_hash_to_row = {h: i for i, h in enumerate(gz["hashes"].tolist())}
+        gcol_hash = gz["color_global"]    # (M, 77)
+        gcol = np.empty((n, gcol_hash.shape[1]), dtype=np.float32)
+        for i, fn in enumerate(filenames):
+            row = g_hash_to_row.get(content_hashes[fn])
+            if row is None:
+                sys.exit(f"[{name}] --global-color: hash for {fn} missing from sidecar "
+                         f"— re-extract (extract_global_color.py --datasets {name} --force)")
+            gcol[i] = gcol_hash[row]
+        parts.append(gcol)
+
     if use_dinov3_patches:
         patches_path = os.path.join(cache, "dinov3_patches_hash_cache.npy")
         patches_hashes_path = os.path.join(cache, "dinov3_patches_hashes.json")
@@ -140,6 +169,26 @@ def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False, u
             print(f"  [{name}] WARN: {missing} images missing dinov3 patches (zero-filled)", file=sys.stderr)
         dino /= np.linalg.norm(dino, axis=1, keepdims=True).clip(min=1e-8)
         parts.append(dino)
+
+    if pe_layer:
+        # Intermediate PE-G layer features ("<layer>:<pool>", e.g. "47:attnpool"),
+        # extracted by run_pe_layer_extraction.sh, row-aligned to npz hash order.
+        lno, pool = pe_layer.split(":")
+        pl_path = os.path.join(cache, f"pe_layers_L{int(lno):02d}_{pool}.npy")
+        if not os.path.exists(pl_path):
+            sys.exit(f"[{name}] --pe-layer: {pl_path} missing (run run_pe_layer_extraction.sh)")
+        pl_hash = np.load(pl_path)
+        if pl_hash.shape[0] != len(hashes):
+            sys.exit(f"[{name}] --pe-layer: stale extraction ({pl_hash.shape[0]} rows vs "
+                     f"{len(hashes)} npz hashes) — wipe pe_layers_* and re-extract")
+        pl = np.empty((n, pl_hash.shape[1]), dtype=np.float32)
+        for i, fn in enumerate(filenames):
+            pl[i] = pl_hash[hash_to_row[content_hashes[fn]]]
+        zero_rows = int((np.abs(pl).sum(axis=1) == 0).sum())
+        if zero_rows:
+            print(f"  [{name}] WARN: {zero_rows} zero pe_layer rows", file=sys.stderr)
+        pl /= np.linalg.norm(pl, axis=1, keepdims=True).clip(min=1e-8)
+        parts.append(pl)
 
     features = np.concatenate(parts, axis=1)
 
@@ -182,13 +231,14 @@ def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False, u
                 # the original (training will still see the augmented PE-G+color
                 # combined with the un-augmented dinov3 if it's enabled).
                 view_pegcol = np.concatenate([peg_v, col_v], axis=2)  # (N, K, 1973)
-                if use_dinov3_patches:
-                    # Stitch in the original dinov3 (shared across all K views).
-                    # features has order: [peg(1280), color(693), dino(...)]
-                    dino_dim = features.shape[1] - 1280 - 693
-                    dino_per_image = features[:, 1280 + 693:].reshape(n, 1, dino_dim)
-                    dino_tile = np.broadcast_to(dino_per_image, (n, peg_v.shape[1], dino_dim))
-                    view_full = np.concatenate([view_pegcol, dino_tile], axis=2)
+                extra_dim = features.shape[1] - 1280 - 693
+                if extra_dim > 0:
+                    # Stitch in the un-augmented extra blocks (global_color,
+                    # dinov3 and/or pe_layer), shared across all K views.
+                    # features order: [peg(1280), color(693), global_color?, dino?, pe_layer?]
+                    extra_per_image = features[:, 1280 + 693:].reshape(n, 1, extra_dim)
+                    extra_tile = np.broadcast_to(extra_per_image, (n, peg_v.shape[1], extra_dim))
+                    view_full = np.concatenate([view_pegcol, extra_tile], axis=2)
                 else:
                     view_full = view_pegcol
                 views_features = torch.from_numpy(view_full.astype(np.float32))
@@ -214,6 +264,7 @@ def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False, u
         group_id=group_id,
         views_features=views_features,
         views_valid_mask=views_valid_mask,
+        context=torch.from_numpy(features.mean(axis=0)),
     )
 
 
@@ -733,10 +784,19 @@ class PKSampler:
 
 def project_all(head: ProjectionHead, ds: Dataset, device, batch_size: int = 512) -> torch.Tensor:
     head.eval()
+    # Self-detect shoot-context heads: if the head's input is wider than the
+    # per-image features, the remainder is the dataset-mean context block.
+    ctx_dim = head.in_norm.dim - ds.features.shape[1]
+    assert ctx_dim == 0 or (ds.context is not None and ctx_dim == ds.context.shape[0]), (
+        f"head expects {head.in_norm.dim} dims, features are {ds.features.shape[1]}"
+    )
     out = []
     with torch.no_grad():
         for i in range(0, ds.features.shape[0], batch_size):
             batch = ds.features[i:i + batch_size].to(device)
+            if ctx_dim:
+                batch = torch.cat(
+                    [batch, ds.context.to(device).expand(len(batch), -1)], dim=1)
             out.append(head(batch).cpu())
     head.train()
     return torch.cat(out, dim=0)  # (N, out_dim)
@@ -861,6 +921,19 @@ def main():
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--use-dinov3-patches", action="store_true",
                     help="concatenate flattened 7x7 DINOv3 patches (49*768=37632d) to input")
+    ap.add_argument("--pe-layer", default=None,
+                    help='intermediate PE-G layer head input as "<layer>:<pool>" '
+                         '(e.g. "47:attnpool"); needs pe_layers_* extracted on every dataset')
+    ap.add_argument("--global-color", action="store_true",
+                    help="concatenate the 77-d global (un-gridded) color histogram to the "
+                         "input alongside the 3x3 grid color; needs global_color_cache.npz "
+                         "sidecars (extract_global_color.py) on every dataset")
+    ap.add_argument("--shoot-context", action="store_true",
+                    help="append the dataset-mean feature vector to every input row, "
+                         "letting the head condition its metric on the shoot")
+    ap.add_argument("--ctx-dropout", type=float, default=0.3,
+                    help="per-sample prob of zeroing the context block during training "
+                         "(guards against overfitting the ~25 distinct context vectors)")
     ap.add_argument("--use-augmented-views", action="store_true",
                     help="load pre-extracted augmented views and sample randomly per image during training")
     ap.add_argument("--mixup-alpha", type=float, default=0.0,
@@ -935,10 +1008,15 @@ def main():
     datasets: dict[str, Dataset] = {}
     for name, d in args.dataset:
         print(f"loading dataset {name} from {d}", file=sys.stderr)
-        datasets[name] = load_dataset(name, d, use_dinov3_patches=args.use_dinov3_patches, use_augmented_views=args.use_augmented_views)
+        datasets[name] = load_dataset(name, d, use_dinov3_patches=args.use_dinov3_patches,
+                                      use_augmented_views=args.use_augmented_views,
+                                      pe_layer=args.pe_layer,
+                                      use_global_color=args.global_color)
     in_dim = next(iter(datasets.values())).features.shape[1]
     for ds in datasets.values():
         assert ds.features.shape[1] == in_dim
+    if args.shoot_context:
+        in_dim += next(iter(datasets.values())).context.shape[0]
 
     # Split training sets
     train_names = args.train
@@ -978,6 +1056,7 @@ def main():
     # neighbor pools — saves a host→device copy of ~3MB of features per batch.
     for ds in datasets.values():
         ds.features = ds.features.to(device)
+        ds.context = ds.context.to(device)
         if ds.views_features is not None:
             ds.views_features = ds.views_features.to(device)
             ds.views_valid_mask = ds.views_valid_mask.to(device)
@@ -1109,7 +1188,9 @@ def main():
                     drop_peg_prob=args.drop_peg_prob,
                     feature_dropout=args.feature_dropout,
                     feature_noise=args.feature_noise,
-                    peg_dim=1280, color_dim=693,
+                    # With --global-color the color slice is grid(693) ⊕ global(77),
+                    # contiguous — drop-color zeroes both.
+                    peg_dim=1280, color_dim=693 + (77 if args.global_color else 0),
                     mixup_end=n_group if has_singletons else None,
                     mixup_lam=mixup_lams_bulk[batch_i] if mixup_lams_bulk is not None else None,
                     drop_color_mask=drop_color_bulk[batch_i, :b_now] if drop_color_bulk is not None else None,
@@ -1153,6 +1234,16 @@ def main():
                     )
             else:
                 pos_weights = hard_label_weights(supcon_labels)
+            if args.shoot_context:
+                # Appended AFTER all augmentations so peg/color offsets stay
+                # untouched. Per-sample context-dropout: the head must work
+                # with and without the shoot code, never depend on it.
+                ctx = ds.context.expand(len(batch_feats), -1)
+                if args.ctx_dropout > 0:
+                    keep = (torch.rand(len(batch_feats), 1, device=device)
+                            >= args.ctx_dropout).to(ctx.dtype)
+                    ctx = ctx * keep
+                batch_feats = torch.cat([batch_feats, ctx], dim=1)
             z = head(batch_feats)
             base_sim = zeroshot_base_sim(batch_feats) if args.blend_aware else None
             l_supcon = sup_con_loss(

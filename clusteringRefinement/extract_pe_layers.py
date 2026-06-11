@@ -9,6 +9,11 @@ pecore_g / color for the head to consume directly). Capturing several poolings i
 the one forward pass is nearly free, so the post-extraction search can cover
 pooling x layer x blend rather than pre-committing to one pooling.
 
+Only images that belong to a group in .reorder-groups.json are encoded — the
+head trains exclusively on grouped images (ungrouped ones are dropped by
+train_projection_head.py), so ungrouped rows stay zero-filled in the output
+arrays. Consumers already warn/skip on zero rows.
+
 Backends:
   mlx (default)  — uses the native MLX PE-Core port (PECoreBigG.forward_capture),
                    ~2 img/s, fp32. Same numerical regime as the deployed pecore_g
@@ -160,6 +165,18 @@ def main():
     paths = [os.path.join(args.target_dir, hash2fn[h]) if h in hash2fn else None for h in hashes]
     missing = sum(p is None for p in paths)
 
+    # Only grouped images feed the head (training drops ungrouped entirely), so
+    # only their rows get encoded; the rest stay zero in the output arrays.
+    groups_path = os.path.join(args.target_dir, ".reorder-groups.json")
+    if not os.path.exists(groups_path):
+        print(f"  {os.path.basename(args.target_dir)}: no .reorder-groups.json — "
+              f"nothing to extract (head trains on grouped images only)", file=sys.stderr)
+        return
+    graw = json.load(open(groups_path))
+    glist = graw if isinstance(graw, list) else graw.get("groups", [])
+    grouped_hashes = {str(ch[fn]) for g in glist for fn in g["images"] if fn in ch}
+    wanted = [h in grouped_hashes for h in hashes]
+
     meta_path = os.path.join(cache, "pe_layers_meta.json")
     keys = [(L, p) for L in layers for p in POOLINGS]
     arr_paths = {(L, p): os.path.join(cache, f"pe_layers_L{L:02d}_{p}.npy") for (L, p) in keys}
@@ -173,7 +190,8 @@ def main():
             print("  pe_layers_meta.json mismatch — starting fresh", file=sys.stderr)
     if meta is None:
         meta = {"version": VERSION, "n_images": n, "layers": layers,
-                "poolings": POOLINGS, "backend": args.backend, "completed_through": 0}
+                "poolings": POOLINGS, "backend": args.backend,
+                "grouped_only": True, "completed_through": 0}
 
     start = meta["completed_through"]
     arrays = {}
@@ -190,7 +208,21 @@ def main():
         return
 
     name = os.path.basename(args.target_dir)
-    print(f"  {name}: {n} imgs ({missing} missing), layers {layers} x {POOLINGS}, "
+    # completed_through is a row-index watermark over the full npz order: every
+    # wanted (grouped) row below it is encoded. Processing `todo` in ascending
+    # index order preserves that invariant across pause/resume.
+    todo = [j for j in range(start, n) if paths[j] is not None and wanted[j]]
+    n_grouped = sum(wanted)
+    if not todo:
+        if all(arrays[k] is None for k in keys):
+            print(f"  {name}: no grouped images to extract — skipping", file=sys.stderr)
+            return
+        meta["completed_through"] = n
+        json.dump(meta, open(meta_path, "w"))
+        print(f"  {name}: done (no grouped rows left past resume point)", file=sys.stderr, flush=True)
+        return
+    print(f"  {name}: {len(todo)} of {n_grouped} grouped imgs to encode "
+          f"({n} rows total, {missing} missing), layers {layers} x {POOLINGS}, "
           f"backend={args.backend}, resume@{start}", file=sys.stderr, flush=True)
     encode, depth = (build_encoder_mlx(layers) if args.backend == "mlx"
                      else build_encoder_pytorch(layers))
@@ -198,17 +230,15 @@ def main():
         sys.exit(f"layer index >= depth {depth}")
 
     bs = args.batch_size
-    base = start; i = start; t0 = time.time()
-    while i < n:
-        idxs = list(range(i, min(i + bs, n)))
+    done_imgs = 0; since = 0; t0 = time.time()
+    for s in range(0, len(todo), bs):
+        idxs = todo[s:s + bs]
         imgs, valid = [], []
         for j in idxs:
-            p = paths[j]
-            if p and os.path.exists(p):
-                try:
-                    imgs.append(Image.open(p).convert("RGB")); valid.append(j)
-                except Exception as e:
-                    print(f"    skip {p}: {e}", file=sys.stderr)
+            try:
+                imgs.append(Image.open(paths[j]).convert("RGB")); valid.append(j)
+            except Exception as e:
+                print(f"    skip {paths[j]}: {e}", file=sys.stderr)
         if imgs:
             reps = encode(imgs)
             for (L, p), arr in reps.items():
@@ -216,15 +246,17 @@ def main():
                     arrays[(L, p)] = np.zeros((n, arr.shape[1]), dtype=np.float32)
                 for kk, j in enumerate(valid):
                     arrays[(L, p)][j] = arr[kk]
-        i = min(i + bs, n)
-        if (i - base) >= args.checkpoint_every or i >= n:
+            done_imgs += len(valid); since += len(valid)
+        last = s + bs >= len(todo)
+        if since >= args.checkpoint_every or last:
             for k in keys:
                 if arrays[k] is not None:
                     np.save(arr_paths[k], arrays[k])
-            meta["completed_through"] = i
+            meta["completed_through"] = n if last else idxs[-1] + 1
             json.dump(meta, open(meta_path, "w"))
-            base = i
-            print(f"    {name} {i}/{n} ({(i-start)/max(time.time()-t0,1e-9):.1f} img/s)", file=sys.stderr, flush=True)
+            since = 0
+            print(f"    {name} {done_imgs}/{len(todo)} grouped imgs (row {idxs[-1] + 1}/{n}, "
+                  f"{done_imgs/max(time.time()-t0,1e-9):.1f} img/s)", file=sys.stderr, flush=True)
     print(f"  {name}: done", file=sys.stderr, flush=True)
 
 

@@ -16,7 +16,7 @@ DS = [("M22", "22-alexis"), ("M5", "5-lily"), ("M17", "17-dusha"), ("M25", "25-r
 LAYERS = [30, 34, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49]
 POOLS = ["mean", "max", "gem3", "attnpool"]
 BS = 8
-OUT = "/tmp/pe_probe3"; os.makedirs(OUT, exist_ok=True)
+OUT = os.path.expanduser("~/.cache/reorder/pe_probe3"); os.makedirs(OUT, exist_ok=True)
 dev = torch.device("mps")
 
 def forward_all():

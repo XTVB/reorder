@@ -17,8 +17,14 @@ Usage:
   python clusteringRefinement/train_final_head.py --datasets-from ~/.config/reorder/training_datasets.txt
 
 Outputs:
-  ~/.cache/reorder/learned_head.pt        — head state_dict
-  ~/.cache/reorder/learned_head.json      — config (input/output dims, hyperparams, version)
+  ~/.cache/reorder/learned_head.pt        — head state_dict (seed 1 of the ensemble)
+  ~/.cache/reorder/learned_head_s<N>.pt   — remaining ensemble heads
+  ~/.cache/reorder/learned_head.json      — config (dims, hyperparams, version, head_files)
+
+The deployed head is a 3-seed ENSEMBLE (see LEARNED_HEAD.md "seed-ensemble"):
+extract_features.py projects through every head and concatenates the L2-normed
+projections scaled by 1/√n_heads, so the existing cosine blend computes the
+ensemble-mean similarity with no downstream changes.
 """
 from __future__ import annotations
 
@@ -65,6 +71,10 @@ DEFAULT_HYPERPARAMS = {
     "use_augmented_views": True,
     "arcface_weight": 0.0,
 }
+
+# Ensemble seeds. 3 heads ≈ +0.010 ARI over the expected single-seed head in
+# the 24-fold LOMO (seed_ensemble_v26.tsv); ens4 added nothing over ens3.
+ENSEMBLE_SEEDS = [42, 43, 44]
 
 # Dataset registry: single source of truth shared with common.sh and the
 # pixel-aug scripts. Add a dataset by appending one line to datasets.txt.
@@ -126,11 +136,12 @@ def verify_dataset(name: str, path: str) -> bool:
     return True
 
 
-def compute_head_version(pt_path: Path, datasets: list[tuple[str, str]]) -> str:
-    """Stable version string derived from the head weights + training dataset list.
-    Used to invalidate cached learned_proj features when the head is retrained."""
+def compute_head_version(pt_paths: list[Path], datasets: list[tuple[str, str]]) -> str:
+    """Stable version string derived from every head's weights + training dataset
+    list. Used to invalidate cached learned_proj features when the head is retrained."""
     h = hashlib.blake2b(digest_size=8)
-    h.update(pt_path.read_bytes())
+    for p in pt_paths:
+        h.update(p.read_bytes())
     for name, path in sorted(datasets):
         h.update(f"{name}:{path}".encode())
     return f"learned-head-{h.hexdigest()}"
@@ -174,10 +185,11 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # Build the training command. Train on ALL valid datasets, no holdout.
+    # One run per ensemble seed; each head is promoted to its own file.
     hp = DEFAULT_HYPERPARAMS
     train_names = ",".join(n for n, _ in valid)
     with tempfile.TemporaryDirectory() as tmpdir:
-        cmd = [
+        base_cmd = [
             sys.executable, str(TRAIN_SCRIPT),
             *sum([["--dataset", f"{n}:{p}"] for n, p in valid], []),
             "--train", train_names,
@@ -200,32 +212,37 @@ def main():
             "--hard-neg-frac", str(hp["hard_neg_frac"]),
             "--hard-neg-pool-k", str(hp["hard_neg_pool_k"]),
             "--arcface-weight", str(hp["arcface_weight"]),
-            "--output-dir", tmpdir,
         ]
         if hp["use_augmented_views"]:
-            cmd.append("--use-augmented-views")
+            base_cmd.append("--use-augmented-views")
         if hp["use_singleton_negatives"]:
-            cmd.append("--use-singleton-negatives")
+            base_cmd.append("--use-singleton-negatives")
 
         if args.dry_run:
-            print("Would run:")
-            print("  " + " ".join(repr(c) if " " in c else c for c in cmd))
+            print(f"Would run (once per seed {ENSEMBLE_SEEDS}):")
+            print("  " + " ".join(repr(c) if " " in c else c for c in base_cmd)
+                  + " --seed <s> --output-dir <tmp>")
             return
 
-        print(f"\nRunning training (this may take ~30-60s)...\n", file=sys.stderr)
-        result = subprocess.run(cmd)
-        if result.returncode != 0:
-            sys.exit(f"Training failed with exit code {result.returncode}")
+        # Head file per seed: the first keeps the legacy name so a single-head
+        # consumer keeps working; the rest are suffixed.
+        head_paths = [HEAD_PT if i == 0 else HEAD_DIR / f"learned_head_s{s}.pt"
+                      for i, s in enumerate(ENSEMBLE_SEEDS)]
+        for seed, dst in zip(ENSEMBLE_SEEDS, head_paths):
+            out = Path(tmpdir) / f"s{seed}"
+            out.mkdir()
+            print(f"\nTraining ensemble head seed={seed}...\n", file=sys.stderr)
+            result = subprocess.run(base_cmd + ["--seed", str(seed), "--output-dir", str(out)])
+            if result.returncode != 0:
+                sys.exit(f"Training (seed {seed}) failed with exit code {result.returncode}")
+            src_pt = out / "proj_head.pt"
+            if not src_pt.exists():
+                sys.exit(f"Training did not produce {src_pt}")
+            shutil.copy(src_pt, dst)
+            print(f"Head (seed {seed}) saved → {dst}", file=sys.stderr)
 
-        # Promote the trained head to the canonical location
-        src_pt = Path(tmpdir) / "proj_head.pt"
-        if not src_pt.exists():
-            sys.exit(f"Training did not produce {src_pt}")
-        shutil.copy(src_pt, HEAD_PT)
-        print(f"\nHead saved → {HEAD_PT}", file=sys.stderr)
-
-        # Save config (includes version derived from weights + dataset list)
-        version = compute_head_version(HEAD_PT, valid)
+        # Save config (includes version derived from all weights + dataset list)
+        version = compute_head_version(head_paths, valid)
         config = {
             "version": version,
             "input_dim_peg": 1280,
@@ -234,12 +251,17 @@ def main():
             "out_dim": hp["out_dim"],
             "hidden": hp["hidden"],
             "dropout": hp["dropout"],
+            # Ensemble (consumed by extract_features._compute_learned_proj):
+            # project through every head file, concat L2-normed blocks / sqrt(n).
+            "head_files": [p.name for p in head_paths],
+            "ensemble_seeds": ENSEMBLE_SEEDS,
+            "learned_proj_dim": hp["out_dim"] * len(head_paths),
             "training_datasets": [{"name": n, "path": p} for n, p in valid],
             "hyperparams": hp,
         }
         HEAD_CONFIG.write_text(json.dumps(config, indent=2))
         print(f"Config saved → {HEAD_CONFIG}", file=sys.stderr)
-        print(f"Head version: {version}", file=sys.stderr)
+        print(f"Head version: {version}  ({len(head_paths)}-seed ensemble)", file=sys.stderr)
 
 
 if __name__ == "__main__":

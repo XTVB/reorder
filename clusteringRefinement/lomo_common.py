@@ -14,7 +14,9 @@ from pathlib import Path
 import numpy as np
 
 BASE = "/Users/abdudh/Downloads/PicsStaging/ClusterBenchmarks"
-LOMO = "/tmp/lomo_postaug"
+# Trained-fold root. /tmp roots get purged by macOS (we lost /tmp/lomo_postaug
+# that way) — keep folds under ~/.cache/reorder/ and override per-run via $LOMO_ROOT.
+LOMO = os.environ.get("LOMO_ROOT", os.path.expanduser("~/.cache/reorder/lomo_v26"))
 REGISTRY = Path(__file__).resolve().parent / "datasets.txt"
 
 # Zero-shot baseline composition: peg ⊕ COLOR_W·color, then unit-norm → cosine.

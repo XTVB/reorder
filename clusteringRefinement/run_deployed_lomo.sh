@@ -61,7 +61,9 @@ for tgt in "${SCORE_TARGETS[@]}"; do
       [[ $m != "$tgt" ]] && { [[ -z $TR ]] && TR=$m || TR=$TR,$m; }
     done
     ok=0
-    for seed in 42 43 44; do
+    # Retry ladder; override (e.g. SEEDS="43 143 243") to train an independent
+    # replica for seed-ensembling without colliding with another replica's seeds.
+    for seed in ${SEEDS:-42 43 44}; do
       rm -f "$out/${tgt}_proj.npy" "$out/${tgt}_dist_matrix.bin"
       "$PY" "$TRAIN" "${DA[@]}" --train "$TR" --eval "$tgt" "${DEPLOYED_ARGS[@]}" \
         --seed "$seed" --output-dir "$out" >"$out/train.seed${seed}.log" 2>&1 || true

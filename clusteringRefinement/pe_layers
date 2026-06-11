@@ -47,30 +47,50 @@ cmd_stop() {
 cmd_status() {
   if is_running; then echo "STATUS: running (pid $(cat $PIDFILE))"; else echo "STATUS: not running"; fi
   echo ""
-  echo "Per-dataset progress (datasets with a pe_layers cache):"
+  echo "Per-dataset progress, in grouped images (all registered datasets):"
   local dirs=() m
   for m in "${ALL[@]}"; do dirs+=("ClusteringBenchmark${P[$m]}"); done
   ~/.venvs/imgcluster-env/bin/python3 - "$BASE" "${dirs[@]}" <<'PY'
 import json, os, sys
+import numpy as np
 base = sys.argv[1]; dirs = sys.argv[2:]
 total_done = total = 0
 for d in dirs:
-    meta = f"{base}/{d}/.reorder-cache/pe_layers_meta.json"
-    ch = f"{base}/{d}/.reorder-cache/content_hashes.json"
-    if not os.path.exists(ch):
+    cache = f"{base}/{d}/.reorder-cache"
+    meta_p = f"{cache}/pe_layers_meta.json"
+    npz = f"{cache}/embeddings_hash_cache.npz"
+    ch_p = f"{cache}/content_hashes.json"
+    gr_p = f"{base}/{d}/.reorder-groups.json"
+    # Mirror the runner/extractor skip conditions so the not-started rows shown
+    # here are exactly the ones a `start` will actually pick up.
+    if not os.path.exists(npz) or not os.path.exists(ch_p):
+        print(f"  {d:<30} : (no embeddings cache — runner will skip)")
         continue
-    n = len(json.load(open(ch)))
-    done = 0; layers = ""
-    if os.path.exists(meta):
-        m = json.load(open(meta))
-        done = min(m.get("completed_through", 0), n)
+    if not os.path.exists(gr_p):
+        print(f"  {d:<30} : (no .reorder-groups.json — nothing to extract)")
+        continue
+    m = json.load(open(meta_p)) if os.path.exists(meta_p) else None
+    # Progress in grouped images (what the extractor actually encodes), derived
+    # the same way extract_pe_layers.py builds its work list: npz unique-hash
+    # rows whose hash belongs to a .reorder-groups.json image still on disk.
+    hashes = [str(h) for h in np.load(npz, allow_pickle=False)["hashes"]]
+    ch = json.load(open(ch_p))
+    graw = json.load(open(gr_p))
+    glist = graw if isinstance(graw, list) else graw.get("groups", [])
+    gh = {str(ch[fn]) for g in glist for fn in g["images"] if fn in ch}
+    wanted = [h in gh for h in hashes]
+    tot = sum(wanted)
+    done = 0; layers = "not started"; stale = ""
+    if m:
         layers = "L" + ",".join(str(x) for x in m.get("layers", []))
-    else:
-        # not started — skip the noise unless you want every dataset listed
-        continue
-    bar = 30; fill = int(bar * done / max(n, 1))
-    print(f"  {d:<30} : [{'#'*fill}{'.'*(bar-fill)}] {done:>5}/{n:<5} ({100.0*done/max(n,1):5.1f}%) {layers}")
-    total_done += done; total += n
+        if m.get("n_images") != len(hashes):
+            stale = f"  STALE (meta has {m.get('n_images')} rows — will restart fresh)"
+        else:
+            wm = min(m.get("completed_through", 0), len(hashes))  # row-index watermark
+            done = sum(wanted[:wm])
+    bar = 30; fill = int(bar * done / max(tot, 1))
+    print(f"  {d:<40} : [{'#'*fill}{'.'*(bar-fill)}] {done:>5}/{tot:<5} grouped ({100.0*done/max(tot,1):5.1f}%) {layers}{stale}")
+    total_done += done; total += tot
 if total:
     print(f"\nOVERALL: {total_done}/{total} images ({100.0*total_done/max(total,1):.1f}%)")
 else:
@@ -101,7 +121,10 @@ Files:
   outputs : <dataset>/.reorder-cache/pe_layers_L<NN>_{mean,gem3,attnpool}.npy + pe_layers_meta.json
 
 Config (edit run_pe_layer_extraction.sh): LAYERS=$([[ -n "${LAYERS:-}" ]] && echo "$LAYERS" || echo "42,44,46,47"),
-default 18-dataset set (M1-M20 minus partials). Override: MS_OVERRIDE="M1 M2 ...".
+default = ALL registered datasets (partials included — needed as head-input
+training data). Only images in .reorder-groups.json groups are encoded (the
+head trains on grouped images only). Done/clean datasets are skipped; stale
+ones (M2/M4/M7) auto-restart fresh. Override: MS_OVERRIDE="M1 M2 ...".
 EOF
 }
 

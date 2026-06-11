@@ -1,16 +1,16 @@
 # Learned Projection Head
 
-A small MLP trained on labeled photoshoot data that maps PE-G (1280d) + color (693d) → 256d. Blended with zero-shot PE-G + color distances at clustering time. Improves cluster ARI by roughly +0.10 to +0.12 on held-out models compared to baseline.
+A small MLP trained on labeled photoshoot data that maps PE-G (1280d) + color (693d) → 512d, deployed as a **3-seed ensemble**. Blended with zero-shot PE-G + color distances at clustering time. Improves cluster ARI by roughly +0.11–0.13 on held-out models compared to baseline (single head), plus ~+0.010 from the ensemble.
 
 ## How it's used at runtime
 
-The head lives at `~/.cache/reorder/learned_head.pt` + `learned_head.json` (with a content-derived version string). Three places integrate it:
+The head lives at `~/.cache/reorder/learned_head.pt` (+ `learned_head_s43.pt`, `learned_head_s44.pt` for the other ensemble seeds) + `learned_head.json` (with a content-derived version string covering all heads, and a `head_files` list). Three places integrate it:
 
-1. **`scripts/extract_features.py`** runs `_maybe_update_learned_proj` at the end of every extraction. It loads the head, pushes the (PE-G, color) features through it, and stores the (N, 256) projection as `learned_proj` in `.reorder-cache/embeddings_hash_cache.npz` with a `_v_learned_proj` version key. If the head's version differs from what's stored, the projection is recomputed. If the head isn't installed, the step is silently skipped.
+1. **`scripts/extract_features.py`** runs `_maybe_update_learned_proj` at the end of every extraction. It pushes the (PE-G, color) features through **every** head in `head_files`; the per-head L2-normed blocks are concatenated and scaled by 1/√n_heads, so rows stay unit-norm and their dot product equals the ensemble-MEAN cosine — the downstream blend is unchanged. The result is the (N, 1536) `learned_proj` in `.reorder-cache/embeddings_hash_cache.npz` with a `_v_learned_proj` version key. If the head's version differs from what's stored, the projection is recomputed. If the head isn't installed, the step is silently skipped.
 
 2. **`rust/cluster-tool`** exposes `--learned-proj-weight`. It reads the `learned_proj` array from the NPZ alongside the other model embeddings and blends them as one more weighted component in the combined feature vector.
 
-3. **Cluster UI** (`ClusterToolbar.tsx`) has a "Learned head" slider in the weight panel, range 0–1. The slider value is the **target fraction of the final cosine signal**, not a raw concat weight — the server rescales it (see `rescaleLearnedProjWeight` in `src/cluster/pipeline.ts`) so that "0.60" means "learned head contributes 60% of the clustering distance, regardless of how PE-G and color are weighted." Default is **0.60**, the best fixed-blend value in our full 20-dataset LOMO for the current high-capacity (512-dim) head — the earlier 256-dim head peaked at 0.45. Set to 0 to disable the head entirely. Set to 1 to use only the head (PE-G and color contributions zeroed).
+3. **Cluster UI** (`ClusterToolbar.tsx`) has a "Learned head" slider in the weight panel, range 0–1. The slider value is the **target fraction of the final cosine signal**, not a raw concat weight — the server rescales it (see `rescaleLearnedProjWeight` in `src/cluster/pipeline.ts`) so that "0.60" means "learned head contributes 60% of the clustering distance, regardless of how PE-G and color are weighted." Default is **0.60**, the optimum for the deployed 3-seed ensemble (blend curve peaks at 0.60 = 0.8172 eval-23 vs 0.8150 at 0.65; same optimum as the single 512-dim head). The earlier 256-dim head peaked at 0.45. Set to 0 to disable the head entirely. Set to 1 to use only the head (PE-G and color contributions zeroed).
 
 ## Retraining (e.g. when you add a new labeled dataset)
 
@@ -193,6 +193,84 @@ Observations:
 
   Bounds for this approach (`oracle_ceiling.py`, `verifier_accuracy_sweep.py`): a *perfect* verifier on each image's k nearest edges ceilings 17-set ARI at +0.05 (k=5) → +0.14 (k=40) → +0.16 (k=80). Synthetic verifiers (k=40, α=0.3): ~95% edge accuracy needed to break even and ~97% for +0.05 when errors fall on the bi-encoder's hardest edges; 87% already gives +0.07 if errors fall on random edges.
 
+## 26-dataset era: v26 LOMO baseline & the post-processing dead ends
+
+A fresh 24-fold LOMO (all registered datasets minus the M14/M15 partials, which
+stay in every training pool) at the deployed config lives in **persistent**
+fold roots — `~/.cache/reorder/lomo_v26{,_r2,_r3,_r4}` (seeds 42/43/44/45;
+`/tmp` roots get purged by macOS, which is how the old `/tmp/lomo_postaug` died;
+`lomo_common.py` now reads `$LOMO_ROOT`, defaulting to the v26 root). Baseline:
+**eval-23 mean 0.8128** (full-24 0.8027 incl. M7) for the seed-42 replica;
+expected single-seed head over 4 replicas = **0.8073** (seed 42 was lucky).
+`lomo_v26_deployed.tsv`.
+
+What got tried on top (all scored on these folds, python Ward@oracle-N):
+
+- **Over-cluster → merge-back** (`overcluster_merge_eval.py`): cut the ward tree
+  at m·N, greedily re-merge to N by a robust pairwise statistic (median/q25/q75/
+  mean/max/density-normalized median — the merge-suggestions-style score).
+  **Falsified hard**: best config −0.085 eval-23, 1–2/23 wins, every m/crit
+  negative. Only M5 (+0.19) and M7 (+0.15) improve — the two lowest-baseline
+  sets — so it's at most a per-dataset fallback. Ward's variance objective
+  orders late merges better than any same-signal pairwise statistic.
+  `overcluster_merge_v26.tsv`.
+- **Boundary polish** (`polish_eval.py`): keep Ward@N, reassign images to their
+  best-fit cluster (top-k-neighbor score, margin-gated, few iterations). Null:
+  best −0.0007, losses (small-group sets) outweigh wins. Full convergence
+  drifts toward spherical-kmeans (much worse than ward) as predicted by
+  `algo_comparison.tsv`. `polish_v26.tsv`.
+- **Shoot-context head** (`--shoot-context` in the trainer: dataset-mean feature
+  vector appended to every input row, per-sample `--ctx-dropout 0.3`): −0.0040
+  avg, huge per-dataset variance (M17 +0.052, M12 −0.050). The per-shoot
+  adaptation signal the color-weight table shows is real, but a mean-vector
+  context doesn't capture it. Kept as an opt-in knob. `lomo_v26_ctx.tsv`.
+
+Lesson (rhymes with the verifier ceiling work): **re-processing the same
+distance matrix doesn't pay — only new signal does.**
+
+### What does pay: seed-ensemble + TTA (deployable)
+
+- **Seed-ensemble** (`seed_ensemble_eval.py`): average the proj similarity over
+  heads trained at different seeds. ens3 = **0.8172 eval-23, +0.010 vs the
+  expected single-seed head** (+0.004 vs the lucky seed-42 one). ens4 ≈ ens3.
+  Production shape: train the final head at 3 seeds, cache 3 projections,
+  mean the similarities. `seed_ensemble_v26.tsv`.
+- **TTA over the pixel-aug views** (`tta_eval.py`, `stack_eval.py`) — measured
+  but **NOT deployed**: at inference, mean each image's L2-normed projection
+  over base + the K=3 cached views (per head). +0.0047 alone (12/19 wins);
+  stacked on ens3 at blend 0.65 → 0.8216 eval-23 (+0.014 vs expected-seed).
+  Why not deployed: TTA needs views on the **clustered** folder, and views are
+  only ever extracted for benchmarks — real folders would silently get
+  ensemble-only while benchmarks scored ~+0.005 higher, making every future
+  benchmark number overestimate production. Pixel-aug stays a *training-time*
+  technique. `tta_v26.tsv` / `stack_v26.tsv`; the ens-only blend optimum is
+  **0.60** (0.8172; 0.65 → 0.8150), which is the shipped default.
+
+### Intermediate PE-G layers: the open lead
+
+Probe (`probe_pe_layers3.py`, L30–49 × mean/max/gem3/attnpool, fp32 attn-pool,
+4 datasets, features cached in `~/.cache/reorder/pe_probe3/`): solo zero-shot
+peaks at **L47/L48-attnpool (0.619/0.628 vs final-proj 0.608)** and L44–46
+mean/gem3. As a **zero-shot blend component** on the 4 datasets with clean
+cached extractions (M1/M3/M5/M6, `pe_layers_zs_eval.py`):
+**L47-attnpool @ w=0.5 = +0.0095 under the deployed head+ward config, 4/4
+wins** (every layer/weight combo tested won 4/4). The layer features carry
+signal the head doesn't extract.
+
+Paired mini-LOMO on those 4 sets (`run_pelayer_minilomo.sh` +
+`score_pelayer_minilomo.py`, 2 seeds, 3-set train pools): layer-as-head-input
+(`--pe-layer 47:attnpool`) +0.0041 vs control, zs-side blend +0.0020,
+both-at-once ≈ 0 (they double-count). Small-pool numbers — the decisive test
+is the full 24-fold LOMO with `--pe-layer`, gated on extraction.
+
+**Extraction state** (`run_pe_layer_extraction.sh`, now defaults to all 26
+registered datasets): M1/M3/M5/M6 done+clean (L42/44/46/47 × mean/gem3/attnpool),
+M2/M4/M7 stale (npz changed since; the extractor auto-detects via
+`pe_layers_meta.json` n_images mismatch and restarts them fresh), the other 19
+never extracted. Remaining ≈ 56k images ≈ 8–9h on MLX — run it when the
+machine is idle, then: full LOMO with `EXTRA_ARGS="--pe-layer 47:attnpool"`
+vs the v26 baseline, and the zs-blend arm via `pe_layers_zs_eval.py` logic.
+
 ## Clustering defaults: linkage & re-rank
 
 A full 20-dataset LOMO (oracle-N, `clusteringRefinement/rerank_eval.py`, reusing the
@@ -232,11 +310,3 @@ The sweep scripts share `common.sh` (dataset registry + `ari()`/`npy_bad()`/`pfo
 - **Don't recompute what you can reuse.** The dominant cost is GPU training, not scoring. The pure-scoring sweeps (`run_blend_grid`, `run_blend_curve`, `run_pegcolor_sweep`) re-blend cached `*_dist_matrix.bin` from a trained LOMO root — they never retrain. When adding a sweep, point it at an existing `OUTROOT`/`LOMO_ROOT` of trained folds rather than training fresh. Within a script, blend the whole weight grid in **one** `blend_dist_matrix.py` call (it computes the zero-shot cosine once), not per-weight. If a config you want is already scored elsewhere in the run, alias it instead of recomputing (e.g. `rerank_eval` reuses its `h_rr_avg` matrix for the `b=0.60` sweep point — one re-rank per dataset, not two).
 - **The scoring grids are embarrassingly parallel.** Each (dataset, weight) `ari()` call is independent and CPU-only. The three pure-scoring sweeps fan out across datasets via `pforeach "$JOBS"` (default 4; raise with `JOBS=8`), writing per-dataset fragment files that are aggregated **after** the barrier — bash subshells can't write back to parent state, so accumulate from files, not shared associative arrays. Training sweeps stay serial (GPU-bound); only their post-training scoring passes are parallelizable.
 - **`benchmark_clustering.ts` reruns the full Rust Ward linkage every call** and nothing caches it across invocations — so a grid of N weights on one dataset is N linkage runs. That's not redundant (each blend is a different matrix) but it *is* the per-grid-point cost; use a coarse grid first, then refine around the peak.
-
-## Paths to improve further
-
-In rough order of expected impact:
-
-1. **Augmentation hyperparameter tuning.** mixup_alpha, drop_color_prob, cross_mixup_prob — all swept at single values. Historically estimated at ~+0.005 — below the ±0.006 single-seed noise floor (see "Big-set training ablation & seed-noise floor"), so it needs ~5-seed averaging to detect at all.
-
-2. **LoRA on PE-G itself.** Higher capacity, but our diagnostics suggested the bottleneck is data diversity, not method capacity. Unlikely to help at N=12 without much more data; Maybe useful now at n=24

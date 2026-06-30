@@ -62,6 +62,13 @@ export function useKeyboardShortcuts({
         if (groupsEnabled && selectedIds.size > 0 && groups.length > 0) {
           useModalStore.getState().openModal("groupPicker");
         }
+      } else if (e.key === "m" || e.key === "M") {
+        const { groupsEnabled, mergeGroups } = useGroupStore.getState();
+        if (!groupsEnabled) return;
+        const groupIds = [...useSelectionStore.getState().contexts.reorder]
+          .filter(isGroupSortId)
+          .map(fromGroupSortId);
+        if (groupIds.length >= 2) mergeGroups(groupIds);
       } else if (e.key === "r" || e.key === "R") {
         if (useSelectionStore.getState().contexts.reorder.size >= 2) reverseSelection();
       } else if (e.key === "l" || e.key === "L") {

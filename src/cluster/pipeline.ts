@@ -2,10 +2,10 @@
 // Rust binary handles linkage; we drive it from here and weave in re-rank or
 // patch matrices when requested.
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { rename } from "node:fs/promises";
 import { join } from "node:path";
-import { ensureHashOrderJson, resolveHashCachePath } from "../cache-utils.ts";
+import { ensureHashOrderJson, listNpzKeys, resolveHashCachePath } from "../cache-utils.ts";
 import { loadGroups } from "../fs/groups.ts";
 import { withRenameLock } from "../fs/lock.ts";
 import {
@@ -124,45 +124,82 @@ export async function extractFeatures(
 
 const DEFAULT_RERANK_BLEND = 0.7;
 
+const LEARNED_KEYS = ["learned_proj", "learned_proj_peg", "learned_proj_color"] as const;
+
+/** Which learned-head arrays exist in the extraction cache. Missing file or
+ * unreadable NPZ → empty set (the learned dials are then ignored entirely). */
+export function availableLearnedKeys(hashCachePath: string): Set<string> {
+  try {
+    const keys = listNpzKeys(readFileSync(hashCachePath) as Buffer);
+    return new Set(LEARNED_KEYS.filter((k) => keys.has(k)));
+  } catch {
+    return new Set();
+  }
+}
+
 /**
- * Re-interpret the `learned_proj` weight as "target fraction of the final cosine
- * signal" rather than as a raw concat-multiplier.
+ * Re-interpret each learned-head weight (joint `learned_proj`, split
+ * `learned_proj_peg` / `learned_proj_color`) as "target fraction of the final
+ * cosine signal" rather than as a raw concat-multiplier. The three are
+ * independent dials; the deployed defaults are benchmarked in LEARNED_HEAD.md.
  *
  * For unit-norm sub-vectors fed into rust's concat-then-cosine pipeline, each
- * component's contribution to the final cosine is wₖ² / Σwⱼ². So to make
- * learned_proj contribute exactly `b` of the total, we set its raw weight to
- *   w_learned = √(b · S / (1 − b))    where S = Σ wⱼ² for j ≠ learned_proj.
+ * component's contribution to the final cosine is wₖ² / Σwⱼ². With b = Σ bₖ
+ * over the learned dials, each head k gets raw weight
+ *   wₖ = √(bₖ · S / (1 − b))    where S = Σ wⱼ² over the zero-shot models.
  *
  * Edge cases:
- *  - b ≤ 0: pass through (no learned head contribution).
- *  - b ≥ 1, or S == 0: zero out the other weights and set learned_proj to 1.
+ *  - b ≤ 0: zero-shot only.
+ *  - b ≥ 1, or S == 0: zero-shot weights zeroed, heads carry everything at
+ *    their relative proportions (raw weights √(bₖ/b)).
+ *  - A dial whose array is missing from the cache contributes nothing (its
+ *    share is NOT re-allocated to the other heads) — the zero-shot models
+ *    absorb the remainder, so a joint-only cache lands at ~the old deployed
+ *    blend under the new defaults.
  *
- * This lets the UI slider (and any caller) treat the learned_proj weight as a
- * percentage of the final signal, independent of how the other model weights
- * are set.
+ * `availableLearned` is the subset of LEARNED_KEYS present in the NPZ; callers
+ * outside runLinkage may omit it to assume all three.
  */
-export function rescaleLearnedProjWeight(weights: WeightConfig): WeightConfig {
-  const b = weights.learned_proj ?? 0;
-  if (b <= 0) return weights;
+export function rescaleLearnedProjWeight(
+  weights: WeightConfig,
+  availableLearned?: ReadonlySet<string>,
+): WeightConfig {
+  const out: WeightConfig = { ...weights };
+  const frac: Record<string, number> = {};
+  let b = 0;
+  for (const k of LEARNED_KEYS) {
+    const f = (availableLearned?.has(k) ?? true) ? Math.max(weights[k] ?? 0, 0) : 0;
+    frac[k] = f;
+    b += f;
+    (out as Record<string, number>)[k] = 0;
+  }
+  if (b <= 0) return out;
 
   let s = 0;
   for (const [key, val] of Object.entries(weights)) {
-    if (key === "learned_proj") continue;
+    if ((LEARNED_KEYS as readonly string[]).includes(key)) continue;
     const v = val ?? 0;
     if (v > 0) s += v * v;
   }
 
   if (b >= 1 || s === 0) {
-    // 100% learned head — zero out the other components.
-    const out: WeightConfig = { learned_proj: 1 };
-    for (const key of Object.keys(weights)) {
-      if (key !== "learned_proj") (out as Record<string, number>)[key] = 0;
+    // Learned heads carry everything — zero out the zero-shot components.
+    // (Also the b > 1 over-dialed case: fractions renormalize to their sum.)
+    for (const key of Object.keys(out)) {
+      if (!(LEARNED_KEYS as readonly string[]).includes(key)) {
+        (out as Record<string, number>)[key] = 0;
+      }
+    }
+    for (const k of LEARNED_KEYS) {
+      (out as Record<string, number>)[k] = Math.sqrt(frac[k]! / b);
     }
     return out;
   }
 
-  const learnedActual = Math.sqrt((b * s) / (1 - b));
-  return { ...weights, learned_proj: learnedActual };
+  for (const k of LEARNED_KEYS) {
+    (out as Record<string, number>)[k] = Math.sqrt((frac[k]! * s) / (1 - b));
+  }
+  return out;
 }
 
 export interface LinkageOptions {
@@ -242,7 +279,17 @@ export async function runLinkage(
     args.push("--locked-groups", constraintFiles.lockedGroupsPath);
   }
   if (weights) {
-    const rescaled = rescaleLearnedProjWeight(weights);
+    // The learned share only splits across heads whose arrays exist in this
+    // cache (older caches predate the split heads; headless setups have none).
+    const availableLearned = availableLearnedKeys(hashCachePath);
+    if ((weights.learned_proj ?? 0) > 0 && availableLearned.size < LEARNED_KEYS.length) {
+      log(
+        "cluster",
+        `Learned heads in cache: [${[...availableLearned].join(", ") || "none"}] — ` +
+          `learned share ${availableLearned.size === 0 ? "disabled" : "renormalized over available heads"}`,
+      );
+    }
+    const rescaled = rescaleLearnedProjWeight(weights, availableLearned);
     for (const [key, val] of Object.entries(rescaled)) {
       if (val !== undefined) args.push(`--${key.replace(/_/g, "-")}-weight`, String(val));
     }
@@ -284,9 +331,12 @@ export function modelsForWeights(weights?: WeightConfig): string[] | undefined {
   if (!weights) return undefined; // no config → extract all (auto mode)
   const out = new Set(MODEL_KEYS.filter((k) => (weights[k] ?? 0) > 0));
   if (out.has("learned_proj")) {
+    // The joint head consumes both; the split heads ride along at extraction.
     out.add("pecore_g");
     out.add("color");
   }
+  if (out.has("learned_proj_peg")) out.add("pecore_g");
+  if (out.has("learned_proj_color")) out.add("color");
   return Array.from(out);
 }
 

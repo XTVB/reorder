@@ -10,7 +10,7 @@ import {
   loadConstraints,
   mergePairKey,
   orderGroupsBySimilarity,
-  orderImagesBySimilarity,
+  orderImagesBatch,
 } from "../../cluster/index.ts";
 import { loadGroups } from "../../fs/index.ts";
 import type { GroupOrderMode, WeightConfig } from "../../shared/types.ts";
@@ -29,6 +29,10 @@ export const mergeRoutes: RouteHandler = async (req, ctx) => {
       mode?: GroupOrderMode;
       anchorId?: string;
       minimalLocality?: number;
+      /** Stable mode: force this many sets instead of the automatic gap cut. */
+      stableClusters?: number;
+      /** Gather mode: minimum cost improvement (blended distance) to move at all. */
+      gatherMinGain?: number;
       /** Group ids in the client's current gallery order — the base ordering. */
       orderedGroupIds?: string[];
       /** What to order: groups (default) or individual images. */
@@ -44,21 +48,33 @@ export const mergeRoutes: RouteHandler = async (req, ctx) => {
     const method: MergeMethod = body.method === "patches" ? "patches" : "embeddings";
     const fullResolution = body.fullResolution ?? false;
     const mode: GroupOrderMode =
-      body.mode === "tree" || body.mode === "spectral" || body.mode === "minimal"
+      body.mode === "tree" ||
+      body.mode === "spectral" ||
+      body.mode === "minimal" ||
+      body.mode === "stable" ||
+      body.mode === "gather"
         ? body.mode
         : "chain";
 
     if (body.target === "ungrouped") {
       return sseResponse(async (send) => {
-        send("result", {
-          orderedIds: await orderImagesBySimilarity(
-            targetDir,
-            body.orderedImageFilenames ?? [],
-            body.weights ?? {},
-            { mode, minimalLocality: body.minimalLocality },
-            (msg) => send("progress", { message: msg }),
-          ),
-        });
+        const [result] = await orderImagesBatch(
+          targetDir,
+          [{ id: "ungrouped", filenames: body.orderedImageFilenames ?? [] }],
+          body.weights ?? {},
+          {
+            mode,
+            minimalLocality: body.minimalLocality,
+            stableClusters: body.stableClusters,
+            gatherMinGain: body.gatherMinGain,
+          },
+          (msg) => send("progress", { message: msg }),
+        );
+        const { orderedIds, skipped, clusters, moved } = result ?? {
+          orderedIds: [],
+          skipped: 0,
+        };
+        send("result", { orderedIds, skipped, clusters, moved });
       });
     }
 
@@ -87,13 +103,62 @@ export const mergeRoutes: RouteHandler = async (req, ctx) => {
         }
       }
       const groupIds = [...clientIds, ...diskIds.filter((id) => !clientIdSet.has(id))];
+      let info: { clusters?: number; moved?: number } = {};
       send("result", {
         orderedIds: orderGroupsBySimilarity(groupIds, entries, {
           mode,
           anchorId: body.anchorId,
           minimalLocality: body.minimalLocality,
+          stableClusters: body.stableClusters,
+          gatherMinGain: body.gatherMinGain,
+          onModeInfo: (i) => {
+            info = i;
+          },
         }),
+        clusters: info.clusters,
+        moved: info.moved,
       });
+    });
+  }
+
+  // Batch image ordering: order the contents of several groups independently in
+  // a single Rust invocation (one job per group). Used by the reorder page's
+  // "Group contents" sort target.
+  if (path === "/api/groups/similarity-order-batch") {
+    const body = (await req.json()) as {
+      weights?: WeightConfig;
+      mode?: GroupOrderMode;
+      minimalLocality?: number;
+      stableClusters?: number;
+      gatherMinGain?: number;
+      jobs?: { id: string; orderedImageFilenames: string[] }[];
+    };
+    const mode: GroupOrderMode =
+      body.mode === "tree" ||
+      body.mode === "spectral" ||
+      body.mode === "minimal" ||
+      body.mode === "stable" ||
+      body.mode === "gather"
+        ? body.mode
+        : "chain";
+    const jobs = (body.jobs ?? []).map((j) => ({
+      id: j.id,
+      filenames: j.orderedImageFilenames ?? [],
+    }));
+    return sseResponse(async (send) => {
+      const results = await orderImagesBatch(
+        targetDir,
+        jobs,
+        body.weights ?? {},
+        {
+          mode,
+          minimalLocality: body.minimalLocality,
+          stableClusters: body.stableClusters,
+          gatherMinGain: body.gatherMinGain,
+        },
+        (msg) => send("progress", { message: msg }),
+      );
+      send("result", { results });
     });
   }
 

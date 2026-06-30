@@ -14,6 +14,14 @@ export interface ImageGroup {
   name: string;
   images: string[];
   /**
+   * Optional generated copy used by the Naming Rules modal to compose `name`
+   * from a template (e.g. `<subtitle> : <title>`). Preserved verbatim across
+   * load/save round-trips; absent on groups without generated metadata.
+   */
+  title?: string;
+  subtitle?: string;
+  short_sub?: string;
+  /**
    * Category/subcategory labels this group was explicitly bucketed into during
    * a grouping-sort Apply, e.g. ["Keep", "Keep - Top"]. Used for metadata
    * search / resuming a partial categorisation; absent on never-categorised
@@ -65,7 +73,12 @@ export interface WeightConfig {
   color?: number;
   dinov3?: number;
   pecore_g?: number;
+  /** The three learned-head dials (joint PE-G⊕color head, PE-G-only head,
+   * color-only head). Each is a "target fraction of the final cosine signal";
+   * rescaleLearnedProjWeight converts them to raw concat weights. */
   learned_proj?: number;
+  learned_proj_peg?: number;
+  learned_proj_color?: number;
 }
 
 /** Agglomerative linkage method for the cluster tree. */
@@ -76,9 +89,14 @@ export type LinkageMethod = "ward" | "average" | "complete";
  * Sort Similar): "chain" = greedy nearest-neighbor + 2-opt, "tree" =
  * average-linkage clustering + optimal leaf ordering, "spectral" = Fiedler-
  * vector seriation, "minimal" = keep the current order, applying only small
- * local moves where similarity clearly improves.
+ * local moves where similarity clearly improves, "stable" = cluster into sets
+ * and keep the incoming order both within each set and between sets (by first
+ * appearance) — similarity only decides membership, never sequence, "gather" =
+ * keep the incoming order but pull each stray back beside its best match; an
+ * item only moves when that clearly improves adjacency, and among near-equal
+ * placements the least-displacing one wins.
  */
-export type GroupOrderMode = "chain" | "tree" | "spectral" | "minimal";
+export type GroupOrderMode = "chain" | "tree" | "spectral" | "minimal" | "stable" | "gather";
 
 export interface ClusterResultData {
   id: string;

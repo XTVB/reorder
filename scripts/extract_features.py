@@ -59,17 +59,117 @@ DINOV3_WEIGHTS = os.environ.get(
 CHECKPOINT_SEC = 300  # periodic cache save interval during extraction
 
 
-def _compute_learned_proj(peg_arr, color_arr):
-    """Project (PE-G, color) features through the trained head(s) at ~/.cache/reorder/.
-    Returns (proj_array, version_string) or None if no head is installed.
+def _learned_head_groups(cfg):
+    """Normalize learned_head.json to a list of head groups:
+    [{npz_key, input_mods, input_dim, head_files}]. Legacy configs (no "heads"
+    key) describe a single joint-input group under the original field names."""
+    if "heads" in cfg:
+        return cfg["heads"]
+    return [{
+        "npz_key": "learned_proj",
+        "input_mods": "peg,color",
+        "input_dim": cfg["input_dim_total"],
+        "head_files": cfg.get("head_files", ["learned_head.pt"]),
+    }]
 
-    Ensemble: cfg["head_files"] lists one or more head weight files (legacy
-    configs without it = single learned_head.pt). Each head's L2-normed
-    projection is one block; blocks are concatenated and scaled by 1/√n_heads,
-    so the rows stay unit-norm and their dot product equals the ensemble-MEAN
-    cosine similarity — the downstream blend needs no changes.
 
-    PE-G is L2-renormalized before concat (defensive — should already be unit
+def _pe_layer_enabled(cfg):
+    """Toggle: config default `use_pe_layer` (true) AND/OVERRIDDEN by the
+    REORDER_USE_PE_LAYER env var ('0'/'false' → off, '1'/'true' → on)."""
+    env = os.environ.get("REORDER_USE_PE_LAYER")
+    if env is not None:
+        return env.strip().lower() in ("1", "true", "yes", "on")
+    return bool(cfg.get("use_pe_layer", True))
+
+
+def _deployed_pe_layer():
+    """The intermediate PE layer the installed head wants captured in-pass:
+    (block_idx, pooling, spec) from learned_head.json's group `pe_layer`, or None
+    when no head / no layer group / toggle off. Drives the production capture."""
+    head_dir = os.environ.get("REORDER_HEAD_DIR", os.path.expanduser("~/.cache/reorder"))
+    head_cfg_path = os.path.join(head_dir, "learned_head.json")
+    if not os.path.exists(head_cfg_path):
+        return None
+    with open(head_cfg_path) as f:
+        cfg = json.load(f)
+    if not _pe_layer_enabled(cfg):
+        return None
+    for g in _learned_head_groups(cfg):
+        spec = g.get("pe_layer")
+        if spec and g.get("pe_layer_head_files"):
+            L, pool = spec.split(":")
+            return int(L), pool, spec
+    return None
+
+
+def _full_coverage(arr, n_images):
+    """True iff `arr` covers every image (right row count, no zero rows)."""
+    return (arr is not None and arr.shape[0] == n_images
+            and not bool((np.abs(arr).sum(axis=1) == 0).any()))
+
+
+def _load_full_pe_layer(cache_dir, spec, n_images):
+    """Load the OFFLINE pe_layers_L<NN>_<pool>.npy (npz-hash row order) ONLY when
+    it covers EVERY image. Returns the (n, d) array or None. A grouped-only
+    extraction (the offline default) leaves ungrouped rows zero → rejected."""
+    if not cache_dir or not spec:
+        return None
+    L, pool = spec.split(":")
+    path = os.path.join(cache_dir, f"pe_layers_L{int(L):02d}_{pool}.npy")
+    if not os.path.exists(path):
+        return None
+    arr = np.load(path).astype(np.float32, copy=False)
+    return arr if _full_coverage(arr, n_images) else None
+
+
+def _resolve_pe_layer(spec, cache_dir, pe_layer_npz, n_images):
+    """Find a fully-covering layer array for `spec`: prefer the in-pass capture
+    stored in the npz (production path), else the offline .npy (benchmarks).
+    Returns the array or None (→ plain-head fallback). pe_layer_npz is
+    (stored_spec, array) read from the hash-cache NPZ, or None."""
+    if pe_layer_npz is not None:
+        stored_spec, arr = pe_layer_npz
+        if stored_spec == spec and _full_coverage(arr, n_images):
+            return arr.astype(np.float32, copy=False)
+    return _load_full_pe_layer(cache_dir, spec, n_images)
+
+
+def _expected_learned_version(cfg, cache_dir, n_images, pe_layer_npz=None):
+    """The version string _compute_learned_proj WOULD return for this dataset —
+    cfg["version"] plus a "+peL<spec>" marker iff a group's layer is enabled and
+    fully extracted here. Used to detect a stale cache without re-projecting."""
+    head_dir = os.environ.get("REORDER_HEAD_DIR", os.path.expanduser("~/.cache/reorder"))
+    marker = ""
+    if _pe_layer_enabled(cfg):
+        for g in _learned_head_groups(cfg):
+            if not (g.get("pe_layer") and g.get("pe_layer_head_files")):
+                continue
+            if not all(os.path.exists(os.path.join(head_dir, hf)) for hf in g["pe_layer_head_files"]):
+                continue
+            if _resolve_pe_layer(g["pe_layer"], cache_dir, pe_layer_npz, n_images) is not None:
+                marker = f"+peL{g['pe_layer']}"
+    return cfg["version"] + marker
+
+
+def _compute_learned_proj(peg_arr, color_arr, cache_dir=None, pe_layer_npz=None):
+    """Project features through the trained head group(s) at ~/.cache/reorder/.
+    Returns ({npz_key: proj_array}, version_string) or None if no head installed.
+
+    Groups (learned_head.json "heads"): the joint head reads PE-G ⊕ color, the
+    split single-modality heads read one block each (see LEARNED_HEAD.md "Split
+    single-modality heads"). Within a group, each seed's L2-normed projection is
+    one block; blocks are concatenated and scaled by 1/√n_heads, so rows stay
+    unit-norm and their dot product equals the ensemble-MEAN cosine similarity —
+    the downstream blend needs no changes.
+
+    Intermediate PE-layer (LEARNED_HEAD.md "PE-layer head input"): a group may
+    declare `pe_layer` + `pe_layer_head_files` (a parallel head trained on PE-G ⊕
+    color ⊕ the L2-normed layer). It's used ONLY when the toggle is on and the
+    layer is extracted FULLY for this dataset (every image covered); otherwise we
+    fall back to the plain head transparently. The chosen path is recorded in the
+    returned version so a toggle flip / coverage change re-projects the cache.
+
+    PE-G is L2-renormalized before use (defensive — should already be unit
     norm but extract paths vary across backends)."""
     head_dir = os.environ.get("REORDER_HEAD_DIR", os.path.expanduser("~/.cache/reorder"))
     head_cfg_path = os.path.join(head_dir, "learned_head.json")
@@ -77,15 +177,17 @@ def _compute_learned_proj(peg_arr, color_arr):
         return None
     with open(head_cfg_path) as f:
         cfg = json.load(f)
-    head_files = cfg.get("head_files", ["learned_head.pt"])
-    head_paths = [os.path.join(head_dir, hf) for hf in head_files]
-    if not all(os.path.exists(p) for p in head_paths):
-        missing = [p for p in head_paths if not os.path.exists(p)]
-        if head_files == ["learned_head.pt"]:
-            return None  # no head installed at all
-        raise FileNotFoundError(
-            f"learned_head.json lists ensemble heads but {missing} missing — rerun train_final_head.py"
-        )
+    groups = _learned_head_groups(cfg)
+    for g in groups:
+        paths = [os.path.join(head_dir, hf) for hf in g["head_files"]]
+        missing = [p for p in paths if not os.path.exists(p)]
+        if missing:
+            if g["head_files"] == ["learned_head.pt"]:
+                return None  # no head installed at all
+            raise FileNotFoundError(
+                f"learned_head.json lists heads for {g['npz_key']} but {missing} missing "
+                f"— rerun train_final_head.py"
+            )
 
     # Lazy imports — torch is heavy; only pay the cost if we have a head.
     import torch  # noqa: PLC0415
@@ -100,43 +202,74 @@ def _compute_learned_proj(peg_arr, color_arr):
     def _l2(a):
         return a / np.linalg.norm(a, axis=1, keepdims=True).clip(min=1e-8)
 
-    heads = []
-    for p in head_paths:
-        head = ProjectionHead(
-            in_dim=cfg["input_dim_total"],
-            hidden=cfg["hidden"],
-            out_dim=cfg["out_dim"],
-            dropout=cfg.get("dropout", 0.1),
-        )
-        head.load_state_dict(torch.load(p, map_location="cpu", weights_only=True))
-        head.eval()
-        heads.append(head)
+    peg = _l2(peg_arr.astype(np.float32, copy=False))
+    color = color_arr.astype(np.float32, copy=False)
+    n = peg.shape[0]
+    inputs_by_mods = {
+        "peg,color": lambda: np.concatenate([peg, color], axis=1),
+        "peg": lambda: peg,
+        "color": lambda: color,
+    }
+    pe_layer_on = _pe_layer_enabled(cfg)
 
-    feats = np.concatenate(
-        [_l2(peg_arr.astype(np.float32, copy=False)), color_arr.astype(np.float32, copy=False)],
-        axis=1,
-    )
-    assert feats.shape[1] == cfg["input_dim_total"], (
-        f"learned_proj input dim mismatch: got {feats.shape[1]}, head expects {cfg['input_dim_total']}"
-    )
-
-    def _project(head, x):
+    def _project(head, x, in_dim):
         out = np.empty((x.shape[0], cfg["out_dim"]), dtype=np.float32)
         with torch.no_grad():
             for i in range(0, x.shape[0], 512):
                 out[i:i + 512] = head(torch.from_numpy(x[i:i + 512])).numpy()
         return out  # already L2-normed by the head's forward
 
-    blocks = [_project(head, feats) for head in heads]
-    lp = np.concatenate(blocks, axis=1) / np.sqrt(len(blocks))
-    return lp, cfg["version"]
+    result = {}
+    layer_used = None  # spec of the layer actually used, for the version marker
+    for g in groups:
+        # Decide layer vs plain for this group + dataset.
+        layer_arr = None
+        if pe_layer_on and g.get("pe_layer") and g.get("pe_layer_head_files"):
+            layer_heads = [os.path.join(head_dir, hf) for hf in g["pe_layer_head_files"]]
+            if all(os.path.exists(p) for p in layer_heads):
+                layer_arr = _resolve_pe_layer(g["pe_layer"], cache_dir, pe_layer_npz, n)
+        if layer_arr is not None:
+            head_files = g["pe_layer_head_files"]
+            in_dim = g["pe_layer_input_dim"]
+            feats = np.concatenate([peg, color, _l2(layer_arr)], axis=1)
+            layer_used = g["pe_layer"]
+        else:
+            head_files = g["head_files"]
+            in_dim = g["input_dim"]
+            feats = inputs_by_mods[g["input_mods"]]()
+        assert feats.shape[1] == in_dim, (
+            f"{g['npz_key']} input dim mismatch: got {feats.shape[1]}, head expects {in_dim}"
+        )
+        blocks = []
+        for hf in head_files:
+            head = ProjectionHead(
+                in_dim=in_dim,
+                hidden=cfg["hidden"],
+                out_dim=cfg["out_dim"],
+                dropout=cfg.get("dropout", 0.1),
+            )
+            head.load_state_dict(torch.load(os.path.join(head_dir, hf),
+                                            map_location="cpu", weights_only=True))
+            head.eval()
+            blocks.append(_project(head, feats, in_dim))
+        # NumPy 2 (NEP 50): dividing the f32 blocks by the np.float64 sqrt scalar
+        # silently promotes the whole array to float64. The NPZ must stay <f4 —
+        # the Rust readers are dtype-strict and skip an <f8 array entirely.
+        result[g["npz_key"]] = (np.concatenate(blocks, axis=1)
+                                / np.sqrt(len(blocks))).astype(np.float32, copy=False)
+    # Encode the layer decision in the version so a toggle flip or a change in
+    # layer coverage invalidates the per-dataset cached learned_proj.
+    version = cfg["version"] + (f"+peL{layer_used}" if layer_used else "")
+    return result, version
 
 
 def _maybe_update_learned_proj(npz_path):
-    """Idempotently ensure the NPZ contains learned_proj matching the current head
-    version. No-op when the head isn't installed or learned_proj is already
-    current. Called by main() in both the early-exit (cache fully valid) and
-    full-save paths so the projection stays in sync with the live head."""
+    """Idempotently ensure the NPZ contains every learned_proj* array matching
+    the current head version. No-op when the head isn't installed or all arrays
+    are already current. Called by main() in both the early-exit (cache fully
+    valid) and full-save paths so the projections stay in sync with the live
+    head. One `_v_learned_proj` version key covers all groups — retraining any
+    head refreshes every array."""
     if not os.path.exists(npz_path):
         return
     head_dir = os.environ.get("REORDER_HEAD_DIR", os.path.expanduser("~/.cache/reorder"))
@@ -145,29 +278,48 @@ def _maybe_update_learned_proj(npz_path):
         return
     with open(head_cfg_path) as f:
         head_cfg = json.load(f)
-    current_version = head_cfg["version"]
+    expected_keys = [g["npz_key"] for g in _learned_head_groups(head_cfg)]
 
     data = np.load(npz_path, allow_pickle=True)
     if "pecore_g" not in data.files or "color" not in data.files:
         return
+    cache_dir = os.path.dirname(npz_path)
+    # In-pass layer captured into the same NPZ (production path).
+    pe_layer_npz = None
+    if "pe_layer" in data.files and "_v_pe_layer" in data.files:
+        pe_layer_npz = (str(data["_v_pe_layer"]), data["pe_layer"])
+    # Expected version must mirror the layer decision _compute_learned_proj will
+    # make for THIS dataset (toggle + full-coverage), so a toggle flip or a newly
+    # complete layer extraction is detected as stale and re-projected.
+    current_version = _expected_learned_version(
+        head_cfg, cache_dir, data["pecore_g"].shape[0], pe_layer_npz=pe_layer_npz)
     stored_version = str(data["_v_learned_proj"]) if "_v_learned_proj" in data.files else None
-    if stored_version == current_version and "learned_proj" in data.files:
+    if stored_version == current_version and all(
+        # A non-f4 array (float64 from a pre-fix NumPy 2 promotion bug) is
+        # unusable by the dtype-strict Rust readers — treat it as stale so the
+        # next run rewrites it.
+        k in data.files and data[k].dtype == np.float32
+        for k in expected_keys
+    ):
         # Already current
         return
 
-    result = _compute_learned_proj(data["pecore_g"], data["color"])
+    result = _compute_learned_proj(data["pecore_g"], data["color"],
+                                   cache_dir=cache_dir, pe_layer_npz=pe_layer_npz)
     if result is None:
         return
-    lp_arr, lp_version = result
+    lp_arrays, lp_version = result
 
-    # Reconstruct NPZ with learned_proj added/updated. Preserve all other keys
-    # (including version keys for the other models).
-    arrays = {k: data[k] for k in data.files if k not in ("learned_proj", "_v_learned_proj")}
-    arrays["learned_proj"] = lp_arr
+    # Reconstruct NPZ with the learned_proj* arrays added/updated. Preserve all
+    # other keys (including version keys for the other models). Stale split
+    # arrays from a previous schema are dropped, not orphaned.
+    stale = {"_v_learned_proj", "learned_proj", "learned_proj_peg", "learned_proj_color"}
+    arrays = {k: data[k] for k in data.files if k not in stale}
+    arrays.update(lp_arrays)
     arrays["_v_learned_proj"] = np.array(lp_version)
     np.savez(npz_path, **arrays)
-    print(f"  learned_proj: updated NPZ ({lp_arr.shape[0]} × {lp_arr.shape[1]}d, head {lp_version})",
-          file=sys.stderr)
+    desc = ", ".join(f"{k} {v.shape[0]}×{v.shape[1]}d" for k, v in lp_arrays.items())
+    print(f"  learned_proj: updated NPZ ({desc}; head {lp_version})", file=sys.stderr)
 
 
 def content_hash(filepath: str) -> str:
@@ -545,8 +697,13 @@ def extract_color(items, ctx):
 
 
 def extract_open_clip(key, model_name, pretrained, hw, batch_size_eff, label,
-                     items, ctx, args, save_to_cache):
-    """CLIP / PE-Core-L / PE-Core-G extraction. Switches MLX vs torch for PE-Core-G."""
+                     items, ctx, args, save_to_cache, capture_layer=None):
+    """CLIP / PE-Core-L / PE-Core-G extraction. Switches MLX vs torch for PE-Core-G.
+
+    Returns (embs, layer_arr). When `capture_layer=(block_idx, pooling)` and the
+    MLX backend is used, the intermediate layer is captured in the SAME forward
+    pass (free) and returned as `layer_arr` (raw pooled features, items order);
+    otherwise `layer_arr` is None and the caller falls back to the plain head."""
     print(f"  [Pass {ctx.next_pass()}/{ctx.total_passes}] {label} ({len(items)} images)",
           file=sys.stderr)
 
@@ -595,13 +752,31 @@ def extract_open_clip(key, model_name, pretrained, hw, batch_size_eff, label,
         mlx_model.eval()
         mx.eval(mlx_model.parameters())
 
+        # In-pass layer capture: wrap the model so each batch's intermediate
+        # block features are stashed (raw, items order) alongside the final
+        # embedding — one forward, no recompute.
+        captured = []
+        inference_fn = mlx_model
+        if capture_layer is not None:
+            lidx, lpool = capture_layer
+            print(f"    capturing layer L{lidx}:{lpool} in-pass", file=sys.stderr)
+
+            def inference_fn(mlx_batch, _m=mlx_model, _i=lidx, _p=lpool, _acc=captured):
+                emb, cap = _m.forward_and_layer(mlx_batch, _i, _p)
+                mx.eval(emb, cap)
+                _acc.append(np.array(cap).astype(np.float32))
+                return emb
+
         embs = _run_pass(
             items, preprocess, hw, batch_size_eff, label,
-            inference_fn=mlx_model, ctx=ctx, mlx_dtype=mlx_dtype,
+            inference_fn=inference_fn, ctx=ctx, mlx_dtype=mlx_dtype,
             on_checkpoint=lambda e, i: save_to_cache(key, e, i),
         )
         ctx.free_model(mlx_model)
-        return embs
+        layer_arr = np.vstack(captured) if captured else None
+        if layer_arr is not None:
+            layer_arr = layer_arr[:embs.shape[0]]  # align if interrupted mid-pass
+        return embs, layer_arr
 
     import open_clip
     model, _, preprocess = open_clip.create_model_and_transforms(
@@ -621,7 +796,9 @@ def extract_open_clip(key, model_name, pretrained, hw, batch_size_eff, label,
         on_checkpoint=lambda e, i: save_to_cache(key, e, i),
     )
     ctx.free_model(model, preprocess)
-    return embs
+    # Torch path has no in-pass layer capture (only the MLX port exposes the
+    # intermediate blocks); the head falls back to the plain joint variant.
+    return embs, None
 
 
 def extract_dinov3(items, ctx, args, save_to_cache, save_patches_cache):
@@ -813,6 +990,19 @@ def main():
 
     # Load existing cache with per-model version check.
     cached_hashes, cached, models_to_extract, _initial_versions = _load_existing_cache(hash_cache_path)
+
+    # Snapshot any previously-captured in-pass PE layer BEFORE extraction starts —
+    # the intermediate _save_model_to_cache checkpoints rewrite the NPZ without it,
+    # so the final merge must reuse this snapshot, not re-read the (clobbered) file.
+    cached_pe_layer, cached_pe_layer_spec = None, None
+    if os.path.exists(hash_cache_path):
+        try:
+            _snap = np.load(hash_cache_path, allow_pickle=True)
+            if "pe_layer" in _snap and "_v_pe_layer" in _snap:
+                cached_pe_layer = _snap["pe_layer"]
+                cached_pe_layer_spec = str(_snap["_v_pe_layer"])
+        except Exception:
+            pass
 
     # Compute zero-fill / forced/required filtering
     zero_fill_needed = {}
@@ -1026,17 +1216,27 @@ def main():
         ("pecore_g", "PE-Core-bigG-14-448","meta",              448, 1, 8, 1280, "PE-Core-G"),
     ]
 
+    # The installed head may want an intermediate PE layer captured during the
+    # pecore_g pass (free); spec read from learned_head.json.
+    pe_layer_want = _deployed_pe_layer()  # (idx, pool, spec) or None
+    new_pe_layer = None          # captured rows (items order), or None
+    pe_layer_items = []          # the pecore_g items they correspond to
+
     for key, model_name, pretrained, hw, batch_mult, batch_div, dim, label in OPEN_CLIP_MODELS:
         model_items = items_map[key]
         if model_items and not ctx.interrupted:
             batch_size_eff = max(1, args.batch_size * batch_mult // batch_div)
-            embs = extract_open_clip(
+            cap = (pe_layer_want[0], pe_layer_want[1]) if (key == "pecore_g" and pe_layer_want) else None
+            embs, layer_arr = extract_open_clip(
                 key, model_name, pretrained, hw, batch_size_eff, label,
-                model_items, ctx, args, _save_model_to_cache,
+                model_items, ctx, args, _save_model_to_cache, capture_layer=cap,
             )
             n_done = embs.shape[0]
             new_arrays[key] = embs
             _save_model_to_cache(key, embs, model_items[:n_done])
+            if key == "pecore_g" and layer_arr is not None:
+                new_pe_layer = layer_arr
+                pe_layer_items = model_items[:layer_arr.shape[0]]
         else:
             new_arrays[key] = np.zeros((0, dim), dtype=np.float32)
 
@@ -1115,9 +1315,33 @@ def main():
         # No models had any data; build an empty hash list constrained to current.
         final_hash_list = sorted(current_hash_set)
 
+    # Intermediate PE layer captured in-pass during pecore_g — cached like the
+    # models so incremental re-extracts keep full coverage. Cached rows are
+    # reused only when the spec is unchanged; rows for images with neither cached
+    # nor freshly-captured layer stay zero (→ the head falls back to plain until
+    # a full pecore_g re-extract or an offline `extract_pe_layers --all-images`).
+    pe_layer_spec = pe_layer_want[2] if pe_layer_want else None
+    if pe_layer_spec:
+        # Reuse the pre-extraction snapshot (the checkpoints clobbered the file),
+        # only when its spec matches the currently-wanted layer.
+        cached_layer = cached_pe_layer if cached_pe_layer_spec == pe_layer_spec else None
+        new_layer = new_pe_layer if new_pe_layer is not None else np.zeros((0, 0), np.float32)
+        new_layer_h = [h for _, h in pe_layer_items]
+        if cached_layer is not None or len(new_layer):
+            merged_layer, _ = merge_cached_array(
+                cached_layer, cached_hashes if cached_layer is not None else [],
+                new_layer, new_layer_h, hash_universe=current_hash_set,
+            )
+            all_arrays["pe_layer"] = merged_layer.astype(np.float32, copy=False)
+            covered = int((np.abs(all_arrays["pe_layer"]).sum(axis=1) > 0).sum())
+            print(f"  pe_layer (L{pe_layer_spec}): {covered}/{len(final_hash_list)} images "
+                  f"covered in-pass", file=sys.stderr)
+
     # Save hash-keyed cache with per-model version keys (uncompressed — see
     # _save_model_to_cache for rationale)
     version_keys = {f"_v_{k}": np.array(v) for k, v in MODEL_VERSIONS.items() if k in all_arrays}
+    if "pe_layer" in all_arrays:
+        version_keys["_v_pe_layer"] = np.array(pe_layer_spec)
     np.savez(
         hash_cache_path,
         hashes=np.array(final_hash_list),

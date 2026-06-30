@@ -10,9 +10,17 @@ import {
   resolveHashCachePath,
 } from "../cache-utils.ts";
 import { cacheDir, contentHashesPath } from "../fs/paths.ts";
+import { log } from "../log.ts";
 import type { WeightConfig } from "../shared/types.ts";
 
-export const MODEL_KEYS = ["dinov3", "pecore_g", "color", "learned_proj"] as const;
+export const MODEL_KEYS = [
+  "dinov3",
+  "pecore_g",
+  "color",
+  "learned_proj",
+  "learned_proj_peg",
+  "learned_proj_color",
+] as const;
 export type ModelKey = (typeof MODEL_KEYS)[number];
 
 /** The models with positive weight, restricted to known MODEL_KEYS. */
@@ -81,6 +89,20 @@ export function loadModelEmbedding(targetDir: string, modelKey: ModelKey): Model
   }
   const dim = hashOrdered.length / mapping.hashOrder.length;
   const data = reindexToFilenameOrder(hashOrdered, dim, mapping);
+  // Some extractions write NaN dimensions (observed in learned_proj heads:
+  // a handful of dims NaN for every image). NaN poisons every dot product it
+  // touches, silently flattening all downstream distances — zero them so the
+  // remaining dimensions still rank.
+  let sanitized = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (!Number.isFinite(data[i]!)) {
+      data[i] = 0;
+      sanitized++;
+    }
+  }
+  if (sanitized > 0) {
+    log("embeddings", `Sanitized ${sanitized} non-finite values in ${modelKey} embeddings`);
+  }
   const emb: ModelEmbedding = {
     filenames: mapping.filenames,
     data,

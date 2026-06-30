@@ -13,7 +13,7 @@ import {
   SortableContext,
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { defaultRangeExtractor, type Range, useVirtualizer } from "@tanstack/react-virtual";
 import type React from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useDragHandlers } from "../../hooks/useDragHandlers.ts";
@@ -46,6 +46,7 @@ import { CreateGroupsModal } from "../shared/CreateGroupsModal.tsx";
 import { FolderPopover } from "../shared/FolderPopover.tsx";
 import { GroupPopover } from "../shared/GroupPopover.tsx";
 import { GroupThumbGrid } from "../shared/GroupThumbGrid.tsx";
+import { NamingRulesModal } from "../shared/NamingRulesModal.tsx";
 import { OrganizeModal } from "../shared/OrganizeModal.tsx";
 import { PathsModal } from "../shared/PathsModal.tsx";
 import { PreviewModal } from "../shared/PreviewModal.tsx";
@@ -116,6 +117,7 @@ export function ReorderView() {
   const showOrganize = useModalStore((s) => s.open.organize);
   const showPaths = useModalStore((s) => s.open.paths);
   const showReview = useModalStore((s) => s.open.review);
+  const showNamingRules = useModalStore((s) => s.open.namingRules);
   const showCreateGroups = useModalStore((s) => s.open.createGroups);
   const showTrashModal = useModalStore((s) => s.open.trash);
   const closeModal = useModalStore((s) => s.closeModal);
@@ -253,11 +255,37 @@ export function ReorderView() {
     return result;
   }, [visibleItems, columnCount]);
 
+  // Row holding the expanded group/folder. Its popover is a child of the card,
+  // so the row must stay mounted even when scrolled out of the virtual window —
+  // otherwise a tall popover that runs off-screen vanishes as you scroll to it.
+  const expandedRowIndex = useMemo(() => {
+    if (expandedGroupId == null && expandedFolderName == null) return -1;
+    return rows.findIndex((row) =>
+      row.some(
+        (item) =>
+          (item.type === "group" && item.groupId === expandedGroupId) ||
+          (item.type === "folder" && item.folderName === expandedFolderName),
+      ),
+    );
+  }, [rows, expandedGroupId, expandedFolderName]);
+
+  const rangeExtractor = useCallback(
+    (range: Range) => {
+      const visible = defaultRangeExtractor(range);
+      if (expandedRowIndex >= 0 && !visible.includes(expandedRowIndex)) {
+        return [...visible, expandedRowIndex].sort((a, b) => a - b);
+      }
+      return visible;
+    },
+    [expandedRowIndex],
+  );
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: () => rowHeight,
     overscan: 5,
+    rangeExtractor,
   });
 
   // ---- Search ----
@@ -721,6 +749,8 @@ export function ReorderView() {
       )}
 
       {showReview && <ReviewModal onClose={() => closeModal("review")} />}
+
+      {showNamingRules && <NamingRulesModal onClose={() => closeModal("namingRules")} />}
 
       {showCreateGroups && <CreateGroupsModal onClose={() => closeModal("createGroups")} />}
 

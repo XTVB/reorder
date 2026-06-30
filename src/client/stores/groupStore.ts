@@ -49,6 +49,12 @@ interface GroupState {
   renameGroupPrompt: (groupId: string) => void;
   deleteGroup: (groupId: string) => void;
   /**
+   * Merge the given groups into the one that appears first in the current
+   * frontend order (earliest member in the gallery). The survivor keeps its
+   * id and name; the others' images are appended to it and they are removed.
+   */
+  mergeGroups: (groupIds: string[]) => void;
+  /**
    * Toggle the sort lock on the given groups: locks all of them unless every
    * one is already locked, in which case all are unlocked. Locked groups keep
    * their gallery slot when a sort is applied.
@@ -209,6 +215,51 @@ export const useGroupStore = create<GroupState>((set, get) => ({
     const { expandedGroupId, collapseGroup, updateGroups } = get();
     updateGroups((prev) => prev.filter((g) => g.id !== groupId));
     if (expandedGroupId === groupId) collapseGroup();
+  },
+
+  mergeGroups: (groupIds) => {
+    const { groupMap, expandedGroupId, collapseGroup, updateGroups } = get();
+    const { images, setImages } = useImageStore.getState();
+    const sel = useSelectionStore.getState();
+
+    const targets = groupIds.filter((id) => groupMap.has(id));
+    if (targets.length < 2) return;
+
+    // Order the groups by their position in the gallery: the survivor is the
+    // group whose earliest member appears first in the current image order.
+    const indexOf = new Map(images.map((i, idx) => [i.filename, idx]));
+    const firstSlot = (gid: string) => {
+      let min = Infinity;
+      for (const fn of groupMap.get(gid)!.images) {
+        const i = indexOf.get(fn);
+        if (i !== undefined && i < min) min = i;
+      }
+      return min;
+    };
+    const ordered = [...targets].sort((a, b) => firstSlot(a) - firstSlot(b));
+
+    const survivorId = ordered[0]!;
+    const removed = new Set(ordered.slice(1));
+    const mergedImages: string[] = [];
+    const seen = new Set<string>();
+    for (const gid of ordered) {
+      for (const fn of groupMap.get(gid)!.images) {
+        if (seen.has(fn)) continue;
+        seen.add(fn);
+        mergedImages.push(fn);
+      }
+    }
+
+    updateGroups((prev) =>
+      prev
+        .map((g) => (g.id === survivorId ? { ...g, images: mergedImages } : g))
+        .filter((g) => !removed.has(g.id)),
+    );
+    setImages(repositionBlock(images, mergedImages));
+    if (expandedGroupId && removed.has(expandedGroupId)) collapseGroup();
+
+    sel.clear("reorder");
+    useToastStore.getState().showToast(`Merged ${ordered.length} groups`, "success");
   },
 
   toggleGroupsLocked: (groupIds) => {

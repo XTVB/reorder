@@ -230,6 +230,26 @@ class PECoreBigG(nn.Module):
             return self.attn_pool(self.norm(x))
         raise ValueError(f"unknown pooling {pooling!r}")
 
+    def forward_and_layer(self, x: mx.array, layer_idx: int, pooling: str = "attnpool"):
+        """Single forward returning BOTH the final image embedding (B, output_dim)
+        and one intermediate block's pooled features (B, D) — the production
+        in-pass capture for the learned-head layer input. Identical math to
+        __call__ for the final output; the capture rides along free. Pooling uses
+        the SAME _pool_tokens path as the offline forward_capture the head trained
+        on, so inference features match training exactly."""
+        x = self.patch_embed(x)
+        x = x + self.pos_embed
+        x = self.norm_pre(x)
+        cap = None
+        for idx, blk in enumerate(self.blocks):
+            x = blk(x, self._rope_emb)
+            if idx == layer_idx:
+                cap = self._pool_tokens(x, pooling)
+        x = self.norm(x)
+        x = self.attn_pool(x)
+        x = self.head(x)
+        return x, cap
+
     def forward_capture(self, x: mx.array, layers, poolings=("mean", "gem3", "attnpool")) -> dict:
         """Run the vision forward and return {(block_idx, pooling): (B, D)} for the
         requested 0-based transformer blocks, captured in the single pass (no

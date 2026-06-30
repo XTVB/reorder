@@ -3,7 +3,7 @@ Default to Bun, not Node.
 - `bun run start.ts <dir>` — launch (builds client, opens browser, pre-generates thumbnails)
 - `bun build src/client/index.tsx --outdir dist --minify` — test client compilation
 - `bun install`, `bun run typecheck`, `bun run lint` (`bun run lint:fix` to auto-fix)
-- Rust: `cargo build --release` from `rust/cluster-tool/` or `rust/group-similarity/` (workspace shares `rust/reorder-common`)
+- Rust: `cargo build --release` from `rust/cluster-tool/`, `rust/group-similarity/`, or `rust/order-tool/` (all share `rust/reorder-common`)
 
 ## What This App Does
 
@@ -60,13 +60,27 @@ Stage 1: Python (scripts/extract_features.py)
 Stage 2: Rust (rust/cluster-tool/, modules: cli/io/distances/linkage/tree)
   Ward's linkage (NNC) matching scipy exactly. Parallel via rayon.
   Pre-seeds confirmed reorder groups as real clusters (true centroid/size/variance).
-  Weighted blend of per-model cosine distances (--pecore-g-weight, --dinov3-weight, --color-weight, --learned-proj-weight)
+  Weighted blend of per-model cosine distances (--pecore-g-weight, --dinov3-weight, --color-weight,
+  --learned-proj-weight, --learned-proj-peg-weight, --learned-proj-color-weight). The three
+  learned-head sliders are each a target fraction of the final cosine signal, converted to raw
+  concat weights server-side (rescaleLearnedProjWeight in src/cluster/pipeline.ts); defaults
+  .55/.30/.15 joint:peg:color = the winning 3-head blend. A dial whose array is missing from the
+  cache contributes nothing (zero-shot absorbs the remainder)
   Optional: blend in precomputed patch distance matrix (--dist-matrix)
   → .reorder-cache/linkage_tree.bin
 
 Stage 2b: Rust (rust/group-similarity/, modes: merge-suggestions / dist-matrix)
   DINOv3 patch matching: for each image pair, max-pool 7x7 cosine sims
   Shared parsing/types live in the rust/reorder-common crate.
+
+Stage 2c: Rust (rust/order-tool/) — reorder page "Sort Similar" image ordering
+  Batch seriation: per job (the ungrouped set, or one per selected group) builds
+  the per-model linear-weighted cosine distance matrix (rayon-parallel rows) and
+  reduces it to a 1D order via six modes (chain/tree/spectral/minimal/stable/
+  gather). Jobs run in parallel; embeddings load once. The mode algorithms
+  mirror the group-ordering ones (src/cluster/group-ordering.ts). Driven by
+  src/cluster/order-batch.ts via /api/groups/similarity-order (target:ungrouped)
+  and /api/groups/similarity-order-batch (one job per selected group).
 
 Stage 3: Bun (src/cluster/pipeline.ts + linkage.ts)
   Re-cuts cached linkage tree — three modes: fixed N, distance threshold, HDBSCAN-style adaptive

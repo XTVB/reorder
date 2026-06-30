@@ -581,6 +581,246 @@
   color: var(--review-color, var(--text-muted));
 }
 
+/* Naming Rules modal */
+.naming-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.naming-meta-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.naming-meta-key {
+  flex: 0 0 78px;
+  margin: 0;
+  color: var(--text-muted);
+  font-family: "SF Mono", "Fira Code", Menlo, monospace;
+  font-size: 11px;
+}
+
+.naming-meta-val {
+  margin: 0;
+  color: var(--text);
+}
+
+.naming-meta-val-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Full-width stacked rule rows: previews can be long, so each gets its own
+   line and wraps freely (overrides .btn's nowrap/fixed-height). */
+.naming-rule-actions {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+}
+
+.naming-rule-btn {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 14px;
+  text-align: left;
+  white-space: normal;
+}
+
+.naming-rule-btn-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.naming-rule-btn-template {
+  font-size: 12px;
+  font-family: "SF Mono", "Fira Code", Menlo, monospace;
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.naming-rule-btn-preview {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.naming-rule-btn-preview-empty {
+  font-weight: 400;
+  font-style: italic;
+  opacity: 0.6;
+}
+
+/* Per-group free-text override */
+.naming-custom {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.naming-custom-selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+
+.naming-custom-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.naming-custom-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.naming-custom-select:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.naming-custom-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.naming-custom-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.naming-custom-selected .naming-custom-hint {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.naming-custom-fill {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.naming-custom-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.naming-custom-input {
+  flex: 1 1 auto;
+  font-size: 14px;
+}
+
+/* Naming rule editor */
+.naming-rule-tokens-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.naming-token {
+  font-family: "SF Mono", "Fira Code", Menlo, monospace;
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text);
+}
+
+.naming-rule-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.naming-rule-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.naming-rule-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.naming-rule-input {
+  flex: 1 1 auto;
+  font-family: "SF Mono", "Fira Code", Menlo, monospace;
+}
+
+.naming-rule-token-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.naming-token-btn {
+  font-family: "SF Mono", "Fira Code", Menlo, monospace;
+  font-size: 11px;
+}
+
+.naming-rule-preview {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  padding-left: 2px;
+}
+
+.naming-rule-preview-empty {
+  font-weight: 400;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
 /* Review config editor */
 .review-config-modal {
   max-width: 720px;

@@ -84,4 +84,10 @@ pub(crate) struct Cli {
     pub pecore_g_weight: f32,
     #[arg(long, default_value_t = 0.0)]
     pub learned_proj_weight: f32,
+    /// Split single-modality heads (learned_proj_peg / learned_proj_color in
+    /// the NPZ) — see LEARNED_HEAD.md "Split single-modality heads".
+    #[arg(long, default_value_t = 0.0)]
+    pub learned_proj_peg_weight: f32,
+    #[arg(long, default_value_t = 0.0)]
+    pub learned_proj_color_weight: f32,
 }

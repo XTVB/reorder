@@ -98,7 +98,16 @@ export const useListStore = create<ListState>((set, get) => {
     loading: false,
     progress: "",
     treeStale: false,
-    weights: { pecore_g: 1.0, color: 0.7, learned_proj: 0.6 },
+    // The three learned dials (fractions of the final signal; defaults
+    // benchmarked in LEARNED_HEAD.md). Zero-shot contributes nothing when
+    // they sum to 1; the pe-g/color weights only matter when they sum below
+    // 1 — or on caches missing a head's array, whose dial then contributes
+    // nothing (server-side gating).
+    weights: {
+      learned_proj: 0.3,
+      learned_proj_peg: 0.55,
+      learned_proj_color: 0.15,
+    },
     usePatches: false,
     // Defaults pinned to the best-scoring cluster config — see LEARNED_HEAD.md.
     useRerank: false,

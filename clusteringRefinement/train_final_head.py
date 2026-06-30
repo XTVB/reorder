@@ -49,8 +49,12 @@ DEFAULT_CONFIG_PATH = Path(os.path.expanduser("~/.config/reorder/training_datase
 
 # Winning hyperparameters from the LOMO sweep series. See LEARNED_HEAD.md for
 # the rationale, results, and the matching inference blend (0.60).
+# epochs 12 + cosine decay replaced epochs 15 + constant LR (2026-06): paired
+# 26-fold LOMO Δ = +0.0061 (seed 42) / +0.0005 (seed 43) — never worse, 20%
+# less training compute.
 DEFAULT_HYPERPARAMS = {
-    "epochs": 15,
+    "epochs": 12,
+    "lr_schedule": "cosine",
     "batches_per_epoch": 400,
     "p_groups": 32,
     "k_images": 12,
@@ -75,6 +79,47 @@ DEFAULT_HYPERPARAMS = {
 # Ensemble seeds. 3 heads ≈ +0.010 ARI over the expected single-seed head in
 # the 24-fold LOMO (seed_ensemble_v26.tsv); ens4 added nothing over ens3.
 ENSEMBLE_SEEDS = [42, 43, 44]
+
+# Modality groups for the split-head blend (LEARNED_HEAD.md "Split single-
+# modality heads": joint .55 + peg .30 + color .15 beats the joint-only blend
+# by +0.019 eval-23). Each group trains one head per ENSEMBLE_SEED.
+# The color head disables drop-color — that augmentation would zero its entire
+# input half the time.
+MODALITY_GROUPS = [
+    {"mod": "both", "npz_key": "learned_proj", "input_mods": "peg,color",
+     "input_dim": 1973, "hp_overrides": {}},
+    {"mod": "peg", "npz_key": "learned_proj_peg", "input_mods": "peg",
+     "input_dim": 1280, "hp_overrides": {}},
+    {"mod": "color", "npz_key": "learned_proj_color", "input_mods": "color",
+     "input_dim": 693, "hp_overrides": {"drop_color_prob": 0.0}},
+]
+
+# Intermediate PE-G layer fed as EXTRA joint-head input (LEARNED_HEAD.md
+# "PE-layer head input"). The 12-config × 2-placement sweep picked L44 attn-pool
+# into the JOINT head: +0.0064 ARI, 20/25 wins, 95% CI excludes 0. A parallel
+# layer-augmented joint head is trained alongside the plain one; extraction uses
+# it only when the layer is extracted fully (else falls back to plain) and the
+# `use_pe_layer` toggle is on. None disables the whole thing.
+PE_LAYER = "44:attnpool"
+PE_LAYER_DIM = 1536          # attn-pool block width (pe_layers_L44_attnpool.npy)
+PE_LAYER_GROUP = "both"      # which modality group the layer augments
+def pe_layer_head_filename(seed: int, seed_index: int) -> str:
+    return "learned_head_layer.pt" if seed_index == 0 else f"learned_head_layer_s{seed}.pt"
+
+
+def pe_layer_npy(path: str, pe_layer: str) -> str:
+    """Path to a dataset's extracted PE-layer features for '<layer>:<pool>'.
+    Mirrors train_projection_head.py's naming (pe_layers_L<NN>_<pool>.npy)."""
+    lno, pool = pe_layer.split(":")
+    return os.path.join(path, ".reorder-cache", f"pe_layers_L{int(lno):02d}_{pool}.npy")
+
+
+def head_filename(mod: str, seed: int, seed_index: int) -> str:
+    """The joint head keeps the legacy names (learned_head.pt + _s<N>.pt) so
+    older consumers keep working; split heads are suffixed by modality."""
+    if mod == "both":
+        return "learned_head.pt" if seed_index == 0 else f"learned_head_s{seed}.pt"
+    return f"learned_head_{mod}_s{seed}.pt"
 
 # Dataset registry: single source of truth shared with common.sh and the
 # pixel-aug scripts. Add a dataset by appending one line to datasets.txt.
@@ -136,6 +181,42 @@ def verify_dataset(name: str, path: str) -> bool:
     return True
 
 
+def run_seed_jobs(jobs: list[tuple[int, Path, Path, list[str]]], max_parallel: int, mod: str):
+    """Run per-seed training subprocesses, at most max_parallel at once.
+    Sequential runs stream output through; parallel runs log to train.log in
+    their output dir (tail printed on failure). Waits FIFO — seeds of a group
+    are equal-length runs, so out-of-order completion costs nothing."""
+    pending = list(jobs)
+    running: list[tuple[subprocess.Popen, int, Path, Path, object]] = []
+    while pending or running:
+        while pending and len(running) < max_parallel:
+            seed, dst, out, cmd = pending.pop(0)
+            print(f"\nTraining {mod} head seed={seed}...\n", file=sys.stderr)
+            if max_parallel == 1:
+                proc, logf = subprocess.Popen(cmd), None
+            else:
+                logf = open(out / "train.log", "w")
+                proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
+            running.append((proc, seed, dst, out, logf))
+        proc, seed, dst, out, logf = running.pop(0)
+        rc = proc.wait()
+        if logf:
+            logf.close()
+        if rc != 0:
+            for p, *_rest, lf in running:
+                p.terminate()
+                if lf:
+                    lf.close()
+            if logf:
+                sys.stderr.write((out / "train.log").read_text()[-4000:])
+            sys.exit(f"Training ({mod}, seed {seed}) failed with exit code {rc}")
+        src_pt = out / "proj_head.pt"
+        if not src_pt.exists():
+            sys.exit(f"Training did not produce {src_pt}")
+        shutil.copy(src_pt, dst)
+        print(f"Head ({mod}, seed {seed}) saved → {dst}", file=sys.stderr)
+
+
 def compute_head_version(pt_paths: list[Path], datasets: list[tuple[str, str]]) -> str:
     """Stable version string derived from every head's weights + training dataset
     list. Used to invalidate cached learned_proj features when the head is retrained."""
@@ -156,9 +237,39 @@ def main():
     ap.add_argument("--output-dir", type=Path, default=HEAD_DIR,
                     help=f"Where to save head + config (default {HEAD_DIR})")
     ap.add_argument("--epochs", type=int, default=DEFAULT_HYPERPARAMS["epochs"])
+    ap.add_argument("--backend", choices=["mlx", "torch"], default="mlx",
+                    help="training framework passed to train_projection_head.py "
+                         "(default mlx — ~2x faster per head on Apple Silicon, "
+                         "statistically equivalent; see LEARNED_HEAD.md)")
+    ap.add_argument("--jobs", type=int, default=3,
+                    help="(--seed-mode jobs only) train up to N ensemble seeds as "
+                         "concurrent processes (~2-3GB RAM each). 3-seed group: "
+                         "39s/33s/31s at jobs 1/2/3. 1 = sequential, streaming output.")
+    ap.add_argument("--seed-mode", choices=["jobs", "batched"], default="jobs",
+                    help="jobs (default): one process per seed, parallelized per "
+                         "--jobs — fastest (host phases overlap the GPU). batched "
+                         "(mlx only): all seeds in ONE process via --seeds (stacked "
+                         "weights, one compiled graph) — quality-equivalent, ~13% "
+                         "slower, but 1/3 the memory; use when RAM is tight or only "
+                         "one process may own the GPU.")
+    ap.add_argument("--mods", default="both,peg,color",
+                    help="Comma list of modality groups to (re)train: both,peg,color. "
+                         "Untrained groups must already have head files on disk — the "
+                         "config always describes all three.")
+    ap.add_argument("--pe-layer", default=PE_LAYER,
+                    help=f"intermediate PE-G layer fed to the joint head as "
+                         f"'<layer>:<pool>' (default {PE_LAYER}). Trains a parallel "
+                         f"layer-augmented joint head used at inference when the layer "
+                         f"is fully extracted (else falls back to the plain head).")
+    ap.add_argument("--no-pe-layer", dest="pe_layer", action="store_const", const=None,
+                    help="don't train the layer head, and set the deployed toggle off "
+                         "(extraction always uses the plain joint head).")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print the training command without running.")
     args = ap.parse_args()
+    train_mods = set(args.mods.split(","))
+    if not train_mods <= {g["mod"] for g in MODALITY_GROUPS}:
+        sys.exit(f"--mods must be a subset of both,peg,color (got {args.mods!r})")
 
     # Resolve dataset list
     if args.dataset:
@@ -184,16 +295,20 @@ def main():
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build the training command. Train on ALL valid datasets, no holdout.
-    # One run per ensemble seed; each head is promoted to its own file.
-    hp = DEFAULT_HYPERPARAMS
+    # Build the training commands. Train on ALL valid datasets, no holdout.
+    # One run per (modality group, ensemble seed); each head gets its own file.
     train_names = ",".join(n for n, _ in valid)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        base_cmd = [
+
+    def build_cmd(hp: dict, input_mods: str, pe_layer: str | None = None,
+                  ds: list[tuple[str, str]] | None = None) -> list[str]:
+        ds = valid if ds is None else ds
+        cmd = [
             sys.executable, str(TRAIN_SCRIPT),
-            *sum([["--dataset", f"{n}:{p}"] for n, p in valid], []),
-            "--train", train_names,
+            *sum([["--dataset", f"{n}:{p}"] for n, p in ds], []),
+            "--train", ",".join(n for n, _ in ds),
             "--within-holdout-frac", "0",
+            "--input-mods", input_mods,
+            *(["--pe-layer", pe_layer] if pe_layer else []),
             "--epochs", str(args.epochs),
             "--batches-per-epoch", str(hp["batches_per_epoch"]),
             "--p-groups", str(hp["p_groups"]),
@@ -203,6 +318,7 @@ def main():
             "--dropout", str(hp["dropout"]),
             "--temperature", str(hp["temperature"]),
             "--lr", str(hp["lr"]),
+            "--lr-schedule", hp["lr_schedule"],
             "--weight-decay", str(hp["weight_decay"]),
             "--grad-clip", str(hp["grad_clip"]),
             "--mixup-alpha", str(hp["mixup_alpha"]),
@@ -212,56 +328,159 @@ def main():
             "--hard-neg-frac", str(hp["hard_neg_frac"]),
             "--hard-neg-pool-k", str(hp["hard_neg_pool_k"]),
             "--arcface-weight", str(hp["arcface_weight"]),
+            # Only proj_head.pt is consumed — skip per-dataset projection artifacts.
+            "--eval", "none",
+            "--backend", args.backend,
         ]
         if hp["use_augmented_views"]:
-            base_cmd.append("--use-augmented-views")
+            cmd.append("--use-augmented-views")
         if hp["use_singleton_negatives"]:
-            base_cmd.append("--use-singleton-negatives")
+            cmd.append("--use-singleton-negatives")
+        return cmd
+
+    groups_out = []  # (group, head_paths) for the config
+    with tempfile.TemporaryDirectory() as tmpdir:
+        def train_heads(label: str, base_cmd: list[str], head_paths: list[Path]):
+            """Train one head group (all ensemble seeds) → head_paths. Honors
+            --seed-mode (batched/jobs) and --dry-run."""
+            if args.dry_run:
+                seeds_arg = ",".join(str(s) for s in ENSEMBLE_SEEDS)
+                if args.seed_mode == "batched" and args.backend == "mlx":
+                    print(f"[{label}] would run ONCE, batched seeds {ENSEMBLE_SEEDS}:")
+                    tail = f" --seeds {seeds_arg} --output-dir <tmp>"
+                else:
+                    print(f"[{label}] would run (once per seed {ENSEMBLE_SEEDS}):")
+                    tail = " --seed <s> --output-dir <tmp>"
+                print("  " + " ".join(repr(c) if " " in c else c for c in base_cmd) + tail)
+                return
+            if args.seed_mode == "batched" and args.backend == "mlx":
+                out = Path(tmpdir) / label
+                out.mkdir()
+                seeds_arg = ",".join(str(s) for s in ENSEMBLE_SEEDS)
+                print(f"\nTraining {label} heads, batched seeds {seeds_arg}...\n", file=sys.stderr)
+                result = subprocess.run(base_cmd + ["--seeds", seeds_arg, "--output-dir", str(out)])
+                if result.returncode != 0:
+                    sys.exit(f"Training ({label}, seeds {seeds_arg}) failed "
+                             f"with exit code {result.returncode}")
+                for seed, dst in zip(ENSEMBLE_SEEDS, head_paths):
+                    src_pt = out / f"proj_head_s{seed}.pt"
+                    if not src_pt.exists():
+                        sys.exit(f"Training did not produce {src_pt}")
+                    shutil.copy(src_pt, dst)
+                    print(f"Head ({label}, seed {seed}) saved → {dst}", file=sys.stderr)
+            else:
+                jobs = []
+                for seed, dst in zip(ENSEMBLE_SEEDS, head_paths):
+                    out = Path(tmpdir) / f"{label}_s{seed}"
+                    out.mkdir()
+                    jobs.append((seed, dst, out,
+                                 base_cmd + ["--seed", str(seed), "--output-dir", str(out)]))
+                run_seed_jobs(jobs, max_parallel=max(1, args.jobs), mod=label)
+
+        for group in MODALITY_GROUPS:
+            hp = {**DEFAULT_HYPERPARAMS, **group["hp_overrides"]}
+            head_paths = [args.output_dir / head_filename(group["mod"], s, i)
+                          for i, s in enumerate(ENSEMBLE_SEEDS)]
+            groups_out.append((group, head_paths, hp))
+            if group["mod"] not in train_mods:
+                missing = [p for p in head_paths if not p.exists()]
+                if missing:
+                    sys.exit(f"--mods skips '{group['mod']}' but {missing} missing — "
+                             f"train it or remove it from the config expectations")
+                print(f"\nSkipping '{group['mod']}' (not in --mods; reusing existing heads)",
+                      file=sys.stderr)
+                continue
+            train_heads(group["mod"], build_cmd(hp, group["input_mods"]), head_paths)
+
+        # Layer-augmented joint head (parallel to the plain "both" head). Trained
+        # only when the layer is requested and the joint group is being (re)trained.
+        layer_paths = None
+        if args.pe_layer and PE_LAYER_GROUP in train_mods:
+            # The layer head can only train on datasets that have the PE-layer
+            # extracted; silently drop the rest rather than fail the whole run.
+            layer_ds = [(n, p) for n, p in valid
+                        if os.path.exists(pe_layer_npy(p, args.pe_layer))]
+            skipped = [n for n, p in valid if (n, p) not in layer_ds]
+            if skipped:
+                print(f"\n[{PE_LAYER_GROUP}+layer] skipping {len(skipped)} dataset(s) "
+                      f"without {args.pe_layer} extracted: {', '.join(skipped)} "
+                      f"(run run_pe_layer_extraction.sh to include them)", file=sys.stderr)
+            if not layer_ds:
+                print(f"[{PE_LAYER_GROUP}+layer] no datasets have {args.pe_layer} "
+                      f"extracted — skipping the layer head entirely", file=sys.stderr)
+            else:
+                hp = {**DEFAULT_HYPERPARAMS,
+                      **next(g["hp_overrides"] for g in MODALITY_GROUPS if g["mod"] == PE_LAYER_GROUP)}
+                mods = next(g["input_mods"] for g in MODALITY_GROUPS if g["mod"] == PE_LAYER_GROUP)
+                layer_paths = [args.output_dir / pe_layer_head_filename(s, i)
+                               for i, s in enumerate(ENSEMBLE_SEEDS)]
+                train_heads(f"{PE_LAYER_GROUP}+layer",
+                            build_cmd(hp, mods, pe_layer=args.pe_layer, ds=layer_ds), layer_paths)
+        elif args.pe_layer:
+            # Joint group skipped but layer requested: reuse existing layer heads.
+            cand = [args.output_dir / pe_layer_head_filename(s, i)
+                    for i, s in enumerate(ENSEMBLE_SEEDS)]
+            layer_paths = cand if all(p.exists() for p in cand) else None
 
         if args.dry_run:
-            print(f"Would run (once per seed {ENSEMBLE_SEEDS}):")
-            print("  " + " ".join(repr(c) if " " in c else c for c in base_cmd)
-                  + " --seed <s> --output-dir <tmp>")
             return
 
-        # Head file per seed: the first keeps the legacy name so a single-head
-        # consumer keeps working; the rest are suffixed.
-        head_paths = [HEAD_PT if i == 0 else HEAD_DIR / f"learned_head_s{s}.pt"
-                      for i, s in enumerate(ENSEMBLE_SEEDS)]
-        for seed, dst in zip(ENSEMBLE_SEEDS, head_paths):
-            out = Path(tmpdir) / f"s{seed}"
-            out.mkdir()
-            print(f"\nTraining ensemble head seed={seed}...\n", file=sys.stderr)
-            result = subprocess.run(base_cmd + ["--seed", str(seed), "--output-dir", str(out)])
-            if result.returncode != 0:
-                sys.exit(f"Training (seed {seed}) failed with exit code {result.returncode}")
-            src_pt = out / "proj_head.pt"
-            if not src_pt.exists():
-                sys.exit(f"Training did not produce {src_pt}")
-            shutil.copy(src_pt, dst)
-            print(f"Head (seed {seed}) saved → {dst}", file=sys.stderr)
+        # Save config (version derived from ALL groups' weights + dataset list —
+        # retraining any modality refreshes every cached learned_proj* array).
+        hp = DEFAULT_HYPERPARAMS
+        all_paths = [p for _, paths, _ in groups_out for p in paths]
+        if layer_paths:
+            all_paths = all_paths + layer_paths
+        version = compute_head_version(all_paths, valid)
 
-        # Save config (includes version derived from all weights + dataset list)
-        version = compute_head_version(head_paths, valid)
+        def head_entry(g, paths, ghp):
+            entry = {
+                "npz_key": g["npz_key"],
+                "input_mods": g["input_mods"],
+                "input_dim": g["input_dim"],
+                "head_files": [p.name for p in paths],
+                "hyperparams": ghp,
+            }
+            # Joint group gains a parallel layer-augmented head: used at inference
+            # only when the PE-layer is fully extracted (else falls back to the
+            # plain head above) and the use_pe_layer toggle is on.
+            if g["mod"] == PE_LAYER_GROUP and layer_paths:
+                entry["pe_layer"] = args.pe_layer
+                entry["pe_layer_dim"] = PE_LAYER_DIM
+                entry["pe_layer_input_dim"] = g["input_dim"] + PE_LAYER_DIM
+                entry["pe_layer_head_files"] = [p.name for p in layer_paths]
+            return entry
+
         config = {
             "version": version,
+            # The deployed toggle: extraction uses the layer head when present &
+            # fully extracted. Flip to false (or env REORDER_USE_PE_LAYER=0) to
+            # force the plain joint head everywhere.
+            "use_pe_layer": bool(args.pe_layer),
+            # Modality groups (consumed by extract_features._compute_learned_proj):
+            # per group, project through every head file, concat L2-normed
+            # blocks / sqrt(n). Joint group keeps the legacy fields below too.
+            "heads": [head_entry(g, paths, ghp) for g, paths, ghp in groups_out],
+            # Legacy fields — pre-split consumers read these (joint head only).
             "input_dim_peg": 1280,
             "input_dim_color": 693,
             "input_dim_total": 1973,
             "out_dim": hp["out_dim"],
             "hidden": hp["hidden"],
             "dropout": hp["dropout"],
-            # Ensemble (consumed by extract_features._compute_learned_proj):
-            # project through every head file, concat L2-normed blocks / sqrt(n).
-            "head_files": [p.name for p in head_paths],
+            "head_files": next(
+                [p.name for p in paths] for g, paths, _ in groups_out if g["mod"] == "both"
+            ),
             "ensemble_seeds": ENSEMBLE_SEEDS,
-            "learned_proj_dim": hp["out_dim"] * len(head_paths),
+            "learned_proj_dim": hp["out_dim"] * len(ENSEMBLE_SEEDS),
             "training_datasets": [{"name": n, "path": p} for n, p in valid],
             "hyperparams": hp,
         }
-        HEAD_CONFIG.write_text(json.dumps(config, indent=2))
-        print(f"Config saved → {HEAD_CONFIG}", file=sys.stderr)
-        print(f"Head version: {version}  ({len(head_paths)}-seed ensemble)", file=sys.stderr)
+        config_path = args.output_dir / "learned_head.json"
+        config_path.write_text(json.dumps(config, indent=2))
+        print(f"Config saved → {config_path}", file=sys.stderr)
+        print(f"Head version: {version}  "
+              f"({len(MODALITY_GROUPS)} groups × {len(ENSEMBLE_SEEDS)} seeds)", file=sys.stderr)
 
 
 if __name__ == "__main__":

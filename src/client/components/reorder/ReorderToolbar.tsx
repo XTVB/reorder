@@ -24,8 +24,10 @@ import {
   withLockedGroupsInPlace,
 } from "../../utils/groups.ts";
 import {
+  fromGroupSortId,
   generateContactSheetsBatch,
   getErrorMessage,
+  isGroupSortId,
   reorderImagesByGroups,
   selectedImageFilenames as selectedImageFilenamesFromIds,
   stripFolderNumber,
@@ -38,15 +40,19 @@ import { TrashIcon } from "../shared/TrashIcon.tsx";
 
 const SORT_MODE_KEY = "reorder-similarity-sort-mode";
 const MINIMAL_LOCALITY_KEY = "reorder-similarity-minimal-locality";
+const STABLE_CLUSTERS_KEY = "reorder-similarity-stable-clusters";
+const GATHER_MIN_GAIN_KEY = "reorder-similarity-gather-min-gain";
 const SORT_TARGET_KEY = "reorder-similarity-sort-target";
 
-type SortTarget = "groups" | "ungrouped";
+type SortTarget = "groups" | "ungrouped" | "selected-groups";
 
 const SORT_TARGET_TITLES: Record<SortTarget, string> = {
   groups:
     "Sort the groups: similar groups end up adjacent; ungrouped images move along with the consolidation. Locked groups (L) keep their slot",
   ungrouped:
     "Sort only the loose ungrouped images: they swap among their own slots so similar ones sit together; every group stays exactly where it is",
+  "selected-groups":
+    "Sort the contents of each selected group: every selected group's images are reordered by similarity within that group, each group treated independently. Group order and ungrouped images stay put",
 };
 
 const SORT_MODE_TITLES: Record<GroupOrderMode, string> = {
@@ -57,11 +63,22 @@ const SORT_MODE_TITLES: Record<GroupOrderMode, string> = {
     "Spectral: arrange all groups along the dominant similarity gradient (Fiedler vector) — one global axis through the collection",
   minimal:
     "Minimal: keep the current order, only making small local moves (max 5 positions) where similarity clearly improves",
+  stable:
+    "Stable: cluster into sets by similarity, then keep the current order — sets appear where their first member already is, and members stay in their current relative order. Best for data that is roughly ordered but lightly scrambled",
+  gather:
+    "Gather: keep the current order, but pull each stray back beside its best match, however far away — an image only moves when that clearly improves adjacency, and near-ties resolve to the least-displacing spot. No cluster count to tune; an already-correct order is untouched",
 };
 
 function loadSortMode(): GroupOrderMode {
   const v = localStorage.getItem(SORT_MODE_KEY);
-  return v === "chain" || v === "tree" || v === "spectral" || v === "minimal" ? v : "tree";
+  return v === "chain" ||
+    v === "tree" ||
+    v === "spectral" ||
+    v === "minimal" ||
+    v === "stable" ||
+    v === "gather"
+    ? v
+    : "tree";
 }
 
 function loadMinimalLocality(): number {
@@ -69,8 +86,19 @@ function loadMinimalLocality(): number {
   return Number.isFinite(v) && v >= 1 ? v : 5;
 }
 
+function loadStableClusters(): number {
+  const v = parseInt(localStorage.getItem(STABLE_CLUSTERS_KEY) ?? "", 10);
+  return Number.isFinite(v) && v >= 0 ? v : 0;
+}
+
+function loadGatherMinGain(): number {
+  const v = parseFloat(localStorage.getItem(GATHER_MIN_GAIN_KEY) ?? "");
+  return Number.isFinite(v) && v >= 0 ? v : 0.02;
+}
+
 function loadSortTarget(): SortTarget {
-  return localStorage.getItem(SORT_TARGET_KEY) === "ungrouped" ? "ungrouped" : "groups";
+  const v = localStorage.getItem(SORT_TARGET_KEY);
+  return v === "ungrouped" || v === "selected-groups" ? v : "groups";
 }
 
 export function ReorderToolbar() {
@@ -103,6 +131,7 @@ export function ReorderToolbar() {
 
   const createGroupFromSelection = useGroupStore((s) => s.createGroupFromSelection);
   const addImagesToGroupAction = useGroupStore((s) => s.addImagesToGroup);
+  const mergeGroupsAction = useGroupStore((s) => s.mergeGroups);
   const flushPending = useGroupStore((s) => s.flushPending);
 
   const markedTrashIds = useSelectionStore((s) => s.contexts.trash);
@@ -110,6 +139,10 @@ export function ReorderToolbar() {
   const [sortingBySimilarity, setSortingBySimilarity] = useState(false);
   const [sortMode, setSortMode] = useState<GroupOrderMode>(loadSortMode);
   const [minimalLocality, setMinimalLocality] = useState<number>(loadMinimalLocality);
+  // Stable mode's set count: 0 = automatic (largest merge-distance gap).
+  const [stableClusters, setStableClusters] = useState<number>(loadStableClusters);
+  // Gather mode's move threshold: higher = fewer, more certain moves.
+  const [gatherMinGain, setGatherMinGain] = useState<number>(loadGatherMinGain);
   const [sortTarget, setSortTarget] = useState<SortTarget>(loadSortTarget);
   // Last progress message from a running similarity sort, shown as the header
   // subtitle so long computations (big ungrouped sets) have visible feedback.
@@ -130,8 +163,23 @@ export function ReorderToolbar() {
     setMinimalLocality(v);
   }
 
+  function handleStableClustersChange(v: number) {
+    localStorage.setItem(STABLE_CLUSTERS_KEY, String(v));
+    setStableClusters(v);
+  }
+
+  function handleGatherMinGainChange(v: number) {
+    localStorage.setItem(GATHER_MIN_GAIN_KEY, String(v));
+    setGatherMinGain(v);
+  }
+
   const selectedImageFilenames = useMemo(
     () => selectedImageFilenamesFromIds(selectedIds),
+    [selectedIds],
+  );
+
+  const selectedGroupIds = useMemo(
+    () => [...selectedIds].filter(isGroupSortId).map(fromGroupSortId),
     [selectedIds],
   );
 
@@ -306,29 +354,89 @@ export function ReorderToolbar() {
     setImages(reorderImagesByGroups(images, imageMap, sortedGroups));
   }
 
-  /** POST to similarity-order and collect the orderedIds result. */
-  async function fetchSimilarityOrder(body: Record<string, unknown>): Promise<string[] | null> {
+  /** POST to similarity-order and collect the ordering result. */
+  async function fetchSimilarityOrder(
+    body: Record<string, unknown>,
+  ): Promise<{ orderedIds: string[]; skipped: number; clusters?: number; moved?: number } | null> {
     const start = await startSSE("/api/groups/similarity-order", body);
     if (start.kind === "conflict") {
       showToast(start.message, "error");
       return null;
     }
-    const outcome: { orderedIds: string[] | null; error: string | null } = {
+    const outcome: {
+      orderedIds: string[] | null;
+      skipped: number;
+      clusters?: number;
+      moved?: number;
+      error: string | null;
+    } = {
       orderedIds: null,
+      skipped: 0,
       error: null,
     };
-    await consumeSSE<{ orderedIds: string[] }>(start.response, {
+    await consumeSSE<{ orderedIds: string[]; skipped?: number; clusters?: number; moved?: number }>(
+      start.response,
+      {
+        onProgress: (message) => setSortProgress(message),
+        onResult: (data) => {
+          outcome.orderedIds = data.orderedIds;
+          outcome.skipped = data.skipped ?? 0;
+          outcome.clusters = data.clusters;
+          outcome.moved = data.moved;
+        },
+        onError: (error) => {
+          outcome.error = error;
+        },
+      },
+    );
+    if (outcome.error) throw new Error(outcome.error);
+    if (!outcome.orderedIds) throw new Error("Stream ended unexpectedly");
+    return {
+      orderedIds: outcome.orderedIds,
+      skipped: outcome.skipped,
+      clusters: outcome.clusters,
+      moved: outcome.moved,
+    };
+  }
+
+  /** POST to similarity-order-batch and collect the per-job orderings. */
+  async function fetchSimilarityOrderBatch(
+    body: Record<string, unknown>,
+  ): Promise<
+    | { id: string; orderedIds: string[]; skipped: number; clusters?: number; moved?: number }[]
+    | null
+  > {
+    const start = await startSSE("/api/groups/similarity-order-batch", body);
+    if (start.kind === "conflict") {
+      showToast(start.message, "error");
+      return null;
+    }
+    const outcome: {
+      results:
+        | { id: string; orderedIds: string[]; skipped: number; clusters?: number; moved?: number }[]
+        | null;
+      error: string | null;
+    } = { results: null, error: null };
+    await consumeSSE<{
+      results: {
+        id: string;
+        orderedIds: string[];
+        skipped: number;
+        clusters?: number;
+        moved?: number;
+      }[];
+    }>(start.response, {
       onProgress: (message) => setSortProgress(message),
       onResult: (data) => {
-        outcome.orderedIds = data.orderedIds;
+        outcome.results = data.results;
       },
       onError: (error) => {
         outcome.error = error;
       },
     });
     if (outcome.error) throw new Error(outcome.error);
-    if (!outcome.orderedIds) throw new Error("Stream ended unexpectedly");
-    return outcome.orderedIds;
+    if (!outcome.results) throw new Error("Stream ended unexpectedly");
+    return outcome.results;
   }
 
   async function sortGroupsBySimilarity() {
@@ -338,7 +446,7 @@ export function ReorderToolbar() {
     // minimal mode preserves it, chain starts from its first group, and
     // tree/spectral orient their axis toward that group.
     const galleryOrderedIds = sortGroupsByGalleryOrder().map((g) => g.id);
-    const orderedIds = await fetchSimilarityOrder({
+    const result = await fetchSimilarityOrder({
       method,
       fullResolution,
       weights,
@@ -346,8 +454,11 @@ export function ReorderToolbar() {
       anchorId: galleryOrderedIds[0],
       orderedGroupIds: galleryOrderedIds,
       ...(sortMode === "minimal" && { minimalLocality }),
+      ...(sortMode === "stable" && stableClusters > 0 && { stableClusters }),
+      ...(sortMode === "gather" && { gatherMinGain }),
     });
-    if (!orderedIds) return;
+    if (!result) return;
+    const orderedIds = result.orderedIds;
 
     const pos = new Map(orderedIds.map((id, i) => [id, i]));
     const current = useGroupStore.getState().groups;
@@ -364,10 +475,16 @@ export function ReorderToolbar() {
       orderedIds.length === galleryOrderedIds.length &&
       orderedIds.every((id, i) => id === galleryOrderedIds[i]);
     const lockedCount = current.filter((g) => g.locked).length;
+    const setsNote =
+      result.clusters !== undefined
+        ? ` into ${result.clusters} sets`
+        : result.moved !== undefined
+          ? ` (${result.moved} moved)`
+          : "";
     showToast(
       unchanged
         ? "Group order already optimal"
-        : `Sorted ${finalOrder.length} groups by similarity${
+        : `Sorted ${finalOrder.length} groups by similarity${setsNote}${
             lockedCount > 0 ? ` (${lockedCount} locked in place)` : ""
           }`,
       "success",
@@ -396,14 +513,17 @@ export function ReorderToolbar() {
         return;
       }
     }
-    const orderedIds = await fetchSimilarityOrder({
+    const result = await fetchSimilarityOrder({
       target: "ungrouped",
       weights,
       mode: sortMode,
       orderedImageFilenames: targetOrder,
       ...(sortMode === "minimal" && { minimalLocality }),
+      ...(sortMode === "stable" && stableClusters > 0 && { stableClusters }),
+      ...(sortMode === "gather" && { gatherMinGain }),
     });
-    if (!orderedIds) return;
+    if (!result) return;
+    const { orderedIds, skipped, clusters, moved } = result;
 
     const { images: imgs, setImages } = useImageStore.getState();
     beginSortTransition();
@@ -424,17 +544,97 @@ export function ReorderToolbar() {
       });
     }
     // Compare against the current order of the images the server actually
-    // covered (filenames without embeddings are dropped from the response).
+    // covered (filenames without embeddings are skipped in the response).
     const coveredSet = new Set(orderedIds);
     const coveredCurrent = targetOrder.filter((fn) => coveredSet.has(fn));
     const unchanged =
       orderedIds.length === coveredCurrent.length &&
       orderedIds.every((fn, i) => fn === coveredCurrent[i]);
+    const skippedNote =
+      skipped > 0 ? ` — ${skipped} skipped (no embeddings; run Compute in Cluster mode)` : "";
+    const setsNote =
+      clusters !== undefined
+        ? ` into ${clusters} sets`
+        : moved !== undefined
+          ? ` (${moved} moved)`
+          : "";
     showToast(
       unchanged
-        ? `${selectionScope ? "Selection" : "Ungrouped"} order already optimal`
-        : `Sorted ${orderedIds.length} ${selectionScope ? "selected" : "ungrouped"} images by similarity`,
-      "success",
+        ? `${selectionScope ? "Selection" : "Ungrouped"} order already optimal${setsNote}${skippedNote}`
+        : `Sorted ${orderedIds.length} ${selectionScope ? "selected" : "ungrouped"} images by similarity${setsNote}${skippedNote}`,
+      skipped > 0 ? "warning" : "success",
+    );
+  }
+
+  async function sortSelectedGroupContents() {
+    const weights = useListStore.getState().weights;
+    const selected = new Set(selectedGroupIds);
+    // Each selected group is sorted independently: one similarity pass per
+    // group, anchored only within that group, so one group's images never
+    // influence another's ordering. Groups with fewer than 3 images can't be
+    // meaningfully sorted and are skipped.
+    const targets = useGroupStore
+      .getState()
+      .groups.filter((g) => selected.has(g.id) && g.images.length >= 3);
+    if (targets.length === 0) {
+      showToast("Select at least one group with 3 or more images", "error");
+      return;
+    }
+
+    // One batch request: the Rust binary loads the embeddings once and orders
+    // every selected group in parallel (each anchored within itself). Results
+    // are applied in a single pass below — the per-group slots are disjoint.
+    const results = await fetchSimilarityOrderBatch({
+      weights,
+      mode: sortMode,
+      jobs: targets.map((g) => ({ id: g.id, orderedImageFilenames: [...g.images] })),
+      ...(sortMode === "minimal" && { minimalLocality }),
+      ...(sortMode === "stable" && stableClusters > 0 && { stableClusters }),
+      ...(sortMode === "gather" && { gatherMinGain }),
+    });
+    if (!results) return;
+
+    const ordersByGroup = new Map<string, string[]>();
+    let totalImages = 0;
+    let totalSkipped = 0;
+    for (const r of results) {
+      ordersByGroup.set(r.id, r.orderedIds);
+      totalImages += r.orderedIds.length;
+      totalSkipped += r.skipped;
+    }
+
+    beginSortTransition();
+    const { images: imgs, setImages } = useImageStore.getState();
+    let nextImages = imgs;
+    for (const orderedIds of ordersByGroup.values()) {
+      nextImages = reorderImagesWithinSlots(nextImages, orderedIds);
+    }
+    setImages(nextImages);
+
+    // Mirror the new order into each group's own image list (popover + rename).
+    let sortedGroups = 0;
+    useGroupStore.getState().updateGroups((prev) =>
+      prev.map((pg) => {
+        const orderedIds = ordersByGroup.get(pg.id);
+        if (!orderedIds) return pg;
+        const reordered = reorderSubsetWithinSlots(pg.images, orderedIds);
+        if (reordered.every((fn, idx) => fn === pg.images[idx])) return pg;
+        sortedGroups++;
+        return { ...pg, images: reordered };
+      }),
+    );
+
+    const skippedNote =
+      totalSkipped > 0
+        ? ` — ${totalSkipped} skipped (no embeddings; run Compute in Cluster mode)`
+        : "";
+    showToast(
+      sortedGroups === 0
+        ? `Group contents already optimal${skippedNote}`
+        : `Sorted ${totalImages} images across ${sortedGroups} group${
+            sortedGroups === 1 ? "" : "s"
+          } by similarity${skippedNote}`,
+      totalSkipped > 0 ? "warning" : "success",
     );
   }
 
@@ -449,6 +649,7 @@ export function ReorderToolbar() {
       // The similarity computation reads groups from disk — flush pending edits.
       await flushPending();
       if (sortTarget === "ungrouped") await sortUngroupedBySimilarity();
+      else if (sortTarget === "selected-groups") await sortSelectedGroupContents();
       else await sortGroupsBySimilarity();
     } catch (err) {
       showToast(getErrorMessage(err, "Sort by similarity failed"), "error");
@@ -517,6 +718,15 @@ export function ReorderToolbar() {
               <button className="btn btn-secondary" onClick={createGroupFromSelection}>
                 Group
               </button>
+              {selectedGroupIds.length >= 2 && (
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => mergeGroupsAction(selectedGroupIds)}
+                  title="Merge selected groups into the first one (M)"
+                >
+                  Merge
+                </button>
+              )}
               {groups.length > 0 && (
                 <GroupPicker
                   groups={groups}
@@ -546,7 +756,10 @@ export function ReorderToolbar() {
           <button className="btn btn-secondary" onClick={handleGroupsToTop}>
             Groups to Top
           </button>
-          {(groups.length >= 2 || ungroupedCount >= 3 || selectedImageFilenames.length >= 3) && (
+          {(groups.length >= 2 ||
+            ungroupedCount >= 3 ||
+            selectedImageFilenames.length >= 3 ||
+            selectedGroupIds.length >= 1) && (
             <>
               <button
                 className="btn btn-secondary"
@@ -556,9 +769,11 @@ export function ReorderToolbar() {
                   saving ||
                   (sortTarget === "groups"
                     ? groups.length < 2
-                    : selectedImageFilenames.length > 0
-                      ? selectedImageFilenames.length < 3
-                      : ungroupedCount < 3)
+                    : sortTarget === "selected-groups"
+                      ? selectedGroupIds.length < 1
+                      : selectedImageFilenames.length > 0
+                        ? selectedImageFilenames.length < 3
+                        : ungroupedCount < 3)
                 }
                 title={`${
                   sortTarget === "ungrouped" && selectedImageFilenames.length > 0
@@ -582,6 +797,11 @@ export function ReorderToolbar() {
                 <option value="ungrouped" title={SORT_TARGET_TITLES.ungrouped}>
                   {selectedImageFilenames.length > 0 ? "Selection" : "Ungrouped"}
                 </option>
+                <option value="selected-groups" title={SORT_TARGET_TITLES["selected-groups"]}>
+                  {selectedGroupIds.length > 0
+                    ? `Group contents (${selectedGroupIds.length})`
+                    : "Group contents"}
+                </option>
               </select>
               <select
                 className="toolbar-select"
@@ -603,7 +823,45 @@ export function ReorderToolbar() {
                 <option value="minimal" title={SORT_MODE_TITLES.minimal}>
                   Minimal
                 </option>
+                <option value="stable" title={SORT_MODE_TITLES.stable}>
+                  Stable
+                </option>
+                <option value="gather" title={SORT_MODE_TITLES.gather}>
+                  Gather
+                </option>
               </select>
+              {sortMode === "gather" && (
+                <input
+                  type="number"
+                  className="toolbar-input-number"
+                  value={gatherMinGain}
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  disabled={sortingBySimilarity}
+                  title="Minimum similarity improvement (in blended-distance units) before an image moves — higher keeps more of the current order, lower gathers more aggressively (Gather mode)"
+                  aria-label="Gather minimum gain"
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    if (Number.isFinite(v) && v >= 0) handleGatherMinGainChange(v);
+                  }}
+                />
+              )}
+              {sortMode === "stable" && (
+                <input
+                  type="number"
+                  className="toolbar-input-number"
+                  value={stableClusters}
+                  min={0}
+                  disabled={sortingBySimilarity}
+                  title="Number of sets to cut into — 0 picks it automatically from the largest similarity gap (Stable mode)"
+                  aria-label="Stable set count (0 = auto)"
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10);
+                    if (Number.isFinite(v) && v >= 0) handleStableClustersChange(v);
+                  }}
+                />
+              )}
               {sortMode === "minimal" && (
                 <input
                   type="number"
@@ -736,6 +994,31 @@ export function ReorderToolbar() {
               />
             </svg>
           </button>
+          {groups.length > 0 && (
+            <button
+              className="btn btn-secondary btn-icon"
+              onClick={() => openModal("namingRules")}
+              title="Name groups from rules (compose names from title/subtitle/short_sub)"
+              aria-label="Apply naming rules to groups"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" role="presentation">
+                <path
+                  d="M3 7.5 9.5 4l11 4.5-6.5 3.5z"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M14 12v6.5L7.5 15V9"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <circle cx="8" cy="7.2" r="1" fill="currentColor" />
+              </svg>
+            </button>
+          )}
           <button
             className="btn btn-secondary btn-icon"
             onClick={() => openModal("createGroups")}

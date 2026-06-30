@@ -145,6 +145,11 @@ def main():
     ap.add_argument("--cache-dir", default=None)
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--checkpoint-every", type=int, default=CHECKPOINT_EVERY)
+    ap.add_argument("--all-images", action="store_true",
+                    help="extract EVERY image, not just grouped ones. Required for "
+                         "production/inference use (a fresh folder has no groups, and "
+                         "the head only uses the layer when it covers all images); the "
+                         "default grouped-only mode is for training-set extraction.")
     args = ap.parse_args()
     from PIL import Image
 
@@ -165,17 +170,23 @@ def main():
     paths = [os.path.join(args.target_dir, hash2fn[h]) if h in hash2fn else None for h in hashes]
     missing = sum(p is None for p in paths)
 
-    # Only grouped images feed the head (training drops ungrouped entirely), so
-    # only their rows get encoded; the rest stay zero in the output arrays.
-    groups_path = os.path.join(args.target_dir, ".reorder-groups.json")
-    if not os.path.exists(groups_path):
-        print(f"  {os.path.basename(args.target_dir)}: no .reorder-groups.json — "
-              f"nothing to extract (head trains on grouped images only)", file=sys.stderr)
-        return
-    graw = json.load(open(groups_path))
-    glist = graw if isinstance(graw, list) else graw.get("groups", [])
-    grouped_hashes = {str(ch[fn]) for g in glist for fn in g["images"] if fn in ch}
-    wanted = [h in grouped_hashes for h in hashes]
+    # Default: only grouped images feed the head (training drops ungrouped
+    # entirely), so only their rows get encoded; the rest stay zero. --all-images
+    # encodes everything — needed for inference, where the head uses the layer
+    # only when every image is covered (see extract_features._load_full_pe_layer).
+    if args.all_images:
+        wanted = [p is not None for p in paths]
+    else:
+        groups_path = os.path.join(args.target_dir, ".reorder-groups.json")
+        if not os.path.exists(groups_path):
+            print(f"  {os.path.basename(args.target_dir)}: no .reorder-groups.json — "
+                  f"nothing to extract (grouped-only mode; pass --all-images for inference)",
+                  file=sys.stderr)
+            return
+        graw = json.load(open(groups_path))
+        glist = graw if isinstance(graw, list) else graw.get("groups", [])
+        grouped_hashes = {str(ch[fn]) for g in glist for fn in g["images"] if fn in ch}
+        wanted = [h in grouped_hashes for h in hashes]
 
     meta_path = os.path.join(cache, "pe_layers_meta.json")
     keys = [(L, p) for L in layers for p in POOLINGS]
@@ -183,15 +194,20 @@ def main():
     meta = None
     if os.path.exists(meta_path):
         m = json.load(open(meta_path))
+        # A prior grouped-only run must NOT satisfy an --all-images request (its
+        # ungrouped rows are still zero) — treat the coverage change as a mismatch.
+        prior_all = m.get("all_images", not m.get("grouped_only", True))
         if (m.get("version") == VERSION and m.get("n_images") == n
-                and m.get("layers") == layers and m.get("poolings") == POOLINGS):
+                and m.get("layers") == layers and m.get("poolings") == POOLINGS
+                and prior_all == bool(args.all_images)):
             meta = m
         else:
             print("  pe_layers_meta.json mismatch — starting fresh", file=sys.stderr)
     if meta is None:
         meta = {"version": VERSION, "n_images": n, "layers": layers,
                 "poolings": POOLINGS, "backend": args.backend,
-                "grouped_only": True, "completed_through": 0}
+                "grouped_only": not args.all_images, "all_images": bool(args.all_images),
+                "completed_through": 0}
 
     start = meta["completed_through"]
     arrays = {}

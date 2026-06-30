@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Controller for the PE-layer split-head training sweep (run_pelayer_splithead_sweep.sh).
+# Same start/stop/status/log UX as `pe_layers`, so it can run only while the
+# computer is idle. The sweep is resumable: each (placement,config,fold) whose
+# 3 seed projs exist is skipped, so stop/start loses at most one in-flight fold.
+#
+#   pelayer_sweep start    # start (or resume from where it stopped)
+#   pelayer_sweep stop     # pause cleanly (kills the process tree)
+#   pelayer_sweep status   # running state + progress bar (folds done / total)
+#   pelayer_sweep log      # tail the live log
+#   pelayer_sweep score    # run the blend scorer on whatever folds are done so far
+#   pelayer_sweep help
+
+PIDFILE=/tmp/pelayer_sweep.pid
+LOGFILE=/tmp/pelayer_sweep.log
+HERE=/Users/abdudh/dev/utilities/reorder/clusteringRefinement
+RUNNER=$HERE/run_pelayer_splithead_sweep.sh
+SCORER=$HERE/score_pelayer_splithead.py
+AUGROOT=${AUGROOT:-$HOME/.cache/reorder/pelayer_splithead12}
+PY=~/.venvs/imgcluster-env/bin/python3
+source "$HERE/common.sh"   # ALL / P registry
+
+# Must mirror the runner's defaults so status totals match what start will run.
+LAYERS_POOLS="42:mean 42:gem3 42:attnpool 44:mean 44:gem3 44:attnpool 46:mean 46:gem3 46:attnpool 47:mean 47:gem3 47:attnpool"
+SEEDS="42 43 44"
+mapfile -t TGTS < <(for m in "${ALL[@]}"; do [[ $m =~ ^M(14|15)$ ]] || echo "$m"; done)
+# Job subdirs, mirroring the runner: 3 baselines + 12 configs × 2 placements.
+JOBSUB=(base/joint base/peg base/color)
+for lp in $LAYERS_POOLS; do L=${lp%%:*}; pool=${lp##*:}; JOBSUB+=("joint/${L}_${pool}" "peg/${L}_${pool}"); done
+
+is_running() { [[ -f $PIDFILE ]] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; }
+
+cmd_start() {
+  if is_running; then
+    echo "Already running (pid $(cat $PIDFILE)). 'stop' first or 'status' to monitor."
+    return 1
+  fi
+  AUGROOT=$AUGROOT nohup "$RUNNER" >>"$LOGFILE" 2>&1 &
+  echo $! > "$PIDFILE"
+  echo "Started pid $(cat $PIDFILE).   Log: pelayer_sweep log"
+  echo "  Pause: pelayer_sweep stop     Resume: pelayer_sweep start"
+}
+
+cmd_stop() {
+  if ! is_running; then echo "Not running."; rm -f "$PIDFILE"; return 0; fi
+  local pid; pid=$(cat "$PIDFILE")
+  pkill -P "$pid" 2>/dev/null
+  pkill -f train_projection_head.py 2>/dev/null
+  kill "$pid" 2>/dev/null; sleep 1
+  if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; pkill -9 -f train_projection_head.py 2>/dev/null; fi
+  rm -f "$PIDFILE"
+  echo "Stopped. 'pelayer_sweep start' resumes from the last completed fold."
+}
+
+# folds-done for one job subdir
+_jobdone() {
+  local sub=$1 d=0 tgt s ok
+  for tgt in "${TGTS[@]}"; do
+    ok=1; for s in $SEEDS; do [[ -f "$AUGROOT/$sub/$tgt/s$s/${tgt}_proj.npy" ]] || ok=0; done
+    [[ $ok == 1 ]] && d=$((d+1))
+  done
+  echo "$d"
+}
+
+cmd_status() {
+  if is_running; then echo "STATUS: running (pid $(cat $PIDFILE))"; else echo "STATUS: not running"; fi
+  local nt=${#TGTS[@]} total=$(( ${#JOBSUB[@]} * ${#TGTS[@]} )) done=0 sub d
+  declare -A DONE
+  for sub in "${JOBSUB[@]}"; do d=$(_jobdone "$sub"); DONE[$sub]=$d; done=$((done+d)); done
+  local bar=36 fill=$((bar*done/total)) b="" i
+  for ((i=0;i<bar;i++)); do [[ $i -lt $fill ]] && b+="#" || b+="."; done
+  printf "\nOVERALL: [%s] %d/%d folds (%d%%)   %d jobs × %d folds\n\n" \
+    "$b" "$done" "$total" "$((100*done/total))" "${#JOBSUB[@]}" "$nt"
+  printf "Baselines (of %d):  joint %2d  peg %2d  color %2d\n" \
+    "$nt" "${DONE[base/joint]}" "${DONE[base/peg]}" "${DONE[base/color]}"
+  echo "Augmented (joint / peg folds done of $nt):"
+  for lp in $LAYERS_POOLS; do
+    local L=${lp%%:*} pool=${lp##*:}
+    printf "  L%-3s %-8s joint %2d   peg %2d\n" "$L" "$pool" \
+      "${DONE[joint/${L}_${pool}]}" "${DONE[peg/${L}_${pool}]}"
+  done
+}
+
+cmd_log() { [[ -f $LOGFILE ]] || { echo "No log yet."; return 1; }; tail -f "$LOGFILE"; }
+
+cmd_score() {
+  [[ -f $SCORER ]] || { echo "scorer not found: $SCORER"; return 1; }
+  echo "Scoring completed folds (baselines + augmented blend at deployed ratio)..."
+  AUGROOT=$AUGROOT "$PY" "$SCORER" "$@"
+}
+
+cmd_help() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; }
+
+case "${1:-help}" in
+  start) cmd_start ;;
+  stop|pause) cmd_stop ;;
+  status) cmd_status ;;
+  log|tail) cmd_log ;;
+  score) shift; cmd_score "$@" ;;
+  help|--help|-h) cmd_help ;;
+  *) echo "unknown command: $1"; cmd_help; exit 1 ;;
+esac

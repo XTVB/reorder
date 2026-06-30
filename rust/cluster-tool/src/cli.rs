@@ -52,6 +52,15 @@ pub(crate) struct Cli {
     #[arg(long, default_value_t = 0.0)]
     pub learned_proj_weight: f32,
 
+    /// PE-G-only learned head weight (`learned_proj_peg` in the NPZ).
+    /// Part of the split-head blend; see LEARNED_HEAD.md.
+    #[arg(long, default_value_t = 0.0)]
+    pub learned_proj_peg_weight: f32,
+
+    /// Color-only learned head weight (`learned_proj_color` in the NPZ).
+    #[arg(long, default_value_t = 0.0)]
+    pub learned_proj_color_weight: f32,
+
     /// Path to precomputed condensed distance matrix binary
     #[arg(long, default_value = "")]
     pub dist_matrix: String,

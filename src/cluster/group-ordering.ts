@@ -13,6 +13,17 @@
 //                 (short reversals, single-group relocations) that improve
 //                 adjacent similarity; nothing drifts more than a few
 //                 positions from where it started.
+//   - "stable":   similarity decides membership, the incoming order decides
+//                 sequence — cluster into sets, emit sets by first appearance
+//                 with each set's members in their incoming order. For
+//                 collections that are already roughly ordered but lightly
+//                 scrambled.
+//   - "gather":   like stable but with per-item decisions instead of a global
+//                 cluster cut: walk the incoming order, each item either keeps
+//                 its slot or jumps back beside an earlier item it clearly
+//                 matches — moves need a minimum adjacency gain, and near-tied
+//                 placements resolve to the least-displacing one, so siblings
+//                 never reorder.
 //
 // The anchor group starts the sequence in chain mode and is pinned in minimal
 // mode. Tree/spectral orderings have an intrinsic axis, so there the anchor
@@ -27,10 +38,29 @@ import type { GroupPairResult } from "./merge-suggestions.ts";
 // similarity results) must rank below any scored pair.
 const MISSING_DIST = 3;
 
+/** Mode-specific diagnostics, surfaced in the client's completion toast. */
+export interface OrderModeInfo {
+  /** Stable mode: how many sets the cut produced. */
+  clusters?: number;
+  /** Gather mode: how many items left their incoming slot. */
+  moved?: number;
+}
+
+export interface OrderByMatrixOpts {
+  mode?: GroupOrderMode;
+  anchorId?: string;
+  minimalLocality?: number;
+  /** Stable mode: force this many sets instead of the automatic gap cut. */
+  stableClusters?: number;
+  /** Gather mode: minimum cost improvement (blended distance) to move at all. */
+  gatherMinGain?: number;
+  onModeInfo?: (info: OrderModeInfo) => void;
+}
+
 export function orderGroupsBySimilarity(
   groupIds: string[],
   pairs: GroupPairResult[],
-  opts?: { mode?: GroupOrderMode; anchorId?: string; minimalLocality?: number },
+  opts?: OrderByMatrixOpts,
 ): string[] {
   const n = groupIds.length;
   const idToIdx = new Map(groupIds.map((id, i) => [id, i]));
@@ -55,16 +85,16 @@ export function orderGroupsBySimilarity(
 }
 
 /**
- * Mode dispatch over prebuilt matrices — shared by group ordering (matrices
- * from Rust pair results) and ungrouped-image ordering (matrices from a
- * direct embedding blend). `dist[i][j]` and `sim[i][j]` are indexed by
- * position in `ids`.
+ * Mode dispatch over prebuilt matrices for group ordering (matrices from Rust
+ * pair results). The image-ordering equivalent of this lives in the Rust
+ * `order-tool` binary (see src/cluster/order-batch.ts). `dist[i][j]` and
+ * `sim[i][j]` are indexed by position in `ids`.
  */
-export function orderByDistanceMatrix(
+function orderByDistanceMatrix(
   ids: string[],
   dist: number[][],
   sim: number[][],
-  opts?: { mode?: GroupOrderMode; anchorId?: string; minimalLocality?: number },
+  opts?: OrderByMatrixOpts,
 ): string[] {
   const n = ids.length;
   const anchor = opts?.anchorId !== undefined ? Math.max(0, ids.indexOf(opts.anchorId)) : 0;
@@ -86,6 +116,12 @@ export function orderByDistanceMatrix(
         dist,
         opts?.minimalLocality,
       );
+      break;
+    case "stable":
+      order = stableClusterOrder(dist, opts?.stableClusters, opts?.onModeInfo);
+      break;
+    case "gather":
+      order = gatherOrder(dist, opts?.gatherMinGain, opts?.onModeInfo);
       break;
     default:
       order = twoOpt(greedyChain(dist, anchor), dist);
@@ -231,6 +267,230 @@ function minimalImprove(base: number[], dist: number[][], locality = MINIMAL_LOC
     }
   }
   return order;
+}
+
+// ---------------------------------------------------------------------------
+// stable: similarity decides membership, the incoming order decides sequence
+
+/**
+ * Cluster items by average linkage, then emit the clusters in order of first
+ * appearance with each cluster's members in their incoming order. Two items
+ * never swap relative order unless an intervening set is pulled out from
+ * between them, so an already-correct sequence survives untouched — only the
+ * strays travel, to wherever the rest of their set first appears.
+ *
+ * The cut: `forcedClusters` when given, otherwise the largest gap in the
+ * sorted merge-height sequence (within-set merges are dense and low,
+ * between-set merges jump).
+ */
+function stableClusterOrder(
+  dist: number[][],
+  forcedClusters?: number,
+  onInfo?: (info: OrderModeInfo) => void,
+): number[] {
+  const n = dist.length;
+  const merges = averageLinkageMerges(dist).sort((a, b) => a.h - b.h);
+
+  let applied: number; // merges to apply = n − cluster count
+  if (forcedClusters !== undefined && forcedClusters >= 1) {
+    applied = n - Math.min(n, Math.round(forcedClusters));
+  } else {
+    let bestGap = -1;
+    let bestIdx = merges.length - 1; // no interior gap → everything is one set
+    for (let i = 0; i + 1 < merges.length; i++) {
+      const gap = merges[i + 1]!.h - merges[i]!.h;
+      if (gap > bestGap) {
+        bestGap = gap;
+        bestIdx = i;
+      }
+    }
+    applied = bestIdx + 1;
+  }
+
+  // Average linkage is monotone, so applying the lowest `applied` merges via
+  // union-find reproduces the flat clusters of the dendrogram cut.
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x: number): number => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]!]!;
+      x = parent[x]!;
+    }
+    return x;
+  };
+  for (let i = 0; i < applied; i++) {
+    const m = merges[i]!;
+    parent[find(m.a)] = find(m.b);
+  }
+
+  // Scanning indices in incoming order makes bucket insertion order = first
+  // appearance and bucket contents ascending — exactly the output contract.
+  const buckets = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const root = find(i);
+    const bucket = buckets.get(root);
+    if (bucket) bucket.push(i);
+    else buckets.set(root, [i]);
+  }
+  onInfo?.({ clusters: buckets.size });
+  return [...buckets.values()].flat();
+}
+
+// ---------------------------------------------------------------------------
+// gather: per-item stray reinsertion, the incoming order is the default
+
+// Default for `minGain`: how much (in blended-cosine units) a move must
+// improve adjacency over staying put. Low on purpose: false candidates are
+// already screened by the sibling cutoff, and in compressed regimes (every
+// image the same person) genuine improvements can be as small as the
+// intra/inter margin itself — a higher floor mostly suppresses correct moves.
+const GATHER_MIN_GAIN = 0.02;
+
+/**
+ * Walk the items in their incoming order, building the output left to right
+ * as a sequence of runs (emergent sets). Each item either keeps its slot
+ * (append, the default — an already-correct order is reproduced exactly) or
+ * moves to the end of the rightmost run containing a sibling of it, when that
+ * improves adjacency by more than `minGain`.
+ *
+ * Three structural choices do the heavy lifting, with no global cluster count:
+ * - Sibling recognition uses a per-item cutoff — the midpoint between the
+ *   item's nearest-neighbor distance (its intra floor) and its mean distance
+ *   to everything (its foreign scale) — so it adapts to each item's own
+ *   regime, whether sets are tight and far apart or everything is one person
+ *   and the margins are thin. A bond must clear BOTH items' cutoffs (min):
+ *   a singleton's floor is already foreign-range, and its cutoff must not
+ *   vouch for a bond on its own.
+ * - Placement is only ever at a run's end, never interior — an item can
+ *   rejoin its set from any distance, but can never land between siblings.
+ * - Only the RIGHTMOST sibling-holding run is considered: any slot further
+ *   left would put the item before that sibling. Together with run-end
+ *   placement this makes within-set incoming order survive by construction.
+ */
+function gatherOrder(
+  dist: number[][],
+  minGain = GATHER_MIN_GAIN,
+  onInfo?: (info: OrderModeInfo) => void,
+): number[] {
+  const n = dist.length;
+  const tol = Math.max(0, minGain);
+  const sibCut = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const row = dist[i]!;
+    let nearest = Infinity;
+    let sum = 0;
+    for (let j = 0; j < n; j++) {
+      if (j === i) continue;
+      sum += row[j]!;
+      if (row[j]! < nearest) nearest = row[j]!;
+    }
+    sibCut[i] = (nearest + sum / (n - 1)) / 2;
+  }
+  // Runs stay contiguous in `placed` (insertions only happen at run ends), so
+  // a parallel run-id array spliced alongside is enough to delimit them.
+  const placed: number[] = [0];
+  const runId: number[] = [0];
+  let nextRun = 1;
+  let moved = 0;
+  for (let x = 1; x < n; x++) {
+    const m = placed.length;
+    const row = dist[x]!;
+    const appendCost = row[placed[m - 1]!]!;
+    let k = m; // append by default
+    let run = -1; // -1 → start a new singleton run
+    // Find the rightmost run containing a sibling; it alone decides.
+    let end = m - 1;
+    let found = false;
+    while (end >= 0 && !found) {
+      let start = end;
+      while (start - 1 >= 0 && runId[start - 1] === runId[end]) start--;
+      for (let i = end; i >= start && !found; i--) {
+        const p = placed[i]!;
+        found = row[p]! <= Math.min(sibCut[x]!, sibCut[p]!);
+      }
+      if (found) {
+        if (end === m - 1) {
+          // The tail run's end slot IS the append slot — adopt, stay put.
+          run = runId[end]!;
+        } else {
+          // Moving swaps the run-boundary edge for two new ones; appending
+          // adds one edge after the current last item.
+          const cost =
+            row[placed[end]!]! + row[placed[end + 1]!]! - dist[placed[end]!]![placed[end + 1]!]!;
+          if (appendCost - cost > tol) {
+            k = end + 1;
+            run = runId[end]!;
+            moved++;
+          }
+        }
+      }
+      end = start - 1;
+    }
+    placed.splice(k, 0, x);
+    runId.splice(k, 0, run === -1 ? nextRun++ : run);
+  }
+  onInfo?.({ moved });
+  return placed;
+}
+
+/**
+ * Average-linkage agglomeration via the nearest-neighbor chain algorithm —
+ * O(n²), unlike buildAverageLinkageTree's O(n³) (tree mode needs the explicit
+ * tree for leaf ordering; here only the merge list matters). Each merge keeps
+ * the lower slot as the surviving cluster, so union-find over slots
+ * reconstructs the clusters.
+ */
+function averageLinkageMerges(dist: number[][]): { a: number; b: number; h: number }[] {
+  const n = dist.length;
+  const d = new Float64Array(n * n);
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) d[i * n + j] = dist[i]![j]!;
+  const size = new Array<number>(n).fill(1);
+  const active = new Array<boolean>(n).fill(true);
+  const merges: { a: number; b: number; h: number }[] = [];
+  const chain: number[] = [];
+  let start = 0;
+  while (merges.length < n - 1) {
+    if (chain.length === 0) {
+      while (!active[start]) start++;
+      chain.push(start);
+    }
+    for (;;) {
+      const x = chain[chain.length - 1]!;
+      const prev = chain.length > 1 ? chain[chain.length - 2]! : -1;
+      // Nearest active neighbor; ties prefer the chain predecessor so
+      // reciprocal pairs terminate the walk.
+      let best = prev >= 0 ? d[x * n + prev]! : Infinity;
+      let y = prev;
+      for (let i = 0; i < n; i++) {
+        if (!active[i] || i === x || i === prev) continue;
+        if (d[x * n + i]! < best) {
+          best = d[x * n + i]!;
+          y = i;
+        }
+      }
+      if (y !== prev) {
+        chain.push(y);
+        continue;
+      }
+      // x and prev are reciprocal nearest neighbors: merge them.
+      chain.pop();
+      chain.pop();
+      const a = Math.min(x, y);
+      const b = Math.max(x, y);
+      merges.push({ a, b, h: best });
+      // Lance-Williams update for average linkage into the surviving slot.
+      const total = size[a]! + size[b]!;
+      for (let k = 0; k < n; k++) {
+        if (!active[k] || k === a || k === b) continue;
+        const dk = (size[a]! * d[a * n + k]! + size[b]! * d[b * n + k]!) / total;
+        d[a * n + k] = dk;
+        d[k * n + a] = dk;
+      }
+      active[b] = false;
+      size[a] = total;
+      break;
+    }
+  }
+  return merges;
 }
 
 // ---------------------------------------------------------------------------

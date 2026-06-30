@@ -7,6 +7,7 @@ export type ModalName =
   | "preview"
   | "organize"
   | "review"
+  | "namingRules"
   | "createGroups"
   | "paths"
   | "trash"
@@ -25,6 +26,7 @@ const INITIAL: Record<ModalName, boolean> = {
   preview: false,
   organize: false,
   review: false,
+  namingRules: false,
   createGroups: false,
   paths: false,
   trash: false,

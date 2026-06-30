@@ -35,6 +35,8 @@ fn main() {
             cli.dinov3_weight,
             cli.pecore_g_weight,
             cli.learned_proj_weight,
+            cli.learned_proj_peg_weight,
+            cli.learned_proj_color_weight,
         );
         modes::embeddings::run(
             &emb,

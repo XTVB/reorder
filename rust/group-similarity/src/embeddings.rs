@@ -29,6 +29,8 @@ pub(crate) fn load_combined_embeddings(
     dinov3: f32,
     pecore_g: f32,
     learned_proj: f32,
+    learned_proj_peg: f32,
+    learned_proj_color: f32,
 ) -> Embeddings {
     assert!(
         !hash_cache_path.is_empty(),
@@ -44,7 +46,14 @@ pub(crate) fn load_combined_embeddings(
     let fname_to_cache_row =
         load_fname_to_cache_row(hash_order_path, &content_hashes, &filenames);
 
-    let specs = emb_specs(color, dinov3, pecore_g, learned_proj);
+    let specs = emb_specs(
+        color,
+        dinov3,
+        pecore_g,
+        learned_proj,
+        learned_proj_peg,
+        learned_proj_color,
+    );
     assert!(
         specs.iter().any(|(_, w, _)| *w > 0.0),
         "embeddings mode requires at least one positive model weight"

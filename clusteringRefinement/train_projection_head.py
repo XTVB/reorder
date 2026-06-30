@@ -85,7 +85,8 @@ class Dataset:
 
 def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False,
                  use_augmented_views: bool = False, pe_layer: str | None = None,
-                 use_global_color: bool = False) -> Dataset:
+                 use_global_color: bool = False,
+                 input_mods: str = "peg,color") -> Dataset:
     target_dir = os.path.abspath(target_dir)
     cache = os.path.join(target_dir, ".reorder-cache")
     npz_path = os.path.join(cache, "embeddings_hash_cache.npz")
@@ -107,19 +108,27 @@ def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False,
     peg_hash = z["pecore_g"]          # (M, 1280)
     col_hash = z["color"]             # (M, 693)
 
-    # Reindex from hash order → sorted-filename order
+    # Reindex from hash order → sorted-filename order (fancy indexing copies,
+    # so the in-place normalize below can't corrupt the npz-backed arrays)
     n = len(filenames)
-    peg = np.empty((n, peg_hash.shape[1]), dtype=np.float32)
-    col = np.empty((n, col_hash.shape[1]), dtype=np.float32)
-    for i, fn in enumerate(filenames):
-        row = hash_to_row[content_hashes[fn]]
-        peg[i] = peg_hash[row]
-        col[i] = col_hash[row]
+    rows = np.fromiter((hash_to_row[content_hashes[fn]] for fn in filenames),
+                       dtype=np.int64, count=n)
+    peg = peg_hash[rows].astype(np.float32, copy=False)
+    col = col_hash[rows].astype(np.float32, copy=False)
     # Defensive L2-normalize PE-G (already is, but verify); color is left raw,
     # the input LayerNorm in the head handles its different scale.
     peg /= np.linalg.norm(peg, axis=1, keepdims=True).clip(min=1e-8)
-    parts = [peg, col]
+    mods = set(input_mods.split(","))
+    if not mods <= {"peg", "color"} or not mods:
+        sys.exit(f"--input-mods must be a non-empty subset of peg,color (got {input_mods!r})")
+    parts = []
+    if "peg" in mods:
+        parts.append(peg)
+    if "color" in mods:
+        parts.append(col)
 
+    if use_global_color and "color" not in mods:
+        sys.exit("--global-color requires color in --input-mods (the slices must stay contiguous)")
     if use_global_color:
         # Global (un-gridded) 77-d color histograms from the extract_global_color.py
         # sidecar, concatenated directly after the 3x3 grid color so the two form one
@@ -134,13 +143,13 @@ def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False,
         gz = np.load(gc_path, allow_pickle=False)
         g_hash_to_row = {h: i for i, h in enumerate(gz["hashes"].tolist())}
         gcol_hash = gz["color_global"]    # (M, 77)
-        gcol = np.empty((n, gcol_hash.shape[1]), dtype=np.float32)
-        for i, fn in enumerate(filenames):
-            row = g_hash_to_row.get(content_hashes[fn])
-            if row is None:
-                sys.exit(f"[{name}] --global-color: hash for {fn} missing from sidecar "
-                         f"— re-extract (extract_global_color.py --datasets {name} --force)")
-            gcol[i] = gcol_hash[row]
+        g_rows = np.fromiter((g_hash_to_row.get(content_hashes[fn], -1) for fn in filenames),
+                             dtype=np.int64, count=n)
+        if (g_rows < 0).any():
+            fn = filenames[int(np.argmax(g_rows < 0))]
+            sys.exit(f"[{name}] --global-color: hash for {fn} missing from sidecar "
+                     f"— re-extract (extract_global_color.py --datasets {name} --force)")
+        gcol = gcol_hash[g_rows].astype(np.float32, copy=False)
         parts.append(gcol)
 
     if use_dinov3_patches:
@@ -157,14 +166,11 @@ def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False,
         # whose patches are missing get zero-filled (defensive — should be rare).
         flat_dim = patch_arr.shape[1] * patch_arr.shape[2]
         dino = np.zeros((n, flat_dim), dtype=np.float32)
-        missing = 0
-        for i, fn in enumerate(filenames):
-            h = content_hashes[fn]
-            row = patch_hash_to_row.get(h)
-            if row is None:
-                missing += 1
-                continue
-            dino[i] = patch_arr[row].reshape(-1)
+        d_rows = np.fromiter((patch_hash_to_row.get(content_hashes[fn], -1) for fn in filenames),
+                             dtype=np.int64, count=n)
+        present = d_rows >= 0
+        missing = int((~present).sum())
+        dino[present] = patch_arr[d_rows[present]].reshape(int(present.sum()), flat_dim)
         if missing:
             print(f"  [{name}] WARN: {missing} images missing dinov3 patches (zero-filled)", file=sys.stderr)
         dino /= np.linalg.norm(dino, axis=1, keepdims=True).clip(min=1e-8)
@@ -181,9 +187,7 @@ def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False,
         if pl_hash.shape[0] != len(hashes):
             sys.exit(f"[{name}] --pe-layer: stale extraction ({pl_hash.shape[0]} rows vs "
                      f"{len(hashes)} npz hashes) — wipe pe_layers_* and re-extract")
-        pl = np.empty((n, pl_hash.shape[1]), dtype=np.float32)
-        for i, fn in enumerate(filenames):
-            pl[i] = pl_hash[hash_to_row[content_hashes[fn]]]
+        pl = pl_hash[rows].astype(np.float32, copy=False)
         zero_rows = int((np.abs(pl).sum(axis=1) == 0).sum())
         if zero_rows:
             print(f"  [{name}] WARN: {zero_rows} zero pe_layer rows", file=sys.stderr)
@@ -230,13 +234,16 @@ def load_dataset(name: str, target_dir: str, use_dinov3_patches: bool = False,
                 # Augmented views are PE-G + color only — for the dinov3 slot, reuse
                 # the original (training will still see the augmented PE-G+color
                 # combined with the un-augmented dinov3 if it's enabled).
-                view_pegcol = np.concatenate([peg_v, col_v], axis=2)  # (N, K, 1973)
-                extra_dim = features.shape[1] - 1280 - 693
+                # Honor --input-mods: only the enabled blocks, in feature order.
+                view_blocks = ([peg_v] if "peg" in mods else []) + ([col_v] if "color" in mods else [])
+                view_pegcol = np.concatenate(view_blocks, axis=2)
+                base_dim = view_pegcol.shape[2]
+                extra_dim = features.shape[1] - base_dim
                 if extra_dim > 0:
                     # Stitch in the un-augmented extra blocks (global_color,
                     # dinov3 and/or pe_layer), shared across all K views.
-                    # features order: [peg(1280), color(693), global_color?, dino?, pe_layer?]
-                    extra_per_image = features[:, 1280 + 693:].reshape(n, 1, extra_dim)
+                    # features order: [peg?(1280), color?(693), global_color?, dino?, pe_layer?]
+                    extra_per_image = features[:, base_dim:].reshape(n, 1, extra_dim)
                     extra_tile = np.broadcast_to(extra_per_image, (n, peg_v.shape[1], extra_dim))
                     view_full = np.concatenate([view_pegcol, extra_tile], axis=2)
                 else:
@@ -688,6 +695,7 @@ class PKSampler:
         hard_neg_pool_k: int = 20,
         use_singletons: bool = False,
         peg_dim: int = 1280,
+        neighbors_cache: dict | None = None,
     ):
         self.train_dsets = train_dsets
         self.p = p
@@ -700,19 +708,27 @@ class PKSampler:
         # Precompute nearest-neighbor groups (per dataset) for hard-neg sampling.
         # Use PE-G centroid (already L2-normalized) for the similarity — cheap,
         # static, and matches the baseline's notion of "similar."
+        # neighbors_cache (--lomo): pools depend only on (dataset, seed,
+        # holdout split) — identical across folds, so share them.
         self.neighbors: dict[str, dict[int, list[int]]] = {}
         if hard_neg_frac > 0:
             for ds in train_dsets:
+                if neighbors_cache is not None and ds.name in neighbors_cache:
+                    self.neighbors[ds.name] = neighbors_cache[ds.name]
+                    continue
                 gids = list(ds.train_group_to_idxs.keys())
                 if len(gids) < 2:
                     self.neighbors[ds.name] = {g: [] for g in gids}
                     continue
                 # Compute per-group centroid in PE-G space (first peg_dim dims)
                 # Re-L2-normalize after mean (centroid is no longer unit-norm).
-                cents = np.zeros((len(gids), peg_dim), dtype=np.float32)
+                # With --input-mods color the features are narrower than peg_dim;
+                # the clamp makes the pool space "whatever the head input is".
+                cdim = min(peg_dim, ds.features.shape[1])
+                cents = np.zeros((len(gids), cdim), dtype=np.float32)
                 for i, g in enumerate(gids):
                     rows = ds.train_group_to_idxs[g]
-                    cents[i] = ds.features[rows, :peg_dim].mean(dim=0).numpy()
+                    cents[i] = ds.features[rows, :cdim].mean(dim=0).numpy()
                 cents /= np.linalg.norm(cents, axis=1, keepdims=True).clip(min=1e-8)
                 # NumPy 2.x's float32 matmul SIMD kernel raises spurious
                 # divide-by-zero / overflow / invalid-value RuntimeWarnings here
@@ -728,6 +744,8 @@ class PKSampler:
                     gids[i]: [gids[j] for j in np.argsort(-sims[i])[:k_pool]]
                     for i in range(len(gids))
                 }
+                if neighbors_cache is not None:
+                    neighbors_cache[ds.name] = self.neighbors[ds.name]
             print(f"  built hard-neg pools (frac={hard_neg_frac}, pool_k={hard_neg_pool_k})", file=sys.stderr)
 
     def __iter__(self):
@@ -782,7 +800,7 @@ class PKSampler:
 # ── Evaluation ───────────────────────────────────────────────────────────────
 
 
-def project_all(head: ProjectionHead, ds: Dataset, device, batch_size: int = 512) -> torch.Tensor:
+def project_all(head: ProjectionHead, ds: Dataset, device, batch_size: int = 512) -> np.ndarray:
     head.eval()
     # Self-detect shoot-context heads: if the head's input is wider than the
     # per-image features, the remainder is the dataset-mean context block.
@@ -799,10 +817,10 @@ def project_all(head: ProjectionHead, ds: Dataset, device, batch_size: int = 512
                     [batch, ds.context.to(device).expand(len(batch), -1)], dim=1)
             out.append(head(batch).cpu())
     head.train()
-    return torch.cat(out, dim=0)  # (N, out_dim)
+    return torch.cat(out, dim=0).numpy()  # (N, out_dim)
 
 
-def pairwise_acc_holdout(proj: torch.Tensor, ds: Dataset, threshold: float | None = None) -> dict:
+def pairwise_acc_holdout(proj: np.ndarray, ds: Dataset, threshold: float | None = None) -> dict:
     """
     Pair-classification AUC on held-out groups: among same-model pairs where
     BOTH images are in holdout_group_to_idxs, distinguish same-group from
@@ -816,7 +834,7 @@ def pairwise_acc_holdout(proj: torch.Tensor, ds: Dataset, threshold: float | Non
         holdout_idxs.extend(ix)
         holdout_labels.extend([gid] * len(ix))
     z = proj[holdout_idxs]                       # (Nh, D)
-    sims = (z @ z.t()).numpy()
+    sims = z @ z.T
     labs = np.array(holdout_labels)
     nh = len(holdout_idxs)
     iu = np.triu_indices(nh, k=1)
@@ -865,22 +883,29 @@ def pairwise_acc_holdout(proj: torch.Tensor, ds: Dataset, threshold: float | Non
 # ── Output writers ───────────────────────────────────────────────────────────
 
 
-def write_dist_matrix(proj: torch.Tensor, path: str):
+def write_dist_matrix(proj: np.ndarray, path: str, block: int = 1024):
     """
     Write condensed cosine-distance matrix in cluster-tool's expected format:
       u64 LE n_images, then n*(n-1)/2 f64 LE distances (i<j, row-major).
     Distance = 1 - cos_sim, clamped to [0, 2].
+    Blocked so the full (n, n) sim matrix is never materialized.
     """
     n = proj.shape[0]
-    z = F.normalize(proj.float(), dim=-1)  # ensure unit norm
-    # Compute upper triangle, vectorized by row
+    z = proj.astype(np.float32, copy=False)
+    z = z / np.linalg.norm(z, axis=1, keepdims=True).clip(min=1e-12)  # ensure unit norm
     out = np.empty(n * (n - 1) // 2, dtype=np.float64)
     off = 0
-    for i in range(n - 1):
-        sims = (z[i:i + 1] @ z[i + 1:].t()).numpy().reshape(-1)
-        d = np.clip(1.0 - sims, 0.0, 2.0).astype(np.float64)
-        out[off:off + d.shape[0]] = d
-        off += d.shape[0]
+    for i0 in range(0, n - 1, block):
+        i1 = min(i0 + block, n - 1)
+        # errstate: NumPy 2.x's float32 matmul SIMD kernel trips spurious FP
+        # exception flags on fully-finite inputs (same false alarm as the
+        # hard-neg pool matmul in PKSampler).
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            sims = z[i0:i1] @ z[i0 + 1:].T      # rows i0..i1 vs cols i0+1..n-1
+        for i in range(i0, i1):
+            d = np.clip(1.0 - sims[i - i0, i - i0:], 0.0, 2.0)
+            out[off:off + d.shape[0]] = d
+            off += d.shape[0]
     assert off == out.shape[0]
     with open(path, "wb") as f:
         f.write(np.uint64(n).tobytes())
@@ -893,6 +918,102 @@ def filenames_from_groups(ds: Dataset, group_to_idxs: dict[int, list[int]]) -> l
         for i in ix_list:
             out.append(ds.filenames[i])
     return sorted(out)
+
+
+def write_outputs(datasets, eval_names, project, summary, out_dir: Path):
+    """Per-dataset projection artifacts + summary.json. `project(name)` returns
+    the (N, out_dim) float32 numpy projection — backend-agnostic."""
+    if eval_names:
+        print("\nwriting per-dataset projection artifacts...", file=sys.stderr)
+    for name in eval_names:
+        ds = datasets[name]
+        proj = project(name)
+        np.save(out_dir / f"{name}_proj.npy", proj)
+        write_dist_matrix(proj, str(out_dir / f"{name}_dist_matrix.bin"))
+        with open(out_dir / f"{name}_filenames.json", "w") as f:
+            json.dump(ds.filenames, f)
+        if ds.train_group_to_idxs or ds.holdout_group_to_idxs:
+            with open(out_dir / f"{name}_train_filenames.json", "w") as f:
+                json.dump(filenames_from_groups(ds, ds.train_group_to_idxs), f)
+            with open(out_dir / f"{name}_holdout_filenames.json", "w") as f:
+                json.dump(filenames_from_groups(ds, ds.holdout_group_to_idxs), f)
+        print(f"  [{name}] wrote proj.npy + dist_matrix.bin (N={proj.shape[0]} D={proj.shape[1]})", file=sys.stderr)
+
+    with open(out_dir / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"\ndone. artifacts in {out_dir}", file=sys.stderr)
+
+
+# ── LOMO sweep (single process, datasets loaded once) ───────────────────────
+
+
+def run_lomo_sweep(args, datasets: dict[str, Dataset], in_dim: int, out_root: Path):
+    """Leave-one-model-out over the --train pool in ONE process. Each fold
+    trains on the pool minus the held-out dataset and writes that fold's
+    artifacts (proj_head.pt + held-out projection/dist matrix + summary.json)
+    to <output-dir>/<held-out-name>/.
+
+    Each fold re-seeds every RNG it owns (mx.random, the Beta host rng, the
+    sampler's and split's `random.Random(seed)`), so per-fold results are
+    identical to what a fresh single-fold process would produce — only the
+    dataset loading, device upload, and hard-neg pools are shared.
+    """
+    if args.backend != "mlx":
+        sys.exit("--lomo requires --backend mlx (the torch path trains one fold per process)")
+    if args.seeds and len(args.seeds) > 1:
+        sys.exit("--lomo with --seeds is not supported (run one --lomo pass per seed)")
+    from head_backend_mlx import make_device_cache, run_mlx_training
+
+    pool = args.train
+    folds = args.lomo_folds or pool
+    bad = [f for f in folds if f not in pool]
+    if bad:
+        sys.exit(f"--lomo-folds {bad} not in --train pool")
+    t_up = time.time()
+    dev_cache = make_device_cache(datasets)
+    print(f"lomo: uploaded {len(datasets)} datasets once ({time.time()-t_up:.1f}s); "
+          f"{len(folds)} folds", file=sys.stderr)
+    neighbors_cache: dict = {}
+
+    for fold_i, heldout in enumerate(folds):
+        t0 = time.time()
+        fold_train = [n for n in pool if n != heldout]
+        print(f"\n=== fold {fold_i+1}/{len(folds)}: holdout {heldout} ===", file=sys.stderr)
+        # Re-split per fold (deterministic per (dataset, seed) — same split
+        # every fold). Clear the held-out dataset's split so write_outputs
+        # treats it exactly like a never-trained dataset (no train/holdout
+        # filename artifacts), matching a single-fold run.
+        for name in fold_train:
+            split_groups(datasets[name], args.within_holdout_frac, args.seed)
+        held = datasets[heldout]
+        held.train_group_to_idxs = {}
+        held.holdout_group_to_idxs = {}
+
+        train_dsets = [datasets[n] for n in fold_train]
+        if not any(ds.train_group_to_idxs for ds in train_dsets):
+            sys.exit(f"fold {heldout}: no usable training groups")
+        sampler = PKSampler(
+            train_dsets, p=args.p_groups, k=args.k_images,
+            batches_per_epoch=args.batches_per_epoch, seed=args.seed,
+            hard_neg_frac=args.hard_neg_frac, hard_neg_pool_k=args.hard_neg_pool_k,
+            use_singletons=args.use_singleton_negatives,
+            neighbors_cache=neighbors_cache,
+        )
+        summary = {
+            "args": {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()},
+            "fold": {"holdout": heldout, "train": fold_train},
+            "datasets": {n: {"n_images": d.features.shape[0]} for n, d in datasets.items()},
+            "epochs": [],
+        }
+        fold_dir = out_root / heldout
+        fold_dir.mkdir(parents=True, exist_ok=True)
+        sd_np, project = run_mlx_training(args, datasets, train_dsets, sampler,
+                                          summary, pairwise_acc_holdout, in_dim,
+                                          dev_cache=dev_cache)
+        torch.save({k: torch.from_numpy(v) for k, v in sd_np.items()},
+                   fold_dir / "proj_head.pt")
+        write_outputs(datasets, [heldout], project, summary, fold_dir)
+        print(f"=== fold {heldout} done in {time.time()-t0:.1f}s ===", file=sys.stderr)
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -912,9 +1033,21 @@ def main():
     ap.add_argument("--train", type=lambda s: s.split(","), required=True,
                     help="comma-separated dataset names to train on")
     ap.add_argument("--eval", type=lambda s: s.split(","), default=None,
-                    help="comma-separated dataset names to write projections for (default = all)")
+                    help="comma-separated dataset names to write projections for "
+                         "(default = all; 'none' skips projection artifacts entirely — "
+                         "use when only proj_head.pt is consumed, e.g. train_final_head)")
     ap.add_argument("--within-holdout-frac", type=float, default=0.0,
                     help="fraction of GROUPS in each training set to hold out")
+    ap.add_argument("--lomo", action="store_true",
+                    help="leave-one-model-out sweep in one process: --train is the full "
+                         "pool; each fold trains on the pool minus one dataset and writes "
+                         "its artifacts (eval = the held-out dataset only) to "
+                         "<output-dir>/<name>/. Datasets load + upload once instead of "
+                         "once per fold. Requires --backend mlx; --eval is ignored.")
+    ap.add_argument("--lomo-folds", type=lambda s: s.split(","), default=None,
+                    help="with --lomo: only run these folds (comma list, subset of "
+                         "--train). The training pool per fold is still the full "
+                         "--train minus the held-out name. Default: every --train name.")
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--out-dim", type=int, default=512)
     ap.add_argument("--hidden", type=int, default=1024)
@@ -924,6 +1057,9 @@ def main():
     ap.add_argument("--pe-layer", default=None,
                     help='intermediate PE-G layer head input as "<layer>:<pool>" '
                          '(e.g. "47:attnpool"); needs pe_layers_* extracted on every dataset')
+    ap.add_argument("--input-mods", default="peg,color",
+                    help="comma list of head input blocks: peg,color (default) | peg | color. "
+                         "Trains a single-modality head for the split-head blend study.")
     ap.add_argument("--global-color", action="store_true",
                     help="concatenate the 77-d global (un-gridded) color histogram to the "
                          "input alongside the 3x3 grid color; needs global_color_cache.npz "
@@ -980,13 +1116,33 @@ def main():
     ap.add_argument("--p-groups", type=int, default=16, help="groups per batch")
     ap.add_argument("--k-images", type=int, default=8, help="images per group per batch")
     ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--lr-schedule", choices=["constant", "cosine"], default="constant",
+                    help="cosine = cosine-decay from --lr to 0 over all "
+                         "epochs×batches steps. Usually reaches the constant-LR "
+                         "endpoint in fewer epochs.")
     ap.add_argument("--weight-decay", type=float, default=1e-4)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--seeds", type=lambda s: [int(x) for x in s.split(",")], default=None,
+                    help="train all listed seeds SIMULTANEOUSLY in one batched MLX "
+                         "graph (stacked weights, one compiled step). Each lane sees "
+                         "exactly the batches + mixup λs its standalone --seed run "
+                         "would. Writes proj_head_s<seed>.pt per seed (+ proj_head.pt "
+                         "= first seed) and per-seed artifacts under s<seed>/. "
+                         "Requires --backend mlx; see head_backend_mlx_multi.py for "
+                         "the supported feature subset.")
     ap.add_argument("--grad-clip", type=float, default=5.0,
                     help="max grad norm for clip_grad_norm_ (0 disables). Guards against "
                          "mid-training divergence in aggressive configs.")
-    ap.add_argument("--device", default=None, help="cuda / mps / cpu (auto-detected)")
+    ap.add_argument("--device", default=None, help="cuda / mps / cpu (auto-detected; torch backend only)")
+    ap.add_argument("--backend", choices=["torch", "mlx"], default="mlx",
+                    help="training framework (default mlx — ~1.7x faster per head; "
+                         "the torch/MPS step is kernel-dispatch bound). Seeds are "
+                         "statistically — not bit — equivalent across backends; "
+                         "output artifacts are identical in format. 'torch' remains "
+                         "as the reference implementation / non-Apple fallback.")
     args = ap.parse_args()
+    if args.blend_aware and args.input_mods != "peg,color":
+        sys.exit("--blend-aware assumes the peg,color input layout (zeroshot_base_sim slices [:1280])")
 
     if args.device is None:
         if torch.backends.mps.is_available():
@@ -1011,7 +1167,8 @@ def main():
         datasets[name] = load_dataset(name, d, use_dinov3_patches=args.use_dinov3_patches,
                                       use_augmented_views=args.use_augmented_views,
                                       pe_layer=args.pe_layer,
-                                      use_global_color=args.global_color)
+                                      use_global_color=args.global_color,
+                                      input_mods=args.input_mods)
     in_dim = next(iter(datasets.values())).features.shape[1]
     for ds in datasets.values():
         assert ds.features.shape[1] == in_dim
@@ -1020,14 +1177,76 @@ def main():
 
     # Split training sets
     train_names = args.train
-    eval_names = args.eval or list(datasets.keys())
+    eval_names = [] if args.eval == ["none"] else (args.eval or list(datasets.keys()))
     for name in train_names:
         if name not in datasets:
             sys.exit(f"--train {name} not in --dataset list")
+
+    if args.lomo:
+        run_lomo_sweep(args, datasets, in_dim, out_dir)
+        return
+
+    for name in train_names:
         split_groups(datasets[name], args.within_holdout_frac, args.seed)
     train_dsets = [datasets[n] for n in train_names]
     if not any(ds.train_group_to_idxs for ds in train_dsets):
         sys.exit("no usable training groups (need ≥2 images per group)")
+
+    summary = {
+        "args": {k: (v if not isinstance(v, list) else list(v)) for k, v in vars(args).items()},
+        "datasets": {n: {"n_images": d.features.shape[0]} for n, d in datasets.items()},
+        "epochs": [],
+    }
+
+    # Batched multi-seed training (one graph, stacked weights).
+    if args.seeds and len(args.seeds) > 1:
+        if args.backend != "mlx":
+            sys.exit("--seeds requires --backend mlx")
+        from head_backend_mlx_multi import run_mlx_training_multi
+        ncache: dict = {}
+        samplers = [PKSampler(
+            train_dsets, p=args.p_groups, k=args.k_images,
+            batches_per_epoch=args.batches_per_epoch, seed=s,
+            hard_neg_frac=args.hard_neg_frac, hard_neg_pool_k=args.hard_neg_pool_k,
+            use_singletons=args.use_singleton_negatives, neighbors_cache=ncache,
+        ) for s in args.seeds]
+        results = run_mlx_training_multi(args, datasets, train_dsets, samplers,
+                                         summary, in_dim)
+        for i, (seed, sd_np, project) in enumerate(results):
+            sdt = {k: torch.from_numpy(v) for k, v in sd_np.items()}
+            torch.save(sdt, out_dir / f"proj_head_s{seed}.pt")
+            if i == 0:
+                torch.save(sdt, out_dir / "proj_head.pt")
+            if eval_names:
+                seed_dir = out_dir / f"s{seed}"
+                seed_dir.mkdir(parents=True, exist_ok=True)
+                write_outputs(datasets, eval_names, project, summary, seed_dir)
+        if not eval_names:
+            with open(out_dir / "summary.json", "w") as f:
+                json.dump(summary, f, indent=2)
+            print(f"\ndone. artifacts in {out_dir}", file=sys.stderr)
+        return
+
+    sampler = PKSampler(
+        train_dsets, p=args.p_groups, k=args.k_images,
+        batches_per_epoch=args.batches_per_epoch, seed=args.seed,
+        hard_neg_frac=args.hard_neg_frac, hard_neg_pool_k=args.hard_neg_pool_k,
+        use_singletons=args.use_singleton_negatives,
+    )
+
+    if args.backend == "mlx":
+        try:
+            from head_backend_mlx import run_mlx_training
+        except ImportError as e:
+            print(f"mlx backend unavailable ({e}); falling back to torch", file=sys.stderr)
+            args.backend = "torch"
+    if args.backend == "mlx":
+        sd_np, project = run_mlx_training(args, datasets, train_dsets, sampler,
+                                          summary, pairwise_acc_holdout, in_dim)
+        torch.save({k: torch.from_numpy(v) for k, v in sd_np.items()},
+                   out_dir / "proj_head.pt")
+        write_outputs(datasets, eval_names, project, summary, out_dir)
+        return
 
     # Model + per-dataset ArcFace heads + optimizer
     head = ProjectionHead(in_dim, hidden=args.hidden, out_dim=args.out_dim, dropout=args.dropout).to(device)
@@ -1044,13 +1263,17 @@ def main():
     params = list(head.parameters())
     for arc in arc_heads.values():
         params += list(arc.parameters())
-    opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=args.weight_decay)
-    sampler = PKSampler(
-        train_dsets, p=args.p_groups, k=args.k_images,
-        batches_per_epoch=args.batches_per_epoch, seed=args.seed,
-        hard_neg_frac=args.hard_neg_frac, hard_neg_pool_k=args.hard_neg_pool_k,
-        use_singletons=args.use_singleton_negatives,
-    )
+    # fused=True executes the whole AdamW step as one kernel per device. The
+    # MPS training step is dispatch-bound, so this alone is worth ~15%; math is
+    # identical to the default single-tensor path.
+    try:
+        opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=args.weight_decay,
+                                fused=device.type in ("mps", "cuda"))
+    except (RuntimeError, ValueError):
+        opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = (torch.optim.lr_scheduler.CosineAnnealingLR(
+                     opt, T_max=args.epochs * args.batches_per_epoch)
+                 if args.lr_schedule == "cosine" else None)
 
     # Move features/views to device after the sampler builds its CPU-side
     # neighbor pools — saves a host→device copy of ~3MB of features per batch.
@@ -1060,12 +1283,6 @@ def main():
         if ds.views_features is not None:
             ds.views_features = ds.views_features.to(device)
             ds.views_valid_mask = ds.views_valid_mask.to(device)
-
-    summary = {
-        "args": {k: (v if not isinstance(v, list) else list(v)) for k, v in vars(args).items()},
-        "datasets": {n: {"n_images": d.features.shape[0]} for n, d in datasets.items()},
-        "epochs": [],
-    }
 
     print(f"\ntraining: {train_names} → {sum(len(ds.train_group_to_idxs) for ds in train_dsets)} train groups", file=sys.stderr)
     print(f"batches/epoch={args.batches_per_epoch}  P×K={args.p_groups}×{args.k_images}={args.p_groups*args.k_images}", file=sys.stderr)
@@ -1189,8 +1406,11 @@ def main():
                     feature_dropout=args.feature_dropout,
                     feature_noise=args.feature_noise,
                     # With --global-color the color slice is grid(693) ⊕ global(77),
-                    # contiguous — drop-color zeroes both.
-                    peg_dim=1280, color_dim=693 + (77 if args.global_color else 0),
+                    # contiguous — drop-color zeroes both. Honors --input-mods:
+                    # a disabled block gets dim 0, which no-ops its drop aug.
+                    peg_dim=1280 if "peg" in args.input_mods else 0,
+                    color_dim=(693 + (77 if args.global_color else 0))
+                              if "color" in args.input_mods else 0,
                     mixup_end=n_group if has_singletons else None,
                     mixup_lam=mixup_lams_bulk[batch_i] if mixup_lams_bulk is not None else None,
                     drop_color_mask=drop_color_bulk[batch_i, :b_now] if drop_color_bulk is not None else None,
@@ -1268,6 +1488,8 @@ def main():
             if args.grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(head.parameters(), max_norm=args.grad_clip)
             opt.step()
+            if scheduler is not None:
+                scheduler.step()
             with torch.no_grad():
                 ep_loss_t += loss.detach()
                 ep_supcon_t += l_supcon.detach()
@@ -1299,28 +1521,10 @@ def main():
                 msg += f"  | {ds.name} holdout: AUC={m['auc']:.4f} pairAcc={m['best_pair_acc']:.4f}"
         print(msg, file=sys.stderr)
 
-    # Save head
+    # Save head + artifacts
     torch.save(head.state_dict(), out_dir / "proj_head.pt")
-
-    # Project + write artifacts for every eval dataset
-    print("\nwriting per-dataset projection artifacts...", file=sys.stderr)
-    for name in eval_names:
-        ds = datasets[name]
-        proj = project_all(head, ds, device)
-        np.save(out_dir / f"{name}_proj.npy", proj.numpy())
-        write_dist_matrix(proj, str(out_dir / f"{name}_dist_matrix.bin"))
-        with open(out_dir / f"{name}_filenames.json", "w") as f:
-            json.dump(ds.filenames, f)
-        if ds.train_group_to_idxs or ds.holdout_group_to_idxs:
-            with open(out_dir / f"{name}_train_filenames.json", "w") as f:
-                json.dump(filenames_from_groups(ds, ds.train_group_to_idxs), f)
-            with open(out_dir / f"{name}_holdout_filenames.json", "w") as f:
-                json.dump(filenames_from_groups(ds, ds.holdout_group_to_idxs), f)
-        print(f"  [{name}] wrote proj.npy + dist_matrix.bin (N={proj.shape[0]} D={proj.shape[1]})", file=sys.stderr)
-
-    with open(out_dir / "summary.json", "w") as f:
-        json.dump(summary, f, indent=2)
-    print(f"\ndone. artifacts in {out_dir}", file=sys.stderr)
+    write_outputs(datasets, eval_names, lambda name: project_all(head, datasets[name], device),
+                  summary, out_dir)
 
 
 if __name__ == "__main__":

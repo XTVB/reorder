@@ -13,19 +13,25 @@ use std::fs::File;
 use std::path::Path;
 
 /// Per-model weight spec: (npz array name, weight, needs per-row L2 norm).
-/// dinov3/pecore_g/learned_proj are already L2-normalized by the Python
-/// extraction stage; color histograms are not.
+/// dinov3/pecore_g and the learned heads are already L2-normalized by the
+/// Python extraction stage; color histograms are not.
+/// `learned_proj_peg` / `learned_proj_color` are the single-modality heads of
+/// the split-head blend (see LEARNED_HEAD.md "Split single-modality heads").
 pub fn emb_specs(
     color: f32,
     dinov3: f32,
     pecore_g: f32,
     learned_proj: f32,
+    learned_proj_peg: f32,
+    learned_proj_color: f32,
 ) -> Vec<(&'static str, f32, bool)> {
     vec![
         ("dinov3", dinov3, false),
         ("pecore_g", pecore_g, false),
         ("color", color, true),
         ("learned_proj", learned_proj, false),
+        ("learned_proj_peg", learned_proj_peg, false),
+        ("learned_proj_color", learned_proj_color, false),
     ]
 }
 

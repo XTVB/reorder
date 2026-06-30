@@ -23,16 +23,25 @@ import { log } from "../log.ts";
 import type { WeightConfig } from "../shared/types.ts";
 import { GROUP_SIM_BINARY } from "./binaries.ts";
 import { writeResolvedRejectedPairsFile } from "./constraints.ts";
-import { rescaleLearnedProjWeight } from "./pipeline.ts";
+import { availableLearnedKeys, rescaleLearnedProjWeight } from "./pipeline.ts";
 import { spawn } from "./subprocess.ts";
 
 export type MergeMethod = "patches" | "embeddings";
 
 /** Stable short signature of the rescaled weights, for the embeddings cache filename. */
-function weightSignature(weights: WeightConfig): string {
-  const rescaled = rescaleLearnedProjWeight(weights);
+function weightSignature(weights: WeightConfig, availableLearned?: ReadonlySet<string>): string {
+  const rescaled = rescaleLearnedProjWeight(weights, availableLearned);
   // Deterministic key order; round so float noise doesn't churn the cache.
-  const parts = (["pecore_g", "dinov3", "color", "learned_proj"] as const)
+  const parts = (
+    [
+      "pecore_g",
+      "dinov3",
+      "color",
+      "learned_proj",
+      "learned_proj_peg",
+      "learned_proj_color",
+    ] as const
+  )
     .map((k) => `${k}:${(rescaled[k] ?? 0).toFixed(4)}`)
     .join("|");
   // djb2 → base36 keeps the filename short and filesystem-safe.
@@ -99,13 +108,14 @@ export async function computeMergeSuggestions(
     ensureHashOrderJson(cache); // regenerate the hash_cache_order.json sidecar if stale
     const hashOrderPath = join(cache, HASH_ORDER_FILE);
     primaryInputPath = hashCachePath;
+    const availableLearned = availableLearnedKeys(hashCachePath);
     resultCachePath = join(
       cache,
-      `merge_suggestions_emb_${weightSignature(weights)}${sizeSuffix}.json`,
+      `merge_suggestions_emb_${weightSignature(weights, availableLearned)}${sizeSuffix}.json`,
     );
     args.push("--mode", "embeddings", "--hash-cache", hashCachePath, "--hash-order", hashOrderPath);
     // Rescale learned_proj the same way the cluster pipeline does, then pass each weight.
-    const rescaled = rescaleLearnedProjWeight(weights);
+    const rescaled = rescaleLearnedProjWeight(weights, availableLearned);
     for (const [key, val] of Object.entries(rescaled)) {
       if (val !== undefined) args.push(`--${key.replace(/_/g, "-")}-weight`, String(val));
     }

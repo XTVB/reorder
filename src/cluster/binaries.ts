@@ -21,5 +21,14 @@ export const GROUP_SIM_BINARY = join(
   "release",
   "group-similarity",
 );
+export const ORDER_BINARY = join(
+  dirname(import.meta.dir),
+  "..",
+  "rust",
+  "order-tool",
+  "target",
+  "release",
+  "order-tool",
+);
 export const PYTHON =
   process.env.CLUSTER_PYTHON || `${process.env.HOME}/.venvs/imgcluster-env/bin/python3`;

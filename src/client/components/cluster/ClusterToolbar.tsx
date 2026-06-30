@@ -12,17 +12,28 @@ import { OverflowMenu, OverflowMenuDivider, OverflowMenuItem } from "../shared/O
 const DEFAULT_N_CLUSTERS = 200;
 
 const WEIGHT_PRESETS: { label: string; weights: WeightConfig }[] = [
+  {
+    label: "Learned 3-head",
+    weights: { learned_proj: 0.3, learned_proj_peg: 0.55, learned_proj_color: 0.15 },
+  },
+  { label: "Learned 60% + zs", weights: { pecore_g: 1.0, color: 0.7, learned_proj: 0.6 } },
   { label: "PE-G + Color", weights: { pecore_g: 1.0, color: 0.5 } },
   { label: "PE-G + Color (high)", weights: { pecore_g: 1.0, color: 0.8 } },
   { label: "PE-G + Color + DINOv3", weights: { pecore_g: 2.0, color: 1.0, dinov3: 0.5 } },
   { label: "DINOv3", weights: { dinov3: 1.0 } },
 ];
 
+// The learned dials are target fractions of the final signal (rendered as %,
+// rescaled server-side); the zero-shot rows are raw concat weights.
+const LEARNED_WEIGHT_KEYS = new Set(["learned_proj", "learned_proj_peg", "learned_proj_color"]);
+
 const WEIGHT_LABELS: { key: keyof Required<WeightConfig>; label: string }[] = [
   { key: "dinov3", label: "DINOv3" },
   { key: "pecore_g", label: "PE-G" },
   { key: "color", label: "Color" },
-  { key: "learned_proj", label: "Learned head" },
+  { key: "learned_proj", label: "l-head" },
+  { key: "learned_proj_peg", label: "l-PE-G" },
+  { key: "learned_proj_color", label: "l-color" },
 ];
 
 interface Props {
@@ -151,9 +162,9 @@ export function ClusterToolbar({
               </div>
               <div className="cluster-weights-sliders">
                 {WEIGHT_LABELS.map(({ key, label }) => {
-                  // The learned-head slider is a target contribution fraction
+                  // The learned-head sliders are target contribution fractions
                   // vs raw concat-weights for the others
-                  const isLearned = key === "learned_proj";
+                  const isLearned = LEARNED_WEIGHT_KEYS.has(key);
                   const max = isLearned ? "1" : "2";
                   const step = isLearned ? "0.05" : "0.1";
                   const v = weights[key] ?? 0;

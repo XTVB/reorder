@@ -27,7 +27,6 @@ export {
   ModelMissingError,
 } from "./embeddings.ts";
 export { orderGroupsBySimilarity } from "./group-ordering.ts";
-export { orderImagesBySimilarity } from "./image-ordering.ts";
 export {
   buildImportedResult,
   clearImportedClusters,
@@ -42,6 +41,12 @@ export {
 } from "./job-mutex.ts";
 export { removeLinkageTree } from "./linkage.ts";
 export { computeMergeSuggestions, type MergeMethod } from "./merge-suggestions.ts";
+export {
+  type OrderBatchOpts,
+  type OrderJob,
+  type OrderJobResult,
+  orderImagesBatch,
+} from "./order-batch.ts";
 export {
   extractFeatures,
   runFullCluster,

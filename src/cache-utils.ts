@@ -49,6 +49,15 @@ function* iterNpzEntries(npzBuf: Buffer): IterableIterator<NpzEntry> {
   }
 }
 
+/** Entry names present in an .npz (ZIP) buffer, without the .npy suffix. */
+export function listNpzKeys(npzBuf: Buffer): Set<string> {
+  const out = new Set<string>();
+  for (const e of iterNpzEntries(npzBuf)) {
+    out.add(e.name.endsWith(".npy") ? e.name.slice(0, -4) : e.name);
+  }
+  return out;
+}
+
 /** Extract a raw .npy buffer from an in-memory .npz (ZIP) file by entry name. */
 function extractNpyEntry(npzBuf: Buffer, entryName: string): Buffer {
   for (const e of iterNpzEntries(npzBuf)) {
@@ -65,11 +74,31 @@ function extractNpyEntry(npzBuf: Buffer, entryName: string): Buffer {
   throw new Error(`Entry ${entryName} not found in npz`);
 }
 
-/** Extract a single .npy entry from an in-memory .npz (ZIP) buffer. */
+/** Extract a single float .npy entry from an in-memory .npz (ZIP) buffer.
+ * Respects the dtype header: `<f4` is returned as-is, `<f8` (e.g. a NumPy 2
+ * scalar-promotion upcast at save time) is downcast to f32. Anything else
+ * throws — misreading a dtype silently yields garbage floats and NaNs. */
 export function parseNpyFromNpz(npzBuf: Buffer, entryName: string): Float32Array {
   const data = extractNpyEntry(npzBuf, entryName);
   const headerLen = data.readUInt16LE(8);
+  const headerStr = data.subarray(10, 10 + headerLen).toString("latin1");
   const arrayData = data.subarray(10 + headerLen);
+  const descr = /'descr':\s*'([^']+)'/.exec(headerStr)?.[1] ?? "<f4";
+  if (descr === "<f8") {
+    const f64 =
+      arrayData.byteOffset % 8 === 0
+        ? new Float64Array(arrayData.buffer, arrayData.byteOffset, arrayData.byteLength / 8)
+        : new Float64Array(
+            arrayData.buffer.slice(
+              arrayData.byteOffset,
+              arrayData.byteOffset + arrayData.byteLength,
+            ),
+          );
+    return Float32Array.from(f64);
+  }
+  if (descr !== "<f4") {
+    throw new Error(`Unsupported npy dtype '${descr}' in ${entryName} (expected <f4 or <f8)`);
+  }
   if (arrayData.byteOffset % 4 !== 0) {
     // STORED (uncompressed) entries are views into the zip buffer at arbitrary
     // offsets; Float32Array requires 4-byte alignment, so copy in that case.

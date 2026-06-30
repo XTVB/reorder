@@ -21,7 +21,7 @@ export const METHOD_THRESHOLDS: Record<
   { min: number; max: number; step: number; default: number }
 > = {
   patches: { min: 0.5, max: 0.8, step: 0.01, default: 0.65 },
-  embeddings: { min: 0.55, max: 0.9, step: 0.01, default: 0.7 },
+  embeddings: { min: 0.6, max: 0.95, step: 0.01, default: 0.8 },
 };
 
 const clampThreshold = (t: number, method: MergeMethod) => {
@@ -74,7 +74,7 @@ export const useMergeSuggestionsStore = create<MergeSuggestionsState>((set, get)
   threshold: METHOD_THRESHOLDS.embeddings.default,
   method: "embeddings",
   fullResolution: false,
-  maxCombinedSize: 40,
+  maxCombinedSize: 0,
   sortMode: "topMatch",
 
   collapsedRows: new Set(),

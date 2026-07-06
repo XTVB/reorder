@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { ClusterView } from "./components/cluster/ClusterView.tsx";
+import { CzkawkaView } from "./components/czkawka/CzkawkaView.tsx";
 import {
   AppShellHeader,
   DEFAULT_MODE,
@@ -20,6 +21,7 @@ import { useModalStore } from "./stores/core/modalStore.ts";
 import { useSelectionStore } from "./stores/core/selectionStore.ts";
 import { useSessionStore } from "./stores/core/sessionStore.ts";
 import { useToastStore } from "./stores/core/toastStore.ts";
+import { useCzkawkaStore } from "./stores/czkawkaStore.ts";
 import { useDndStore } from "./stores/dndStore.ts";
 import { useGroupStore } from "./stores/groupStore.ts";
 import { useImageStore } from "./stores/imageStore.ts";
@@ -53,6 +55,7 @@ import { useTrashStore } from "./stores/trashStore.ts";
   constraints: useConstraintsStore,
   trash: useTrashStore,
   sortHistory: useSortHistoryStore,
+  czkawka: useCzkawkaStore,
 };
 
 function AppShell() {
@@ -83,6 +86,8 @@ function AppShell() {
         <ClusterView />
       ) : mode === "merge-suggestions" ? (
         <MergeSuggestions />
+      ) : mode === "czkawka" ? (
+        <CzkawkaView />
       ) : (
         <ReorderView />
       )}

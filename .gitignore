@@ -40,6 +40,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 rust/cluster-tool/target
 rust/group-similarity/target
 rust/order-tool/target
+rust/hash-tool/target
 
 # Downloaded model weights
 model.tar.gz

@@ -18,12 +18,18 @@ export function Lightbox() {
 
 function LightboxInner() {
   const filenames = useLightboxStore((s) => s.filenames);
+  const urls = useLightboxStore((s) => s.urls);
   const initialIndex = useLightboxStore((s) => s.index);
   const close = useLightboxStore((s) => s.close);
+  const trashMarkAllowed = useLightboxStore((s) => s.trashMark);
   const folderModeEnabled = useFolderStore((s) => s.folderModeEnabled);
-  const enableTrashMark = !folderModeEnabled;
+  const enableTrashMark = trashMarkAllowed && !folderModeEnabled;
 
-  const [index, setIndex] = useState(initialIndex);
+  const [rawIndex, setIndex] = useState(initialIndex);
+  // filenames can shrink in place via updateFilenames (an action deleted
+  // images while the lightbox stayed open) — clamp instead of remounting so
+  // zoom/pan survive.
+  const index = Math.min(rawIndex, filenames.length - 1);
   const [scale, setScale] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
@@ -52,6 +58,11 @@ function LightboxInner() {
 
   const indexRef = useRef(index);
   indexRef.current = index;
+  // Keep the raw state in range so the next setIndex-based nav starts from
+  // the clamped position.
+  useEffect(() => {
+    if (rawIndex !== index) setIndex(index);
+  }, [rawIndex, index]);
   const onCloseRef = useRef(close);
   onCloseRef.current = close;
   const trashEnabledRef = useRef(enableTrashMark);
@@ -66,18 +77,12 @@ function LightboxInner() {
           break;
         case "ArrowLeft": {
           const prev = indexRef.current - 1;
-          if (prev >= 0) {
-            setIndex(prev);
-            resetView();
-          }
+          if (prev >= 0) setIndex(prev);
           break;
         }
         case "ArrowRight": {
           const next = indexRef.current + 1;
-          if (next < filenames.length) {
-            setIndex(next);
-            resetView();
-          }
+          if (next < filenames.length) setIndex(next);
           break;
         }
         case "+":
@@ -109,10 +114,7 @@ function LightboxInner() {
 
   function go(dir: -1 | 1) {
     const next = index + dir;
-    if (next >= 0 && next < filenames.length) {
-      setIndex(next);
-      resetView();
-    }
+    if (next >= 0 && next < filenames.length) setIndex(next);
   }
 
   function handleWheel(e: React.WheelEvent) {
@@ -181,7 +183,7 @@ function LightboxInner() {
       >
         <img
           className="lightbox-image"
-          src={fullImageUrl(filename)}
+          src={urls?.[index] ?? fullImageUrl(filename)}
           alt={filename}
           draggable={false}
           onLoad={handleImageLoad}

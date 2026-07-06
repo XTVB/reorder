@@ -2,6 +2,7 @@
 // rest of the codebase. Internal helpers (cache clearers, tree-cut primitives,
 // resolved-constraint writers, etc.) stay private inside their sub-modules.
 
+export { HASH_TOOL_BINARY } from "./binaries.ts";
 export type { Constraints, RejectedMergePair } from "./constraints.ts";
 export {
   loadConstraints,
@@ -56,6 +57,7 @@ export {
   runRecutByThreshold,
 } from "./pipeline.ts";
 export { broadcastProgress, getLastProgress, subscribeProgress } from "./progress.ts";
+export { spawnJSON } from "./subprocess.ts";
 
 import { clearPatchDistMatrixCache } from "./distance-matrices.ts";
 import { clearEmbeddingsCache } from "./embeddings.ts";

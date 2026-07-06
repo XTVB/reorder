@@ -1,13 +1,8 @@
 // /api/delete — move files to Trash and prune groups + content_hashes.
 
-import {
-  invalidateClusterCache,
-  removeLinkageTree,
-  removeRerankDistMatrix,
-} from "../../cluster/index.ts";
-import { pruneContentHashes } from "../../fs/content-hashes.ts";
-import { executeDelete, loadGroups, withRenameLock, writeGroupsFile } from "../../fs/index.ts";
-import { log, logData, logError } from "../../log.ts";
+import { executeDelete, withRenameLock } from "../../fs/index.ts";
+import { log, logData } from "../../log.ts";
+import { cleanupAfterDelete } from "../cleanup.ts";
 import { json } from "../middleware/response.ts";
 import type { RouteHandler } from "../types.ts";
 
@@ -39,40 +34,7 @@ export const deleteRoutes: RouteHandler = async (req, ctx) => {
       logData("delete", "Missing files", missing.join("\n"));
     }
 
-    if (deleted.length > 0) {
-      const deletedSet = new Set(deleted);
-
-      const safeStep = async (step: string, fn: () => Promise<void>) => {
-        try {
-          await fn();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logError("delete", `${step} failed`, err);
-          warnings.push(`${step} failed: ${msg}`);
-        }
-      };
-
-      await Promise.all([
-        safeStep("Group cleanup", async () => {
-          const groups = loadGroups(targetDir);
-          if (groups.length === 0) return;
-          if (!groups.some((g) => g.images.some((fn) => deletedSet.has(fn)))) return;
-          const cleaned = groups
-            .map((g) => ({ ...g, images: g.images.filter((fn) => !deletedSet.has(fn)) }))
-            .filter((g) => g.images.length > 0);
-          await writeGroupsFile(targetDir, cleaned);
-          log("delete", `Pruned groups: ${cleaned.length} remaining`);
-        }),
-        safeStep("Content hashes cleanup", () => pruneContentHashes(targetDir, deletedSet)),
-        // linkage_tree.bin and rerank_dist_matrix.bin are indexed by image
-        // position in the sorted filename list — any deletion shifts those
-        // indices, so the on-disk artifacts must go. Embeddings (hash-keyed)
-        // survive deletes.
-        safeStep("Linkage tree invalidation", () => removeLinkageTree(targetDir)),
-        safeStep("Rerank matrix invalidation", () => removeRerankDistMatrix(targetDir)),
-      ]);
-      invalidateClusterCache();
-    }
+    warnings.push(...(await cleanupAfterDelete(targetDir, deleted)));
 
     const elapsed = Date.now() - t0;
     log(

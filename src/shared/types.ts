@@ -199,3 +199,56 @@ export interface MergeSuggestionsResponse {
   suggestions: MergeSuggestionRow[];
   computeTimeMs: number;
 }
+
+// Czkawka duplicate-compare types
+
+/** One directory participating in a comparison. The launch target dir is
+ * always included; at most one dir is the czkawka-style "reference". With a
+ * reference set, comparison asks "which images match something in the
+ * reference dir": reference images are only compared against non-reference
+ * images, so intra-reference and intra-working-dir duplicates are not
+ * reported. Reference files are ordinary group members (still deletable). */
+export interface CzkawkaDirEntry {
+  path: string;
+  reference: boolean;
+}
+
+export interface CzkawkaImage {
+  /** Absolute directory the file lives in (one of the configured dirs). */
+  dir: string;
+  filename: string;
+  size: number;
+  width: number;
+  height: number;
+  /** Hamming distance to the group's seed image (0 for the seed and exact duplicates). */
+  difference: number;
+}
+
+export interface CzkawkaGroup {
+  images: CzkawkaImage[];
+}
+
+export interface CzkawkaRunResult {
+  groups: CzkawkaGroup[];
+  computeTimeMs: number;
+  /** Perceptual hashes served from cache vs freshly computed. */
+  cached: number;
+  computed: number;
+  /** Files the hasher could not decode. */
+  failed: number;
+}
+
+/** Response shape shared by /groups, /action, and /undo — the server is the
+ * source of truth for group state, clients replace theirs wholesale. */
+export interface CzkawkaStateResponse {
+  groups: CzkawkaGroup[];
+  undoDepth: number;
+  targetDir: string;
+  dirs: CzkawkaDirEntry[];
+}
+
+/** One filesystem mutation inside a (possibly batched) czkawka action.
+ * All entries are absolute paths of images in the current groups. */
+export type CzkawkaOperation =
+  | { type: "trash"; paths: string[]; keep?: string }
+  | { type: "copy_replace"; source: string; target: string; others: string[] };

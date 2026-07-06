@@ -12,6 +12,7 @@ export const MODES: { key: AppMode; label: string; title: string; path: string }
     title: "Merge Suggestions",
     path: "/merge-suggestions",
   },
+  { key: "czkawka", label: "Czkawka", title: "Czkawka Compare", path: "/czkawka" },
 ];
 
 export const DEFAULT_MODE: AppMode = "reorder";

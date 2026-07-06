@@ -30,5 +30,14 @@ export const ORDER_BINARY = join(
   "release",
   "order-tool",
 );
+export const HASH_TOOL_BINARY = join(
+  dirname(import.meta.dir),
+  "..",
+  "rust",
+  "hash-tool",
+  "target",
+  "release",
+  "hash-tool",
+);
 export const PYTHON =
   process.env.CLUSTER_PYTHON || `${process.env.HOME}/.venvs/imgcluster-env/bin/python3`;

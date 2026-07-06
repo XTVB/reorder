@@ -9,6 +9,7 @@ import { json, mimeType } from "./middleware/response.ts";
 import { clusterRoutes } from "./routes/cluster.ts";
 import { clusterExtractRoutes } from "./routes/cluster-extract.ts";
 import { constraintsRoutes } from "./routes/constraints.ts";
+import { czkawkaRoutes } from "./routes/czkawka.ts";
 import { deleteRoutes } from "./routes/delete.ts";
 import { foldersRoutes } from "./routes/folders.ts";
 import { groupsRoutes } from "./routes/groups.ts";
@@ -33,6 +34,7 @@ const ROUTE_HANDLERS: RouteHandler[] = [
   nnRoutes,
   mergeRoutes,
   clusterRoutes,
+  czkawkaRoutes,
 ];
 
 async function dispatchAPI(req: Request, path: string, targetDir: string): Promise<Response> {

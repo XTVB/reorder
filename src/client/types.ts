@@ -6,6 +6,12 @@ export type {
   ClusterData,
   ClusterMetrics,
   ClusterResultData,
+  CzkawkaDirEntry,
+  CzkawkaGroup,
+  CzkawkaImage,
+  CzkawkaOperation,
+  CzkawkaRunResult,
+  CzkawkaStateResponse,
   DirResponse,
   DistanceProfile,
   ExpandCandidate,
@@ -49,4 +55,4 @@ export type GridItem =
   | { type: "folder"; folderName: string }
   | { type: "folder-image"; folderName: string; filename: string };
 
-export type AppMode = "reorder" | "cluster" | "merge-suggestions";
+export type AppMode = "reorder" | "cluster" | "merge-suggestions" | "czkawka";

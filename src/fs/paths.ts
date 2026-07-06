@@ -69,6 +69,7 @@ export const DINOV3_PATCHES_FILE = "dinov3_patches_hash_cache.npy";
 export const DINOV3_PATCHES_FULL_FILE = "dinov3_patches_full_hash_cache.npy";
 export const DINOV3_PATCHES_HASHES_FILE = "dinov3_patches_hashes.json";
 export const CONTACT_SHEETS_DIRNAME = "contact_sheets";
+export const CZKAWKA_SESSION_FILE = "czkawka_session.json";
 
 // Constraint files (Rust-resolved, inside .reorder-cache/)
 export const CANNOT_LINK_RESOLVED_FILE = ".cannot_link_resolved.json";
@@ -95,4 +96,17 @@ export function importedClustersPath(targetDir: string): string {
 }
 export function contactSheetsDir(targetDir: string): string {
   return join(cacheDir(targetDir), CONTACT_SHEETS_DIRNAME);
+}
+export function czkawkaSessionPath(targetDir: string): string {
+  return join(cacheDir(targetDir), CZKAWKA_SESSION_FILE);
+}
+/** Per-config perceptual-hash cache — separate file per (alg, filter, size) so
+ * switching configs never evicts another config's hashes. */
+export function czkawkaHashCachePath(
+  targetDir: string,
+  hashAlg: string,
+  imageFilter: string,
+  hashSize: number,
+): string {
+  return join(cacheDir(targetDir), `czkawka_hashes_${hashAlg}_${imageFilter}_${hashSize}.json`);
 }

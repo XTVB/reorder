@@ -3,6 +3,17 @@
 
 export type { RenameMapping } from "../shared/types.ts";
 export { backupPath, readJsonTolerant, writeJsonAtomic } from "./atomic-json.ts";
+export type {
+  CzkawkaActionEntry,
+  CzkawkaSessionData,
+  CzkawkaTrashEntry,
+} from "./czkawka-session.ts";
+export {
+  loadCzkawkaSession,
+  restoreFromTrash,
+  saveCzkawkaSession,
+  trashFilesRestorable,
+} from "./czkawka-session.ts";
 export type { FolderData, FolderSaveRequest } from "./folder-save.ts";
 export { executeFolderSave, listFolderData, listSubdirectories } from "./folder-save.ts";
 export { loadGroups, writeGroupsFile } from "./groups.ts";
@@ -17,6 +28,8 @@ export {
   contactSheetsDir,
   contentHashesPath,
   contentHashesTmpPath,
+  czkawkaHashCachePath,
+  czkawkaSessionPath,
   groupsBackupPath,
   groupsPath,
   historyPath,

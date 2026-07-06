@@ -1,11 +1,13 @@
 import { useInteractionsStore, useListStore } from "../../stores/modes/cluster/index.ts";
 import type { AppMode } from "../../types.ts";
 import { ClusterToolbar } from "../cluster/ClusterToolbar.tsx";
+import { CzkawkaToolbar } from "../czkawka/CzkawkaToolbar.tsx";
 import { ReorderToolbar } from "../reorder/ReorderToolbar.tsx";
 
 export function HeaderActions({ mode }: { mode: AppMode }) {
   if (mode === "cluster") return <ClusterActions />;
   if (mode === "merge-suggestions") return null;
+  if (mode === "czkawka") return <CzkawkaToolbar />;
   return <ReorderToolbar />;
 }
 

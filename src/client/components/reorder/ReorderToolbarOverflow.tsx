@@ -1,14 +1,20 @@
+import { useModalStore } from "../../stores/core/modalStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useSessionStore } from "../../stores/core/sessionStore.ts";
 import { useFolderStore } from "../../stores/folderStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useImageStore } from "../../stores/imageStore.ts";
 import { OverflowMenu, OverflowMenuDivider, OverflowMenuItem } from "../shared/OverflowMenu.tsx";
+import { applyJsonOrder } from "./ReorderToolbar.tsx";
 
 export function ReorderToolbarOverflow() {
   const folderModeEnabled = useFolderStore((s) => s.folderModeEnabled);
   const setFolderModeEnabled = useFolderStore((s) => s.setFolderModeEnabled);
+  const flattenFolders = useFolderStore((s) => s.flattenFolders);
+  const setFlattenFolders = useFolderStore((s) => s.setFlattenFolders);
   const fetchFolders = useFolderStore((s) => s.fetchFolders);
+  const openModal = useModalStore((s) => s.openModal);
+  const saving = useSessionStore((s) => s.saving);
 
   const groups = useGroupStore((s) => s.groups);
   const groupsEnabled = useGroupStore((s) => s.groupsEnabled);
@@ -49,7 +55,27 @@ export function ReorderToolbarOverflow() {
   }
 
   return (
-    <OverflowMenu label="More view options" checkable>
+    <OverflowMenu label="More view options" checkable align="right">
+      {!folderModeEnabled && (
+        <>
+          {groups.length > 0 && (
+            <OverflowMenuItem
+              onClick={() => openModal("namingRules")}
+              title="Compose group names from title/subtitle/short_sub templates"
+            >
+              Naming rules…
+            </OverflowMenuItem>
+          )}
+          <OverflowMenuItem
+            onClick={() => void applyJsonOrder()}
+            disabled={saving}
+            title="Rename files on disk so groups appear in the order listed in the groups JSON (ungrouped files at end)"
+          >
+            Apply JSON order
+          </OverflowMenuItem>
+          <OverflowMenuDivider />
+        </>
+      )}
       <OverflowMenuItem
         onClick={toggleFolderMode}
         disabled={folderModeDisabled}
@@ -65,6 +91,18 @@ export function ReorderToolbarOverflow() {
       >
         Number folder names
       </OverflowMenuItem>
+      {folderModeEnabled && (
+        <OverflowMenuItem
+          onClick={() => {
+            setFlattenFolders(!flattenFolders);
+            clear("reorder");
+          }}
+          checked={flattenFolders}
+          title="Show every image from all subfolders as one continuous stream instead of folder cards — select across folders to copy paths"
+        >
+          Flatten folders
+        </OverflowMenuItem>
+      )}
       {showGroupsControls && (
         <>
           <OverflowMenuItem onClick={toggleGroups} checked={groupsEnabled}>

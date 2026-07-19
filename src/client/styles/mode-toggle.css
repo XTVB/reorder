@@ -1,18 +1,23 @@
-/* ---- Mode Toggle ---- */
+/* ---- Mode Toggle ----
+   Same 38px outer height as the toolbar islands: 30px buttons + 3px padding
+   + 1px border, so the whole top row sits on one line. */
 .mode-toggle {
   display: flex;
-  background: var(--border-subtle);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius);
-  padding: 2px;
+  padding: 3px;
   gap: 2px;
   flex-shrink: 0;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22);
 }
 
 .mode-toggle-btn {
-  padding: 6px 14px;
+  height: 30px;
+  padding: 0 16px;
   border: none;
   border-radius: 6px;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   background: transparent;
@@ -30,10 +35,11 @@
 .mode-toggle-btn.mode-toggle-active {
   background: var(--accent);
   color: #fff;
-  box-shadow: 0 2px 8px rgba(79, 140, 255, 0.4);
+  font-weight: 600;
+  box-shadow: 0 1px 6px rgba(79, 140, 255, 0.35);
 }
 
 .mode-toggle-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }

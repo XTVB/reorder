@@ -54,7 +54,8 @@ function getClusterSubtitle(
   groupCount: number,
   loading: boolean,
 ): string {
-  if (clusterData) return `${visibleCount} clusters — ${groupCount} groups`;
+  if (clusterData)
+    return `${visibleCount} cluster${visibleCount !== 1 ? "s" : ""} — ${groupCount} group${groupCount !== 1 ? "s" : ""}`;
   return loading ? "Loading..." : "Run clustering to start";
 }
 

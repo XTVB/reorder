@@ -7,23 +7,30 @@
 }
 
 :root {
-  --bg: #1a1a2e;
-  --surface: #16213e;
-  --surface-hover: #1a2745;
-  --surface-elevated: #1e2a46;
-  --border: #2a3a5c;
-  --border-subtle: rgba(42, 58, 92, 0.5);
-  --text: #e0e0e0;
-  --text-muted: #8892a4;
+  --bg: #141722;
+  --surface: #191d2e;
+  --surface-hover: #232941;
+  --surface-elevated: #1f2438;
+  --border: #303a58;
+  --border-subtle: rgba(48, 58, 88, 0.55);
+  --text: #e7eaf3;
+  --text-muted: #8d97ad;
   --accent: #4f8cff;
-  --accent-hover: #3a75e6;
-  --danger: #ff5757;
-  --success: #22c55e;
+  --accent-hover: #6da1ff;
+  --accent-soft: rgba(79, 140, 255, 0.14);
+  --focus-ring: rgba(79, 140, 255, 0.55);
+  --danger: #ff5d5d;
+  --danger-soft: rgba(255, 93, 93, 0.12);
+  --success: #2ecc71;
   --highlight: #ffcc00;
   --radius: 8px;
-  --header-height: 56px;
-  --cluster-confirmed: #22c55e;
+  --radius-sm: 6px;
+  --control-h: 32px;
+  --control-h-sm: 26px;
+  --header-height: 53px; /* nominal single-row height — only for overlay anchoring */
+  --cluster-confirmed: #2ecc71;
   --cluster-suggested: #818cf8;
+  --shadow-pop: 0 10px 32px rgba(6, 9, 18, 0.55), 0 2px 8px rgba(6, 9, 18, 0.35);
 }
 
 body {
@@ -31,6 +38,45 @@ body {
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
+  font-size: 14.5px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The app fills the viewport as a column: header in flow, view takes the
+   rest. Views must not size themselves off --header-height — the tools row
+   can wrap on narrow windows, so the header height is not a constant. */
+#root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* Uniform focus treatment — keyboard users get a visible ring everywhere */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: rgba(79, 140, 255, 0.35);
+}
+
+/* Form controls inherit the app look by default */
+select,
+input[type="number"],
+input[type="text"] {
+  font-family: inherit;
+}
+
+kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
 }
 
 /* Responsive */

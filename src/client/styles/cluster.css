@@ -5,33 +5,22 @@
 .cluster-view {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - var(--header-height));
+  flex: 1;
+  min-height: 0;
   position: relative;
 }
-.cluster-n-selector {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-.cluster-n-selector select {
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 13px;
-  cursor: pointer;
-}
 .cluster-n-input {
-  width: 60px;
+  width: 64px;
+  height: 30px;
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 13px;
+  padding: 0 9px;
+  font-size: 13.5px;
+}
+.cluster-n-input--narrow {
+  width: 52px;
 }
 .cluster-n-input:focus {
   border-color: var(--accent);
@@ -71,7 +60,7 @@
   border-radius: var(--radius);
   padding: 6px 14px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 500;
 }
 .btn-success:hover {
@@ -179,7 +168,7 @@
   font-size: 14px;
 }
 .cluster-name {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--text);
   flex-shrink: 1;
@@ -196,7 +185,7 @@
   border-bottom-color: var(--accent);
 }
 .cluster-name-input {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--text);
   background: var(--bg);
@@ -229,9 +218,29 @@
 .cluster-actions {
   margin-left: auto;
   display: flex;
-  gap: 6px;
+  gap: 4px;
   flex-shrink: 0;
   align-items: center;
+}
+
+/* One quiet style for every per-row action — visible but not shouting.
+   Primary actions (Create Group / Add to Group) keep their fills. */
+.cluster-actions .btn-row-action {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+}
+.cluster-actions .btn-row-action:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--border-subtle);
+  color: var(--text);
+}
+.cluster-actions-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border-subtle);
+  margin: 0 3px;
+  flex-shrink: 0;
 }
 .btn-create {
   background: var(--cluster-suggested);
@@ -247,20 +256,12 @@
   border: none;
 }
 .btn-dismiss {
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  background: none;
-  font-size: 16px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition:
-    color 0.15s,
-    border-color 0.15s;
+  font-size: 15px;
 }
-.btn-dismiss:hover {
+.cluster-actions .btn-dismiss:hover:not(:disabled) {
   color: var(--danger);
-  border-color: var(--danger);
+  border-color: rgba(255, 93, 93, 0.35);
+  background: var(--danger-soft);
 }
 
 /* Cluster body */
@@ -336,7 +337,7 @@
 .merge-count {
   color: var(--cluster-suggested);
   font-weight: 600;
-  font-size: 13px;
+  font-size: 13.5px;
   white-space: nowrap;
 }
 .merge-tags {
@@ -374,7 +375,7 @@
   color: #fef3c7;
   text-align: center;
   padding: 10px 20px;
-  font-size: 13px;
+  font-size: 13.5px;
   border-top: 1px solid #b45309;
   backdrop-filter: blur(8px);
 }
@@ -420,28 +421,40 @@
   align-items: center;
   gap: 12px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  font-size: 13px;
+  font-size: 13.5px;
   backdrop-filter: blur(8px);
 }
 
-/* Weights control */
+/* Weights / settings popover (also reused by the Dupes hash settings) */
 .cluster-weights-control {
   position: relative;
 }
 .cluster-weights-dropdown {
   position: absolute;
-  top: 100%;
+  top: calc(100% + 6px);
   left: 0;
-  z-index: 20;
+  z-index: 130;
   background: var(--surface-elevated);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 12px;
   min-width: 280px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-pop);
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.cluster-settings-section {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.cluster-settings-section:not(:first-child) {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
 }
 .cluster-weights-presets {
   display: flex;
@@ -569,7 +582,7 @@
 }
 .modal-title-context {
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 13.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -727,31 +740,6 @@
   color: var(--border);
 }
 
-/* ── Tree-nav action buttons ─────────────────────────────────── */
-.btn-tree-nav {
-  background: rgba(129, 140, 248, 0.07);
-  color: var(--text);
-  border: 1px solid rgba(129, 140, 248, 0.25);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-  font-size: 11px;
-  letter-spacing: 0.02em;
-  padding: 3px 9px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition:
-    background 0.12s ease,
-    border-color 0.12s ease,
-    color 0.12s ease;
-}
-.btn-tree-nav:hover:not(:disabled) {
-  background: rgba(129, 140, 248, 0.16);
-  border-color: rgba(129, 140, 248, 0.5);
-}
-.btn-tree-nav:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
 /* ── Split disclosure (inline child cards) ───────────────────── */
 .cluster-card-child {
   border-left: 2px solid rgba(129, 140, 248, 0.4);
@@ -829,30 +817,11 @@
 
 /* ── Cannot-link / group-lock affordances ──────────────────────────────── */
 
-.btn-lock {
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  background: none;
-  font-size: 13px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition:
-    color 0.15s,
-    border-color 0.15s,
-    background 0.15s;
-}
-.btn-lock:hover {
-  border-color: var(--accent);
-  color: var(--text);
-}
-.btn-lock-active {
-  border-color: var(--cluster-confirmed);
-  background: rgba(34, 197, 94, 0.12);
+.cluster-actions .btn-lock-active,
+.cluster-actions .btn-lock-active:hover:not(:disabled) {
+  border-color: rgba(46, 204, 113, 0.4);
+  background: rgba(46, 204, 113, 0.12);
   color: var(--cluster-confirmed);
-}
-.btn-lock-active:hover {
-  border-color: var(--cluster-confirmed);
 }
 
 .thumb-reject-btn {

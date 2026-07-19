@@ -16,6 +16,9 @@ import type {
 import { getErrorMessage } from "../../../utils/helpers.ts";
 import { useToastStore } from "../../core/toastStore.ts";
 
+/** Fallback cluster count when the toolbar's N input is cleared (desiredN=0). */
+export const DEFAULT_N_CLUSTERS = 200;
+
 interface ListState {
   clusterData: ClusterData | null;
   loading: boolean;
@@ -28,6 +31,8 @@ interface ListState {
   rerankBlend: number;
   /** Agglomerative linkage method. */
   linkage: LinkageMethod;
+  /** N the user wants for the next run/re-cut (bound to the toolbar input). */
+  desiredN: number;
   collapsedClusters: Set<string>;
   /** Children produced by an inline split, keyed by parent cluster id. Presence == expanded. */
   splitChildren: Record<string, SplitChildren>;
@@ -38,6 +43,7 @@ interface ListState {
   setUseRerank: (v: boolean) => void;
   setRerankBlend: (v: number) => void;
   setLinkage: (v: LinkageMethod) => void;
+  setDesiredN: (n: number) => void;
 
   // Pipeline
   fetchClusters: (nClusters?: number) => Promise<void>;
@@ -77,6 +83,8 @@ function applyClusterResultPayload(data: ClusterData): Partial<ListState> {
     clusterData: data,
     loading: false,
     progress: "",
+    // Keep the toolbar's N input in step with what the tree was actually cut to.
+    ...(data.nClusters ? { desiredN: data.nClusters } : {}),
     collapsedClusters: collapsed,
     splitChildren: {},
   };
@@ -113,9 +121,11 @@ export const useListStore = create<ListState>((set, get) => {
     useRerank: false,
     rerankBlend: 0.7,
     linkage: "ward",
+    desiredN: DEFAULT_N_CLUSTERS,
     collapsedClusters: new Set(),
     splitChildren: {},
 
+    setDesiredN: (n) => set({ desiredN: n }),
     setWeights: (w) => set({ weights: w, treeStale: true }),
     setUsePatches: (v) => {
       if (get().usePatches === v) return;
@@ -220,12 +230,12 @@ export const useListStore = create<ListState>((set, get) => {
       });
     },
 
-    fetchClusters: async (nClusters = 200) => {
+    fetchClusters: async (nClusters) => {
       set({ loading: true, progress: "Starting clustering..." });
       try {
         const { weights, usePatches, useRerank, rerankBlend, linkage } = get();
         const start = await startSSE("/api/cluster", {
-          nClusters,
+          nClusters: nClusters || DEFAULT_N_CLUSTERS,
           weights,
           usePatches,
           useRerank,
@@ -266,7 +276,7 @@ export const useListStore = create<ListState>((set, get) => {
         body.minClusterSize = params.minClusterSize;
         msg = "Adaptive re-cut...";
       } else {
-        body.nClusters = params.nClusters ?? 200;
+        body.nClusters = params.nClusters || DEFAULT_N_CLUSTERS;
       }
       return doRecut("/api/cluster/recut", body, msg);
     },
@@ -316,7 +326,7 @@ export const useListStore = create<ListState>((set, get) => {
           return;
         }
         if (cached) {
-          await get().recut({ nClusters: 200 });
+          await get().recut({ nClusters: get().desiredN });
         }
       } catch (err) {
         console.warn("Failed to load cached clusters:", err);

@@ -8,9 +8,8 @@ import {
   MODES,
   modeFromPath,
 } from "./components/header/AppShellHeader.tsx";
-import { HeaderActions } from "./components/header/HeaderActions.tsx";
+import { HeaderPrimary, HeaderSelection, HeaderTools } from "./components/header/HeaderActions.tsx";
 import { MergeSuggestions } from "./components/merge-suggestions/MergeSuggestions.tsx";
-import { ReorderToolbarOverflow } from "./components/reorder/ReorderToolbarOverflow.tsx";
 import { ReorderView } from "./components/reorder/ReorderView.tsx";
 import { Lightbox } from "./components/shared/Lightbox.tsx";
 import { Toast } from "./components/shared/Toast.tsx";
@@ -25,6 +24,7 @@ import { useCzkawkaStore } from "./stores/czkawkaStore.ts";
 import { useDndStore } from "./stores/dndStore.ts";
 import { useGroupStore } from "./stores/groupStore.ts";
 import { useImageStore } from "./stores/imageStore.ts";
+import { useLockedImagesStore } from "./stores/lockedImagesStore.ts";
 import { useMergeSuggestionsStore } from "./stores/mergeSuggestionsStore.ts";
 import {
   useExpandStore,
@@ -54,6 +54,7 @@ import { useTrashStore } from "./stores/trashStore.ts";
   mergeSuggestions: useMergeSuggestionsStore,
   constraints: useConstraintsStore,
   trash: useTrashStore,
+  lockedImages: useLockedImagesStore,
   sortHistory: useSortHistoryStore,
   czkawka: useCzkawkaStore,
 };
@@ -78,9 +79,10 @@ function AppShell() {
       <AppShellHeader
         mode={mode}
         navigate={navigate}
-        leftSlot={mode === "reorder" ? <ReorderToolbarOverflow /> : null}
+        selectionSlot={mode === "reorder" ? <HeaderSelection mode={mode} /> : undefined}
+        primarySlot={<HeaderPrimary mode={mode} />}
       >
-        <HeaderActions mode={mode} />
+        {mode === "merge-suggestions" ? null : <HeaderTools mode={mode} />}
       </AppShellHeader>
       {mode === "cluster" ? (
         <ClusterView />

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { postJson } from "../../api/client.ts";
 import { consumeSSE, startSSE } from "../../api/sse.ts";
 import { useModalStore } from "../../stores/core/modalStore.ts";
@@ -48,7 +48,7 @@ type SortTarget = "groups" | "ungrouped" | "selected-groups";
 
 const SORT_TARGET_TITLES: Record<SortTarget, string> = {
   groups:
-    "Sort the groups: similar groups end up adjacent; ungrouped images move along with the consolidation. Locked groups (L) keep their slot",
+    "Sort the groups: similar groups end up adjacent; ungrouped images move along with the consolidation. Locked groups (L) keep their relative order",
   ungrouped:
     "Sort only the loose ungrouped images: they swap among their own slots so similar ones sit together; every group stays exactly where it is",
   "selected-groups":
@@ -101,22 +101,158 @@ function loadSortTarget(): SortTarget {
   return v === "ungrouped" || v === "selected-groups" ? v : "groups";
 }
 
-export function ReorderToolbar() {
-  const images = useImageStore((s) => s.images);
-  const hasChanges = useImageStore((s) => s.hasChanges);
-  const fetchImages = useImageStore((s) => s.fetchImages);
+/** Refresh gallery state after a disk mutation (images/folders + undo + groups). */
+async function refreshReorderState() {
+  const { folderModeEnabled, fetchFolders } = useFolderStore.getState();
+  const { checkUndo } = useSessionStore.getState();
+  if (folderModeEnabled) {
+    await Promise.all([fetchFolders(), checkUndo()]);
+  } else {
+    await Promise.all([
+      useImageStore.getState().fetchImages(),
+      checkUndo(),
+      useGroupStore.getState().fetchGroups(),
+    ]);
+  }
+}
 
-  const folderModeEnabled = useFolderStore((s) => s.folderModeEnabled);
-  const folders = useFolderStore((s) => s.folders);
-  const fetchFolders = useFolderStore((s) => s.fetchFolders);
-  const folderHasChanges = useFolderStore((s) => s.hasChanges);
+/**
+ * Rename files on disk so groups appear in the order listed in the groups
+ * JSON. Exported for the overflow menu (occasional use — agent-edited JSON).
+ */
+export async function applyJsonOrder() {
+  const { setSaving } = useSessionStore.getState();
+  const { showToast } = useToastStore.getState();
+  setSaving(true);
+  try {
+    await useGroupStore.getState().flushPending();
+    const data = await postJson<SaveResponse>("/api/reorder-by-groups", {});
+    if (!data.success) throw new Error("Reorder failed");
+    const renames: RenameMapping[] = data.renames ?? [];
+    useTrashStore.getState().remap(renames);
+    const effective = renames.filter((r) => r.from !== r.to).length;
+    const warnings: string[] = data.warnings ?? [];
+    if (warnings.length > 0) {
+      showToast(
+        `Applied JSON order: ${effective} renamed, ${warnings.length} warning${warnings.length === 1 ? "" : "s"}`,
+        "warning",
+      );
+    } else {
+      showToast(`Applied JSON order: ${effective} renamed`, "success");
+    }
+    await refreshReorderState();
+  } catch (err) {
+    showToast(getErrorMessage(err, "Apply JSON order failed"), "error");
+  } finally {
+    setSaving(false);
+  }
+}
 
+/** The reorder-context selection, split into image filenames and group ids. */
+function useReorderSelection() {
   const selectedIds = useSelectionStore((s) => s.contexts.reorder);
+  const selectedImageFilenames = useMemo(
+    () => selectedImageFilenamesFromIds(selectedIds),
+    [selectedIds],
+  );
+  const selectedGroupIds = useMemo(
+    () => [...selectedIds].filter(isGroupSortId).map(fromGroupSortId),
+    [selectedIds],
+  );
+  return { selectedIds, selectedImageFilenames, selectedGroupIds };
+}
 
+/* ── Selection actions — top row, appear beside the status text ──────────── */
+
+export function ReorderSelectionActions() {
+  const { selectedIds, selectedImageFilenames, selectedGroupIds } = useReorderSelection();
   const groups = useGroupStore((s) => s.groups);
   const groupsEnabled = useGroupStore((s) => s.groupsEnabled);
-  const fetchGroups = useGroupStore((s) => s.fetchGroups);
+  const folderModeEnabled = useFolderStore((s) => s.folderModeEnabled);
+  const markedTrashIds = useSelectionStore((s) => s.contexts.trash);
+  const openModal = useModalStore((s) => s.openModal);
+  const createGroupFromSelection = useGroupStore((s) => s.createGroupFromSelection);
+  const addImagesToGroupAction = useGroupStore((s) => s.addImagesToGroup);
+  const mergeGroupsAction = useGroupStore((s) => s.mergeGroups);
 
+  if (selectedIds.size === 0) return null;
+
+  const selectionAllMarked =
+    selectedImageFilenames.length > 0 &&
+    selectedImageFilenames.every((fn) => markedTrashIds.has(fn));
+  const selectionTrashLabel = selectionAllMarked
+    ? "Unmark selection from deletion"
+    : "Mark selection for deletion";
+
+  return (
+    <div className="toolbar-group toolbar-group-selection">
+      <button className="btn btn-secondary" onClick={() => openModal("paths")}>
+        Paths
+      </button>
+      {selectedIds.size >= 2 && (
+        <button
+          className="btn btn-secondary btn-icon"
+          onClick={() => reverseSelection()}
+          title="Reverse the order of the selection (R)"
+          aria-label="Reverse selection order"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" role="presentation">
+            <path
+              d="M7 4v13M7 17l-3-3M7 17l3-3M17 20V7M17 7l-3 3M17 7l3 3"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
+      {!folderModeEnabled && groupsEnabled && (
+        <>
+          <button className="btn btn-secondary" onClick={createGroupFromSelection}>
+            Group
+          </button>
+          {selectedGroupIds.length >= 2 && (
+            <button
+              className="btn btn-secondary"
+              onClick={() => mergeGroupsAction(selectedGroupIds)}
+              title="Merge selected groups into the first one (M)"
+            >
+              Merge
+            </button>
+          )}
+          {groups.length > 0 && (
+            <GroupPicker
+              groups={groups}
+              onSelect={(groupId: string) =>
+                addImagesToGroupAction(groupId, [...useSelectionStore.getState().contexts.reorder])
+              }
+            />
+          )}
+        </>
+      )}
+      {!folderModeEnabled && selectedImageFilenames.length > 0 && (
+        <button
+          className="btn btn-secondary btn-icon"
+          onClick={() => useTrashStore.getState().toggleMany(selectedImageFilenames)}
+          title={`${selectionTrashLabel} (D)`}
+          aria-label={selectionTrashLabel}
+        >
+          <TrashIcon size={16} variant={selectionAllMarked ? "minus" : "plus"} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ── Primary action + global icons — top row, right ──────────────────────── */
+
+export function ReorderPrimary() {
+  const images = useImageStore((s) => s.images);
+  const hasChanges = useImageStore((s) => s.hasChanges);
+  const folderModeEnabled = useFolderStore((s) => s.folderModeEnabled);
+  const folders = useFolderStore((s) => s.folders);
+  const folderHasChanges = useFolderStore((s) => s.hasChanges);
   const saving = useSessionStore((s) => s.saving);
   const canUndo = useSessionStore((s) => s.canUndo);
   const numberedFolderPrefix = useSessionStore((s) => s.numberedFolderPrefix);
@@ -125,17 +261,174 @@ export function ReorderToolbar() {
   const openModal = useModalStore((s) => s.openModal);
   const openSlideshow = useSessionStore((s) => s.openSlideshow);
   const setPreviewRenames = useSessionStore((s) => s.setPreviewRenames);
-  const setOrganizeMappings = useSessionStore((s) => s.setOrganizeMappings);
-  const checkUndo = useSessionStore((s) => s.checkUndo);
-  const setHeaderSubtitle = useSessionStore((s) => s.setHeaderSubtitle);
+  const markedTrashIds = useSelectionStore((s) => s.contexts.trash);
 
-  const createGroupFromSelection = useGroupStore((s) => s.createGroupFromSelection);
-  const addImagesToGroupAction = useGroupStore((s) => s.addImagesToGroup);
-  const mergeGroupsAction = useGroupStore((s) => s.mergeGroups);
+  async function handleSaveClick() {
+    try {
+      const data = await postJson<{ renames: RenameMapping[] }>("/api/preview", {
+        order: images.map((i) => i.filename),
+      });
+      setPreviewRenames(data.renames);
+      openModal("preview");
+    } catch (err) {
+      showToast(getErrorMessage(err, "Failed to preview"), "error");
+    }
+  }
+
+  async function handleUndo() {
+    setSaving(true);
+    try {
+      await useGroupStore.getState().flushPending();
+      const data = await postJson<{ renames?: RenameMapping[] }>("/api/undo", {});
+      useTrashStore.getState().remap(data.renames ?? []);
+      showToast("Undo successful", "success");
+      await refreshReorderState();
+    } catch (err) {
+      showToast(getErrorMessage(err, "Undo failed"), "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleFolderSave() {
+    setSaving(true);
+    try {
+      const {
+        folders: currentFolders,
+        rootImages: currentRoot,
+        fetchFolders: refreshFolders,
+      } = useFolderStore.getState();
+      const body = {
+        folders: currentFolders.map((f) => ({
+          title: stripFolderNumber(f.name) || f.name,
+          images: f.images,
+        })),
+        rootImages: currentRoot,
+        numbered: useSessionStore.getState().numberedFolderPrefix,
+      };
+      const data = await postJson<{ success: boolean }>("/api/folders/save", body);
+      if (!data.success) throw new Error("Folder save failed");
+      showToast("Folders saved successfully", "success");
+      await refreshFolders();
+    } catch (err) {
+      showToast(getErrorMessage(err, "Folder save failed"), "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // In folder mode, toggling "numbered" alone is a meaningful change even when
+  // no folders were reordered/renamed — surface it via the Save button.
+  const folderNumberingMismatch =
+    folderModeEnabled &&
+    folders.length > 0 &&
+    folders.some((f) => (stripFolderNumber(f.name) !== f.name) !== numberedFolderPrefix);
+
+  const showUndo = !folderModeEnabled && canUndo;
+  const showSlideshow = !folderModeEnabled && images.length > 0;
+  const trashCount = !folderModeEnabled ? markedTrashIds.size : 0;
+
+  return (
+    <>
+      {showUndo && (
+        <button
+          className="btn btn-ghost-danger"
+          onClick={handleUndo}
+          disabled={saving}
+          title="Undo last save"
+        >
+          Undo
+        </button>
+      )}
+      {showSlideshow && (
+        <button
+          className="btn btn-secondary btn-icon"
+          onClick={() => {
+            const sel = useSelectionStore.getState().contexts.reorder;
+            let startIdx = 0;
+            if (sel.size > 0) {
+              const firstSelected = images.findIndex((img) => sel.has(img.filename));
+              if (firstSelected !== -1) startIdx = firstSelected;
+            }
+            openSlideshow(startIdx);
+          }}
+          title="Slideshow (full-screen viewer with autoplay)"
+          aria-label="Slideshow"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" role="presentation">
+            <path
+              d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
+      <button
+        className="btn btn-secondary btn-icon"
+        onClick={refreshReorderState}
+        disabled={saving}
+        title="Refresh"
+        aria-label="Refresh"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" role="presentation">
+          <path
+            d="M20 11A8 8 0 1 0 18.3 17M20 5v6h-6"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+      {trashCount > 0 && (
+        <button
+          className="btn btn-secondary btn-icon toolbar-trash-btn"
+          onClick={() => openModal("trash")}
+          title={`Review ${trashCount} file${trashCount === 1 ? "" : "s"} marked for deletion`}
+          aria-label={`Review ${trashCount} marked for deletion`}
+        >
+          <TrashIcon size={16} />
+          <span className="toolbar-trash-count">{trashCount}</span>
+        </button>
+      )}
+      {folderModeEnabled ? (
+        <button
+          className="btn btn-primary"
+          onClick={handleFolderSave}
+          disabled={(!folderHasChanges && !folderNumberingMismatch) || saving}
+        >
+          {saving ? "Saving..." : "Save Folders"}
+        </button>
+      ) : (
+        <button
+          className="btn btn-primary"
+          onClick={handleSaveClick}
+          disabled={!hasChanges || saving}
+        >
+          {saving ? "Saving..." : "Save"}
+        </button>
+      )}
+    </>
+  );
+}
+
+/* ── Mode tools — bottom row ──────────────────────────────────────────────── */
+
+export function ReorderTools() {
+  const images = useImageStore((s) => s.images);
+  const folderModeEnabled = useFolderStore((s) => s.folderModeEnabled);
+  const folders = useFolderStore((s) => s.folders);
+  const flattenFolders = useFolderStore((s) => s.flattenFolders);
+  const { selectedIds, selectedImageFilenames, selectedGroupIds } = useReorderSelection();
+  const groups = useGroupStore((s) => s.groups);
+  const saving = useSessionStore((s) => s.saving);
+  const showToast = useToastStore((s) => s.showToast);
+  const setHeaderSubtitle = useSessionStore((s) => s.setHeaderSubtitle);
   const flushPending = useGroupStore((s) => s.flushPending);
 
-  const markedTrashIds = useSelectionStore((s) => s.contexts.trash);
-  const [generatingSheets, setGeneratingSheets] = useState(false);
   const [sortingBySimilarity, setSortingBySimilarity] = useState(false);
   const [sortMode, setSortMode] = useState<GroupOrderMode>(loadSortMode);
   const [minimalLocality, setMinimalLocality] = useState<number>(loadMinimalLocality);
@@ -173,30 +466,10 @@ export function ReorderToolbar() {
     setGatherMinGain(v);
   }
 
-  const selectedImageFilenames = useMemo(
-    () => selectedImageFilenamesFromIds(selectedIds),
-    [selectedIds],
-  );
-
-  const selectedGroupIds = useMemo(
-    () => [...selectedIds].filter(isGroupSortId).map(fromGroupSortId),
-    [selectedIds],
-  );
-
   const ungroupedCount = useMemo(() => {
     const grouped = groupedFilenameSet(groups);
     return images.reduce((acc, i) => acc + (grouped.has(i.filename) ? 0 : 1), 0);
   }, [groups, images]);
-  const selectionAllMarked =
-    selectedImageFilenames.length > 0 &&
-    selectedImageFilenames.every((fn) => markedTrashIds.has(fn));
-  const selectionTrashLabel = selectionAllMarked
-    ? "Unmark selection from deletion"
-    : "Mark selection for deletion";
-
-  function handleSelectionMarkTrash() {
-    useTrashStore.getState().toggleMany(selectedImageFilenames);
-  }
 
   // Update header subtitle when counts change
   // biome-ignore lint/correctness/useExhaustiveDependencies: setHeaderSubtitle is a stable Zustand action
@@ -205,143 +478,29 @@ export function ReorderToolbar() {
     if (sortProgress) {
       subtitle = sortProgress;
     } else if (folderModeEnabled) {
+      if (selectedIds.size > 0) {
+        subtitle = `${selectedIds.size} selected`;
+      } else if (flattenFolders) {
+        subtitle = `${images.length} image${images.length !== 1 ? "s" : ""}`;
+      } else {
+        subtitle = `${folders.length} folder${folders.length !== 1 ? "s" : ""}`;
+      }
+    } else {
       subtitle =
         selectedIds.size > 0
           ? `${selectedIds.size} selected`
-          : `${folders.length} folder${folders.length !== 1 ? "s" : ""} — drag to reorder`;
-    } else {
-      subtitle =
-        selectedIds.size > 0
-          ? `${selectedIds.size} selected — drag to move`
-          : `${images.length} image${images.length !== 1 ? "s" : ""} — drag to reorder`;
+          : `${images.length} image${images.length !== 1 ? "s" : ""}`;
     }
     setHeaderSubtitle(subtitle);
     return () => setHeaderSubtitle("");
-  }, [folderModeEnabled, selectedIds.size, folders.length, images.length, sortProgress]);
-
-  async function refreshState() {
-    if (folderModeEnabled) {
-      await Promise.all([fetchFolders(), checkUndo()]);
-    } else {
-      await Promise.all([fetchImages(), checkUndo(), fetchGroups()]);
-    }
-  }
-
-  async function handleSaveClick() {
-    try {
-      const data = await postJson<{ renames: RenameMapping[] }>("/api/preview", {
-        order: images.map((i) => i.filename),
-      });
-      setPreviewRenames(data.renames);
-      openModal("preview");
-    } catch (err) {
-      showToast(getErrorMessage(err, "Failed to preview"), "error");
-    }
-  }
-
-  async function handleApplyJsonOrder() {
-    setSaving(true);
-    try {
-      await flushPending();
-      const data = await postJson<SaveResponse>("/api/reorder-by-groups", {});
-      if (!data.success) throw new Error("Reorder failed");
-      const renames: RenameMapping[] = data.renames ?? [];
-      useTrashStore.getState().remap(renames);
-      const effective = renames.filter((r) => r.from !== r.to).length;
-      const warnings: string[] = data.warnings ?? [];
-      if (warnings.length > 0) {
-        showToast(
-          `Applied JSON order: ${effective} renamed, ${warnings.length} warning${warnings.length === 1 ? "" : "s"}`,
-          "warning",
-        );
-      } else {
-        showToast(`Applied JSON order: ${effective} renamed`, "success");
-      }
-      await refreshState();
-    } catch (err) {
-      showToast(getErrorMessage(err, "Apply JSON order failed"), "error");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleUndo() {
-    setSaving(true);
-    try {
-      await flushPending();
-      const data = await postJson<{ renames?: RenameMapping[] }>("/api/undo", {});
-      useTrashStore.getState().remap(data.renames ?? []);
-      showToast("Undo successful", "success");
-      await refreshState();
-    } catch (err) {
-      showToast(getErrorMessage(err, "Undo failed"), "error");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleOrganizeClick() {
-    try {
-      const data = await postJson<{ mappings: OrganizeMapping[] }>("/api/organize/preview", {
-        groups: groups.map((g) => ({ name: g.name, images: g.images })),
-        order: images.map((i) => i.filename),
-        numbered: useSessionStore.getState().numberedFolderPrefix,
-      });
-      setOrganizeMappings(data.mappings);
-      openModal("organize");
-    } catch (err) {
-      showToast(getErrorMessage(err, "Failed to preview"), "error");
-    }
-  }
-
-  async function handleFolderSave() {
-    setSaving(true);
-    try {
-      const {
-        folders: currentFolders,
-        rootImages: currentRoot,
-        fetchFolders: refreshFolders,
-      } = useFolderStore.getState();
-      const body = {
-        folders: currentFolders.map((f) => ({
-          title: stripFolderNumber(f.name) || f.name,
-          images: f.images,
-        })),
-        rootImages: currentRoot,
-        numbered: useSessionStore.getState().numberedFolderPrefix,
-      };
-      const data = await postJson<{ success: boolean }>("/api/folders/save", body);
-      if (!data.success) throw new Error("Folder save failed");
-      showToast("Folders saved successfully", "success");
-      await refreshFolders();
-    } catch (err) {
-      showToast(getErrorMessage(err, "Folder save failed"), "error");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleContactSheets() {
-    setGeneratingSheets(true);
-    try {
-      const pad = String(groups.length).length;
-      const results = await generateContactSheetsBatch(
-        groups.map((g, i) => ({
-          filenames: g.images,
-          clusterName: `${String(i + 1).padStart(pad, "0")}-${g.name}`,
-        })),
-      );
-      await navigator.clipboard.writeText(results.map((r) => r.path).join("\n"));
-      showToast(
-        `Copied ${results.length} contact sheet path${results.length === 1 ? "" : "s"}`,
-        "success",
-      );
-    } catch (err) {
-      showToast(getErrorMessage(err, "Failed to generate contact sheets"), "error");
-    } finally {
-      setGeneratingSheets(false);
-    }
-  }
+  }, [
+    folderModeEnabled,
+    flattenFolders,
+    selectedIds.size,
+    folders.length,
+    images.length,
+    sortProgress,
+  ]);
 
   function sortGroupsByGalleryOrder(): ImageGroup[] {
     return groupsInGalleryOrder(groups, images);
@@ -466,8 +625,8 @@ export function ReorderToolbar() {
       (a, b) => (pos.get(a.id) ?? Infinity) - (pos.get(b.id) ?? Infinity),
     );
     const { images: imgs, imageMap, setImages } = useImageStore.getState();
-    // Locked groups keep their current gallery slot; the similarity order
-    // fills in around them.
+    // Locked groups keep their relative order; the similarity order fills in
+    // around them, and unlocked groups may interleave between them.
     const finalOrder = withLockedGroupsInPlace(groupsInGalleryOrder(current, imgs), sorted);
     beginSortTransition();
     setImages(reorderImagesByGroups(imgs, imageMap, finalOrder));
@@ -523,7 +682,18 @@ export function ReorderToolbar() {
       ...(sortMode === "gather" && { gatherMinGain }),
     });
     if (!result) return;
-    const { orderedIds, skipped, clusters, moved } = result;
+    const { skipped, clusters, moved } = result;
+
+    // Re-pin locked images: they keep the relative order they held before the
+    // sort, while unlocked images move freely around (and between) them. Only
+    // the positions in the proposed order that hold locked images are rewritten
+    // — see reorderSubsetWithinSlots — so the locked subsequence is preserved.
+    const lockSet = useSelectionStore.getState().contexts.lock;
+    const lockedInOrder = lockSet.size > 0 ? targetOrder.filter((fn) => lockSet.has(fn)) : [];
+    const orderedIds =
+      lockedInOrder.length > 0
+        ? reorderSubsetWithinSlots(result.orderedIds, lockedInOrder)
+        : result.orderedIds;
 
     const { images: imgs, setImages } = useImageStore.getState();
     beginSortTransition();
@@ -558,10 +728,11 @@ export function ReorderToolbar() {
         : moved !== undefined
           ? ` (${moved} moved)`
           : "";
+    const lockedNote = lockedInOrder.length > 0 ? ` (${lockedInOrder.length} locked in place)` : "";
     showToast(
       unchanged
         ? `${selectionScope ? "Selection" : "Ungrouped"} order already optimal${setsNote}${skippedNote}`
-        : `Sorted ${orderedIds.length} ${selectionScope ? "selected" : "ungrouped"} images by similarity${setsNote}${skippedNote}`,
+        : `Sorted ${orderedIds.length} ${selectionScope ? "selected" : "ungrouped"} images by similarity${setsNote}${lockedNote}${skippedNote}`,
       skipped > 0 ? "warning" : "success",
     );
   }
@@ -675,488 +846,390 @@ export function ReorderToolbar() {
     }
   }
 
-  // In folder mode, toggling "numbered" alone is a meaningful change even when
-  // no folders were reordered/renamed — surface it via the Save button.
-  const folderNumberingMismatch =
-    folderModeEnabled &&
-    folders.length > 0 &&
-    folders.some((f) => (stripFolderNumber(f.name) !== f.name) !== numberedFolderPrefix);
+  if (folderModeEnabled) return null;
 
-  const hasSelectionActions = selectedIds.size > 0;
-  const showUndo = !folderModeEnabled && canUndo;
-  const showSlideshow = !folderModeEnabled && images.length > 0;
-  const trashCount = !folderModeEnabled ? markedTrashIds.size : 0;
-  const showTrashButton = trashCount > 0;
+  const showSortControls =
+    groups.length >= 2 ||
+    ungroupedCount >= 3 ||
+    selectedImageFilenames.length >= 3 ||
+    selectedGroupIds.length >= 1;
 
   return (
     <>
-      {hasSelectionActions && (
-        <div className="toolbar-group">
-          <button className="btn btn-secondary" onClick={() => openModal("paths")}>
-            Paths
-          </button>
-          {selectedIds.size >= 2 && (
+      <div className="tools-zone tools-zone--start">
+        {showSortControls && (
+          <div className="toolbar-group">
             <button
-              className="btn btn-secondary btn-icon"
-              onClick={() => reverseSelection()}
-              title="Reverse the order of the selection (R)"
-              aria-label="Reverse selection order"
+              className="btn btn-secondary"
+              onClick={handleSortBySimilarity}
+              disabled={
+                sortingBySimilarity ||
+                saving ||
+                (sortTarget === "groups"
+                  ? groups.length < 2
+                  : sortTarget === "selected-groups"
+                    ? selectedGroupIds.length < 1
+                    : selectedImageFilenames.length > 0
+                      ? selectedImageFilenames.length < 3
+                      : ungroupedCount < 3)
+              }
+              title={`${
+                sortTarget === "ungrouped" && selectedImageFilenames.length > 0
+                  ? `Sort only the ${selectedImageFilenames.length} selected images: they swap among their own slots (including within their groups); everything else stays put`
+                  : SORT_TARGET_TITLES[sortTarget]
+              }. Not persisted — use Save and Save Order to keep it`}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" role="presentation">
-                <path
-                  d="M7 4v13M7 17l-3-3M7 17l3-3M17 20V7M17 7l-3 3M17 7l3 3"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              {sortingBySimilarity ? "Sorting…" : "Sort similar"}
             </button>
-          )}
-          {!folderModeEnabled && groupsEnabled && (
-            <>
-              <button className="btn btn-secondary" onClick={createGroupFromSelection}>
-                Group
-              </button>
-              {selectedGroupIds.length >= 2 && (
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => mergeGroupsAction(selectedGroupIds)}
-                  title="Merge selected groups into the first one (M)"
-                >
-                  Merge
-                </button>
-              )}
-              {groups.length > 0 && (
-                <GroupPicker
-                  groups={groups}
-                  onSelect={(groupId: string) =>
-                    addImagesToGroupAction(groupId, [
-                      ...useSelectionStore.getState().contexts.reorder,
-                    ])
-                  }
-                />
-              )}
-            </>
-          )}
-          {!folderModeEnabled && selectedImageFilenames.length > 0 && (
-            <button
-              className="btn btn-secondary btn-icon"
-              onClick={handleSelectionMarkTrash}
-              title={`${selectionTrashLabel} (D)`}
-              aria-label={selectionTrashLabel}
+            <select
+              className="toolbar-select"
+              value={sortTarget}
+              onChange={(e) => handleSortTargetChange(e.target.value as SortTarget)}
+              disabled={sortingBySimilarity}
+              title={SORT_TARGET_TITLES[sortTarget]}
+              aria-label="Sort Similar target"
             >
-              <TrashIcon size={18} variant={selectionAllMarked ? "minus" : "plus"} />
-            </button>
-          )}
-        </div>
-      )}
-      {!folderModeEnabled && (
+              <option value="groups" title={SORT_TARGET_TITLES.groups}>
+                Groups
+              </option>
+              <option value="ungrouped" title={SORT_TARGET_TITLES.ungrouped}>
+                {selectedImageFilenames.length > 0 ? "Selection" : "Ungrouped"}
+              </option>
+              <option value="selected-groups" title={SORT_TARGET_TITLES["selected-groups"]}>
+                {selectedGroupIds.length > 0
+                  ? `Group contents (${selectedGroupIds.length})`
+                  : "Group contents"}
+              </option>
+            </select>
+            <select
+              className="toolbar-select"
+              value={sortMode}
+              onChange={(e) => handleSortModeChange(e.target.value as GroupOrderMode)}
+              disabled={sortingBySimilarity}
+              title={SORT_MODE_TITLES[sortMode]}
+              aria-label="Sort Similar algorithm"
+            >
+              <option value="tree" title={SORT_MODE_TITLES.tree}>
+                Tree
+              </option>
+              <option value="chain" title={SORT_MODE_TITLES.chain}>
+                Chain
+              </option>
+              <option value="spectral" title={SORT_MODE_TITLES.spectral}>
+                Spectral
+              </option>
+              <option value="minimal" title={SORT_MODE_TITLES.minimal}>
+                Minimal
+              </option>
+              <option value="stable" title={SORT_MODE_TITLES.stable}>
+                Stable
+              </option>
+              <option value="gather" title={SORT_MODE_TITLES.gather}>
+                Gather
+              </option>
+            </select>
+            {sortMode === "gather" && (
+              <input
+                type="number"
+                className="toolbar-input-number"
+                value={gatherMinGain}
+                min={0}
+                max={1}
+                step={0.01}
+                disabled={sortingBySimilarity}
+                title="Minimum similarity improvement before an image moves — higher keeps more of the current order (Gather mode)"
+                aria-label="Gather minimum gain"
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  if (Number.isFinite(v) && v >= 0) handleGatherMinGainChange(v);
+                }}
+              />
+            )}
+            {sortMode === "stable" && (
+              <input
+                type="number"
+                className="toolbar-input-number"
+                value={stableClusters}
+                min={0}
+                disabled={sortingBySimilarity}
+                title="Number of sets to cut into — 0 picks it automatically (Stable mode)"
+                aria-label="Stable set count (0 = auto)"
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (Number.isFinite(v) && v >= 0) handleStableClustersChange(v);
+                }}
+              />
+            )}
+            {sortMode === "minimal" && (
+              <input
+                type="number"
+                className="toolbar-input-number"
+                value={minimalLocality}
+                min={1}
+                max={50}
+                disabled={sortingBySimilarity}
+                title="Max positions a group may move from its original slot (Minimal mode)"
+                aria-label="Minimal locality"
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (Number.isFinite(v) && v >= 1) handleMinimalLocalityChange(v);
+                }}
+              />
+            )}
+          </div>
+        )}
+      </div>
+      <div className="tools-zone tools-zone--center">
         <div className="toolbar-group">
-          <button className="btn btn-secondary" onClick={handleGroupsToTop}>
-            Groups to Top
-          </button>
-          {(groups.length >= 2 ||
-            ungroupedCount >= 3 ||
-            selectedImageFilenames.length >= 3 ||
-            selectedGroupIds.length >= 1) && (
-            <>
-              <button
-                className="btn btn-secondary"
-                onClick={handleSortBySimilarity}
-                disabled={
-                  sortingBySimilarity ||
-                  saving ||
-                  (sortTarget === "groups"
-                    ? groups.length < 2
-                    : sortTarget === "selected-groups"
-                      ? selectedGroupIds.length < 1
-                      : selectedImageFilenames.length > 0
-                        ? selectedImageFilenames.length < 3
-                        : ungroupedCount < 3)
-                }
-                title={`${
-                  sortTarget === "ungrouped" && selectedImageFilenames.length > 0
-                    ? `Sort only the ${selectedImageFilenames.length} selected images: they swap among their own slots (including within their groups); everything else stays put`
-                    : SORT_TARGET_TITLES[sortTarget]
-                }. Not persisted — use Save and Save Order to keep it`}
-              >
-                {sortingBySimilarity ? "Sorting..." : "Sort Similar"}
-              </button>
-              <select
-                className="toolbar-select"
-                value={sortTarget}
-                onChange={(e) => handleSortTargetChange(e.target.value as SortTarget)}
-                disabled={sortingBySimilarity}
-                title={SORT_TARGET_TITLES[sortTarget]}
-                aria-label="Sort Similar target"
-              >
-                <option value="groups" title={SORT_TARGET_TITLES.groups}>
-                  Groups
-                </option>
-                <option value="ungrouped" title={SORT_TARGET_TITLES.ungrouped}>
-                  {selectedImageFilenames.length > 0 ? "Selection" : "Ungrouped"}
-                </option>
-                <option value="selected-groups" title={SORT_TARGET_TITLES["selected-groups"]}>
-                  {selectedGroupIds.length > 0
-                    ? `Group contents (${selectedGroupIds.length})`
-                    : "Group contents"}
-                </option>
-              </select>
-              <select
-                className="toolbar-select"
-                value={sortMode}
-                onChange={(e) => handleSortModeChange(e.target.value as GroupOrderMode)}
-                disabled={sortingBySimilarity}
-                title={SORT_MODE_TITLES[sortMode]}
-                aria-label="Sort Similar algorithm"
-              >
-                <option value="tree" title={SORT_MODE_TITLES.tree}>
-                  Tree
-                </option>
-                <option value="chain" title={SORT_MODE_TITLES.chain}>
-                  Chain
-                </option>
-                <option value="spectral" title={SORT_MODE_TITLES.spectral}>
-                  Spectral
-                </option>
-                <option value="minimal" title={SORT_MODE_TITLES.minimal}>
-                  Minimal
-                </option>
-                <option value="stable" title={SORT_MODE_TITLES.stable}>
-                  Stable
-                </option>
-                <option value="gather" title={SORT_MODE_TITLES.gather}>
-                  Gather
-                </option>
-              </select>
-              {sortMode === "gather" && (
-                <input
-                  type="number"
-                  className="toolbar-input-number"
-                  value={gatherMinGain}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  disabled={sortingBySimilarity}
-                  title="Minimum similarity improvement (in blended-distance units) before an image moves — higher keeps more of the current order, lower gathers more aggressively (Gather mode)"
-                  aria-label="Gather minimum gain"
-                  onChange={(e) => {
-                    const v = parseFloat(e.target.value);
-                    if (Number.isFinite(v) && v >= 0) handleGatherMinGainChange(v);
-                  }}
-                />
-              )}
-              {sortMode === "stable" && (
-                <input
-                  type="number"
-                  className="toolbar-input-number"
-                  value={stableClusters}
-                  min={0}
-                  disabled={sortingBySimilarity}
-                  title="Number of sets to cut into — 0 picks it automatically from the largest similarity gap (Stable mode)"
-                  aria-label="Stable set count (0 = auto)"
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value, 10);
-                    if (Number.isFinite(v) && v >= 0) handleStableClustersChange(v);
-                  }}
-                />
-              )}
-              {sortMode === "minimal" && (
-                <input
-                  type="number"
-                  className="toolbar-input-number"
-                  value={minimalLocality}
-                  min={1}
-                  max={50}
-                  disabled={sortingBySimilarity}
-                  title="Max positions a group may move from its original slot (Minimal mode)"
-                  aria-label="Minimal locality"
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value, 10);
-                    if (Number.isFinite(v) && v >= 1) handleMinimalLocalityChange(v);
-                  }}
-                />
-              )}
-            </>
-          )}
           <button
             className="btn btn-secondary"
-            onClick={handleApplyJsonOrder}
-            disabled={saving}
-            title="Rename files on disk so groups appear in the order listed in .reorder-groups.json (ungrouped files at end)"
+            onClick={handleGroupsToTop}
+            title="Move all groups to the top of the gallery (display only)"
           >
-            Apply Order
+            Groups to Top
           </button>
           <button
             className="btn btn-secondary"
             onClick={handleSaveJsonOrder}
             disabled={saving}
-            title="Reorder groups in .reorder-groups.json to match the current gallery order (no file renames)"
+            title="Write the current gallery group order to the groups JSON (no file renames)"
           >
             Save Order
           </button>
-          <button
-            className="btn btn-secondary btn-icon"
-            onClick={handleContactSheets}
-            disabled={generatingSheets}
-            title={
-              generatingSheets
-                ? "Generating contact sheets..."
-                : "Generate a contact sheet for each group and copy paths to clipboard"
-            }
-            aria-label="Generate contact sheets"
-          >
-            {generatingSheets ? (
-              <svg
-                className="btn-spinner"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                role="presentation"
-              >
-                <circle
-                  cx="12"
-                  cy="12"
-                  r="9"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeOpacity="0.25"
-                />
-                <path
-                  d="M21 12a9 9 0 0 0-9-9"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                />
-              </svg>
-            ) : (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" role="presentation">
-                <rect
-                  x="3"
-                  y="3"
-                  width="7"
-                  height="7"
-                  rx="1"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                />
-                <rect
-                  x="14"
-                  y="3"
-                  width="7"
-                  height="7"
-                  rx="1"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                />
-                <rect
-                  x="3"
-                  y="14"
-                  width="7"
-                  height="7"
-                  rx="1"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                />
-                <rect
-                  x="14"
-                  y="14"
-                  width="7"
-                  height="7"
-                  rx="1"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                />
-              </svg>
-            )}
-          </button>
-          <button
-            className="btn btn-secondary btn-icon"
-            onClick={() => openModal("review")}
-            title="Review groups"
-            aria-label="Review groups"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" role="presentation">
-              <path
-                d="M4 5l2 2 3-3M4 12l2 2 3-3M4 19l2 2 3-3"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M13 5h7M13 12h7M13 19h7"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
-          </button>
-          {groups.length > 0 && (
-            <button
-              className="btn btn-secondary btn-icon"
-              onClick={() => openModal("namingRules")}
-              title="Name groups from rules (compose names from title/subtitle/short_sub)"
-              aria-label="Apply naming rules to groups"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" role="presentation">
-                <path
-                  d="M3 7.5 9.5 4l11 4.5-6.5 3.5z"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M14 12v6.5L7.5 15V9"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <circle cx="8" cy="7.2" r="1" fill="currentColor" />
-              </svg>
-            </button>
-          )}
-          <button
-            className="btn btn-secondary btn-icon"
-            onClick={() => openModal("createGroups")}
-            title="Sort ungrouped photos into new groups"
-            aria-label="Create groups from ungrouped photos"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" role="presentation">
-              <path
-                d="M3 7a2 2 0 0 1 2-2h3l2 2h6a2 2 0 0 1 2 2v3"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M3 7v10a2 2 0 0 0 2 2h8"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M18 15v6M15 18h6"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
-          </button>
-          <button
-            className="btn btn-secondary btn-icon"
-            onClick={handleOrganizeClick}
-            disabled={saving}
-            title="Organize groups into folders"
-            aria-label="Organize groups into folders"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" role="presentation">
-              <path
-                d="M3 5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5z"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M12 11v5M9.5 13.5h5"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
-          </button>
         </div>
-      )}
-      {(showUndo || showSlideshow || showTrashButton) && (
-        <div className="toolbar-group">
-          {showUndo && (
-            <button
-              className="btn btn-ghost-danger"
-              onClick={handleUndo}
-              disabled={saving}
-              title="Undo last save"
-            >
-              Undo
-            </button>
-          )}
-          {showSlideshow && (
-            <button
-              className="btn btn-secondary btn-icon"
-              onClick={() => {
-                const sel = useSelectionStore.getState().contexts.reorder;
-                let startIdx = 0;
-                if (sel.size > 0) {
-                  const firstSelected = images.findIndex((img) => sel.has(img.filename));
-                  if (firstSelected !== -1) startIdx = firstSelected;
-                }
-                openSlideshow(startIdx);
-              }}
-              title="Slideshow (full-screen viewer with autoplay)"
-              aria-label="Slideshow"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" role="presentation">
-                <path
-                  d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-          )}
-          <button
-            className="btn btn-secondary btn-icon"
-            onClick={refreshState}
-            disabled={saving}
-            title="Refresh"
-            aria-label="Refresh"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" role="presentation">
-              <path
-                d="M20 11A8 8 0 1 0 18.3 17M20 5v6h-6"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-          {showTrashButton && (
-            <button
-              className="btn btn-secondary btn-icon toolbar-trash-btn"
-              onClick={() => openModal("trash")}
-              title={`Review ${trashCount} file${trashCount === 1 ? "" : "s"} marked for deletion`}
-              aria-label={`Review ${trashCount} marked for deletion`}
-            >
-              <TrashIcon size={16} />
-              <span className="toolbar-trash-count">{trashCount}</span>
-            </button>
-          )}
-        </div>
-      )}
-      {folderModeEnabled ? (
-        <button
-          className="btn btn-primary"
-          onClick={handleFolderSave}
-          disabled={(!folderHasChanges && !folderNumberingMismatch) || saving}
-        >
-          {saving ? "Saving..." : "Save Folders"}
-        </button>
-      ) : (
-        <button
-          className="btn btn-primary"
-          onClick={handleSaveClick}
-          disabled={!hasChanges || saving}
-        >
-          {saving ? "Saving..." : "Save"}
-        </button>
-      )}
+      </div>
     </>
+  );
+}
+
+/**
+ * Right zone of the reorder tools row: view/export icon actions plus the
+ * overflow kebab (passed as children so the menu component stays decoupled).
+ * In folder mode only the kebab renders — it holds the folder-mode toggles.
+ */
+export function ReorderToolsEnd({ children }: { children?: ReactNode }) {
+  const folderModeEnabled = useFolderStore((s) => s.folderModeEnabled);
+  const groups = useGroupStore((s) => s.groups);
+  const images = useImageStore((s) => s.images);
+  const saving = useSessionStore((s) => s.saving);
+  const showToast = useToastStore((s) => s.showToast);
+  const openModal = useModalStore((s) => s.openModal);
+  const setOrganizeMappings = useSessionStore((s) => s.setOrganizeMappings);
+  const [generatingSheets, setGeneratingSheets] = useState(false);
+
+  async function handleOrganizeClick() {
+    try {
+      const data = await postJson<{ mappings: OrganizeMapping[] }>("/api/organize/preview", {
+        groups: groups.map((g) => ({ name: g.name, images: g.images })),
+        order: images.map((i) => i.filename),
+        numbered: useSessionStore.getState().numberedFolderPrefix,
+      });
+      setOrganizeMappings(data.mappings);
+      openModal("organize");
+    } catch (err) {
+      showToast(getErrorMessage(err, "Failed to preview"), "error");
+    }
+  }
+
+  async function handleContactSheets() {
+    setGeneratingSheets(true);
+    try {
+      const pad = String(groups.length).length;
+      const results = await generateContactSheetsBatch(
+        groups.map((g, i) => ({
+          filenames: g.images,
+          clusterName: `${String(i + 1).padStart(pad, "0")}-${g.name}`,
+        })),
+      );
+      await navigator.clipboard.writeText(results.map((r) => r.path).join("\n"));
+      showToast(
+        `Copied ${results.length} contact sheet path${results.length === 1 ? "" : "s"}`,
+        "success",
+      );
+    } catch (err) {
+      showToast(getErrorMessage(err, "Failed to generate contact sheets"), "error");
+    } finally {
+      setGeneratingSheets(false);
+    }
+  }
+
+  if (folderModeEnabled) {
+    return <div className="tools-zone tools-zone--end">{children}</div>;
+  }
+
+  return (
+    <div className="tools-zone tools-zone--end">
+      <div className="toolbar-group">
+        <button
+          className="btn btn-secondary btn-icon"
+          onClick={handleContactSheets}
+          disabled={generatingSheets}
+          title={
+            generatingSheets
+              ? "Generating contact sheets…"
+              : "Contact sheets — generate one per group, copy paths"
+          }
+          aria-label="Generate contact sheets"
+        >
+          {generatingSheets ? (
+            <svg
+              className="btn-spinner"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              role="presentation"
+            >
+              <circle
+                cx="12"
+                cy="12"
+                r="9"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeOpacity="0.25"
+              />
+              <path
+                d="M21 12a9 9 0 0 0-9-9"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" role="presentation">
+              <rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="2" />
+              <rect
+                x="14"
+                y="3"
+                width="7"
+                height="7"
+                rx="1"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+              <rect
+                x="3"
+                y="14"
+                width="7"
+                height="7"
+                rx="1"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+              <rect
+                x="14"
+                y="14"
+                width="7"
+                height="7"
+                rx="1"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+            </svg>
+          )}
+        </button>
+        <button
+          className="btn btn-secondary btn-icon"
+          onClick={() => openModal("review")}
+          title="Review groups — keep / maybe / delete"
+          aria-label="Review groups"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" role="presentation">
+            <path
+              d="M4 5l2 2 3-3M4 12l2 2 3-3M4 19l2 2 3-3"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M13 5h7M13 12h7M13 19h7"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+        <button
+          className="btn btn-secondary btn-icon"
+          onClick={() => openModal("rank")}
+          title="Rank — order groups or images by preference via ratings + comparisons (all, the selection, or the selected groups' contents)"
+          aria-label="Rank groups or images"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" role="presentation">
+            <path
+              d="M4 20v-6M12 20V4M20 20v-10"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+            <path
+              d="M9.5 7L12 4l2.5 3"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+        <button
+          className="btn btn-secondary btn-icon"
+          onClick={() => openModal("createGroups")}
+          title="Create groups — sort ungrouped photos into new groups"
+          aria-label="Create groups from ungrouped photos"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" role="presentation">
+            <path
+              d="M3 7a2 2 0 0 1 2-2h3l2 2h6a2 2 0 0 1 2 2v3"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M3 7v10a2 2 0 0 0 2 2h8"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M18 15v6M15 18h6"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+        <button
+          className="btn btn-secondary btn-icon"
+          onClick={handleOrganizeClick}
+          disabled={saving}
+          title="Organize groups into folders"
+          aria-label="Organize groups into folders"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" role="presentation">
+            <path
+              d="M3 5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5z"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M12 11v5M9.5 13.5h5"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+        {children && (
+          <>
+            <div className="toolbar-divider" />
+            {children}
+          </>
+        )}
+      </div>
+    </div>
   );
 }

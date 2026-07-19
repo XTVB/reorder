@@ -4,6 +4,7 @@ import type { FolderData, FolderGroup, ImageInfo } from "../types.ts";
 import { useImageStore } from "./imageStore.ts";
 
 const FOLDER_MODE_KEY = "reorder-folder-mode";
+const FLATTEN_FOLDERS_KEY = "reorder-folder-flatten";
 
 /**
  * In folder mode, every image is identified by its original compound path
@@ -24,12 +25,15 @@ interface FolderState {
   diskRootImages: string[];
 
   folderModeEnabled: boolean;
+  /** Folder-mode view: flatten every folder into one continuous image stream */
+  flattenFolders: boolean;
   expandedFolderName: string | null;
   folderModeLoaded: boolean;
   hasChanges: boolean;
 
   fetchFolders: () => Promise<void>;
   setFolderModeEnabled: (enabled: boolean) => void;
+  setFlattenFolders: (enabled: boolean) => void;
   expandFolder: (name: string | null) => void;
   collapseFolder: () => void;
 
@@ -115,6 +119,7 @@ export const useFolderStore = create<FolderState>((set, get) => ({
   diskFolders: [],
   diskRootImages: [],
   folderModeEnabled: localStorage.getItem(FOLDER_MODE_KEY) === "true",
+  flattenFolders: localStorage.getItem(FLATTEN_FOLDERS_KEY) === "true",
   expandedFolderName: null,
   folderModeLoaded: false,
   hasChanges: false,
@@ -156,6 +161,12 @@ export const useFolderStore = create<FolderState>((set, get) => ({
   setFolderModeEnabled: (enabled) => {
     localStorage.setItem(FOLDER_MODE_KEY, String(enabled));
     set({ folderModeEnabled: enabled, expandedFolderName: null });
+  },
+
+  setFlattenFolders: (enabled) => {
+    localStorage.setItem(FLATTEN_FOLDERS_KEY, String(enabled));
+    // No folder cards render in this view, so drop any expanded popover.
+    set({ flattenFolders: enabled, expandedFolderName: null });
   },
 
   expandFolder: (name) => set({ expandedFolderName: name }),

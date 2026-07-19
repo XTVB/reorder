@@ -39,6 +39,19 @@ interface Props {
   onOpenExpand: () => void;
 }
 
+function LockIcon({ locked }: { locked: boolean }) {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" role="presentation">
+      <rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" strokeWidth="2" />
+      {locked ? (
+        <path d="M8 11V7a4 4 0 0 1 8 0v4" stroke="currentColor" strokeWidth="2" />
+      ) : (
+        <path d="M8 11V7a4 4 0 0 1 7.6-1.7" stroke="currentColor" strokeWidth="2" />
+      )}
+    </svg>
+  );
+}
+
 function fmtDistance(v: number | undefined): string {
   if (v === undefined) return "—";
   if (!Number.isFinite(v) || v < 0) return "∞";
@@ -181,7 +194,9 @@ export const ClusterCard = memo(function ClusterCard({
           editable={!hasGroup}
         />
 
-        <span className="cluster-count">{cluster.images.length} images</span>
+        <span className="cluster-count">
+          {cluster.images.length} image{cluster.images.length !== 1 ? "s" : ""}
+        </span>
 
         <div className="cluster-metrics" onClick={(e) => e.stopPropagation()}>
           <span className="cluster-metric" title="Cohesion — max intra-pair distance">
@@ -213,7 +228,7 @@ export const ClusterCard = memo(function ClusterCard({
             </button>
           )}
           <button
-            className="btn btn-small btn-tree-nav"
+            className="btn btn-small btn-row-action"
             onClick={onToggleSplit}
             disabled={splitDisabled}
             title={
@@ -224,27 +239,28 @@ export const ClusterCard = memo(function ClusterCard({
                   : "Split into two children"
             }
           >
-            {splitExpanded ? "collapse" : "split"}
+            {splitExpanded ? "Collapse" : "Split"}
           </button>
           {!isLocked && (
             <button
-              className="btn btn-small btn-tree-nav"
+              className="btn btn-small btn-row-action"
               onClick={onOpenExpand}
               title="Pull in nearby images from outside this cluster"
             >
-              expand…
+              Expand…
             </button>
           )}
           <button
-            className="btn btn-small"
+            className="btn btn-small btn-row-action"
             onClick={() => useNNQueryStore.getState().openForCluster(cluster)}
             title="Find images similar to this cluster"
           >
             Find Similar
           </button>
           <AskClaudeButton images={cluster.images} name={cluster.name || cluster.id} />
+          <span className="cluster-actions-divider" aria-hidden />
           <button
-            className="btn btn-small btn-icon"
+            className="btn btn-small btn-icon btn-row-action"
             onClick={handleToggleMarkAll}
             title={allImagesMarked ? "Unmark cluster" : "Mark cluster for deletion"}
             aria-label={allImagesMarked ? "Unmark cluster" : "Mark cluster for deletion"}
@@ -253,7 +269,10 @@ export const ClusterCard = memo(function ClusterCard({
           </button>
           {hasGroup && groupId && (
             <button
-              className={cn("btn btn-small btn-lock", isLocked && "btn-lock-active")}
+              className={cn(
+                "btn btn-small btn-icon btn-row-action btn-lock",
+                isLocked && "btn-lock-active",
+              )}
               onClick={() => {
                 void toggleGroupLock(groupId);
               }}
@@ -262,11 +281,17 @@ export const ClusterCard = memo(function ClusterCard({
                   ? "Unlock — allow new suggestions on next re-cluster"
                   : "Lock — never suggest new additions for this group"
               }
+              aria-label={isLocked ? "Unlock group" : "Lock group"}
             >
-              {isLocked ? "🔒" : "🔓"}
+              <LockIcon locked={isLocked} />
             </button>
           )}
-          <button className="btn btn-small btn-dismiss" onClick={onDismiss}>
+          <button
+            className="btn btn-small btn-icon btn-row-action btn-dismiss"
+            onClick={onDismiss}
+            title="Dismiss this cluster from the list"
+            aria-label="Dismiss cluster"
+          >
             ×
           </button>
         </div>

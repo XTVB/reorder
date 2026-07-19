@@ -2,11 +2,22 @@ import type { FolderGroup, GridItem, ImageGroup, ImageInfo } from "../types.ts";
 import { toFolderSortId, toGroupSortId } from "./helpers.ts";
 
 type GridMode =
-  | { mode: "folders"; folders: FolderGroup[]; expandedFolderName: string | null }
+  | {
+      mode: "folders";
+      folders: FolderGroup[];
+      expandedFolderName: string | null;
+      /** When true, drop folder cards and show every image (subfolders + loose) as one stream */
+      flatten?: boolean;
+    }
   | { mode: "groups"; groups: ImageGroup[]; enabled: boolean; expandedGroupId: string | null };
 
 export function computeGridItems(images: ImageInfo[], opts: GridMode): GridItem[] {
   if (opts.mode === "folders") {
+    // Flat view: every image (subfolder contents + loose) as one continuous
+    // stream of plain image cards, in folder-then-root order.
+    if (opts.flatten) {
+      return images.map((i) => ({ type: "image" as const, filename: i.filename }));
+    }
     const folderImageSet = new Set<string>();
     const out: GridItem[] = [];
     for (const folder of opts.folders) {

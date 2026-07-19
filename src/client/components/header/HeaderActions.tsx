@@ -1,14 +1,53 @@
 import { useInteractionsStore, useListStore } from "../../stores/modes/cluster/index.ts";
 import type { AppMode } from "../../types.ts";
 import { ClusterToolbar } from "../cluster/ClusterToolbar.tsx";
-import { CzkawkaToolbar } from "../czkawka/CzkawkaToolbar.tsx";
-import { ReorderToolbar } from "../reorder/ReorderToolbar.tsx";
+import { CzkawkaPrimary, CzkawkaTools } from "../czkawka/CzkawkaToolbar.tsx";
+import {
+  ReorderPrimary,
+  ReorderSelectionActions,
+  ReorderTools,
+  ReorderToolsEnd,
+} from "../reorder/ReorderToolbar.tsx";
+import { ReorderToolbarOverflow } from "../reorder/ReorderToolbarOverflow.tsx";
 
-export function HeaderActions({ mode }: { mode: AppMode }) {
+/** Top row, right: the mode's primary action + global icons. */
+export function HeaderPrimary({ mode }: { mode: AppMode }) {
+  if (mode === "cluster") return <ClusterRunButton />;
+  if (mode === "merge-suggestions") return null;
+  if (mode === "czkawka") return <CzkawkaPrimary />;
+  return <ReorderPrimary />;
+}
+
+/** Top row, middle: contextual selection actions. */
+export function HeaderSelection({ mode }: { mode: AppMode }) {
+  if (mode === "reorder") return <ReorderSelectionActions />;
+  return null;
+}
+
+/** Bottom row: the mode's tool strip. */
+export function HeaderTools({ mode }: { mode: AppMode }) {
   if (mode === "cluster") return <ClusterActions />;
   if (mode === "merge-suggestions") return null;
-  if (mode === "czkawka") return <CzkawkaToolbar />;
-  return <ReorderToolbar />;
+  if (mode === "czkawka") return <CzkawkaTools />;
+  return (
+    <>
+      <ReorderTools />
+      <ReorderToolsEnd>
+        <ReorderToolbarOverflow />
+      </ReorderToolsEnd>
+    </>
+  );
+}
+
+function ClusterRunButton() {
+  const loading = useListStore((s) => s.loading);
+  const fetchClusters = useListStore((s) => s.fetchClusters);
+  const desiredN = useListStore((s) => s.desiredN);
+  return (
+    <button className="btn btn-primary" onClick={() => fetchClusters(desiredN)} disabled={loading}>
+      {loading ? "Clustering…" : "Run Clustering"}
+    </button>
+  );
 }
 
 function ClusterActions() {
@@ -25,7 +64,6 @@ function ClusterActions() {
   const setUseRerank = useListStore((s) => s.setUseRerank);
   const setRerankBlend = useListStore((s) => s.setRerankBlend);
   const setLinkage = useListStore((s) => s.setLinkage);
-  const fetchClusters = useListStore((s) => s.fetchClusters);
   const recut = useListStore((s) => s.recut);
   const expandAll = useListStore((s) => s.expandAll);
   const collapseAll = useListStore((s) => s.collapseAll);
@@ -39,7 +77,6 @@ function ClusterActions() {
     <ClusterToolbar
       loading={loading}
       progress={progress}
-      nClusters={clusterData?.nClusters ?? 200}
       totalClusters={visibleCount}
       hasError={hasError}
       distanceProfile={clusterData?.distanceProfile ?? null}
@@ -48,7 +85,6 @@ function ClusterActions() {
       useRerank={useRerank}
       rerankBlend={rerankBlend}
       linkage={linkage}
-      onRun={fetchClusters}
       onRecut={(n) => recut({ nClusters: n })}
       onRecutAdaptive={(minClusterSize) => recut({ minClusterSize })}
       onWeightsChange={setWeights}

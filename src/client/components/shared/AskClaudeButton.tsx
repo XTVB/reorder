@@ -29,7 +29,7 @@ export function AskClaudeButton({ images, name, prompt = DEFAULT_PROMPT }: AskCl
 
   return (
     <button
-      className="btn btn-small"
+      className="btn btn-small btn-row-action"
       onClick={handleClick}
       title="Generate contact sheet for Claude"
     >

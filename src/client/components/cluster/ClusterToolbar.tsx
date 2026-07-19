@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { useDismissOnOutside } from "../../hooks/useDismissOnOutside.ts";
 import { useToastStore } from "../../stores/core/toastStore.ts";
+import { useListStore } from "../../stores/modes/cluster/listStore.ts";
 import type {
   DistanceProfile,
   ImportClusterInput,
@@ -8,8 +10,6 @@ import type {
 } from "../../types.ts";
 import { getErrorMessage } from "../../utils/helpers.ts";
 import { OverflowMenu, OverflowMenuDivider, OverflowMenuItem } from "../shared/OverflowMenu.tsx";
-
-const DEFAULT_N_CLUSTERS = 200;
 
 const WEIGHT_PRESETS: { label: string; weights: WeightConfig }[] = [
   {
@@ -39,7 +39,6 @@ const WEIGHT_LABELS: { key: keyof Required<WeightConfig>; label: string }[] = [
 interface Props {
   loading: boolean;
   progress: string;
-  nClusters: number;
   totalClusters: number;
   hasError: boolean;
   distanceProfile: DistanceProfile | null;
@@ -48,7 +47,6 @@ interface Props {
   useRerank: boolean;
   rerankBlend: number;
   linkage: LinkageMethod;
-  onRun: (n?: number) => void;
   onRecut: (n: number) => void;
   onRecutAdaptive: (minClusterSize: number) => void;
   onWeightsChange: (w: WeightConfig) => void;
@@ -66,12 +64,10 @@ interface Props {
 export function ClusterToolbar({
   loading,
   progress,
-  nClusters,
   totalClusters,
   hasError,
   distanceProfile,
   weights,
-  onRun,
   onRecut,
   onRecutAdaptive,
   onWeightsChange,
@@ -89,11 +85,13 @@ export function ClusterToolbar({
   onImportClusters,
   onClearImported,
 }: Props) {
-  const [customN, setCustomN] = useState(String(nClusters));
-  const [showWeights, setShowWeights] = useState(false);
+  const desiredN = useListStore((s) => s.desiredN);
+  const setDesiredN = useListStore((s) => s.setDesiredN);
+  const [showSettings, setShowSettings] = useState(false);
   const [customMin, setCustomMin] = useState("5");
   const minClusterSize = parseInt(customMin, 10) || 5;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const settingsRef = useRef<HTMLDivElement>(null);
   const showToast = useToastStore((s) => s.showToast);
 
   const handleImportFile = useCallback(
@@ -113,39 +111,101 @@ export function ClusterToolbar({
     [onImportClusters, showToast],
   );
 
-  useEffect(() => {
-    setCustomN(String(nClusters));
-  }, [nClusters]);
+  useDismissOnOutside(settingsRef, showSettings, () => setShowSettings(false));
 
   const hasProfile = distanceProfile && distanceProfile.distances.length > 0;
 
-  // Active weights summary
-  const activeWeightParts = WEIGHT_LABELS.filter(({ key }) => (weights[key] ?? 0) > 0).map(
-    ({ key, label }) => `${label}=${weights[key]}`,
-  );
+  // Short summary of the active blend for the popover trigger
+  const activeWeightParts = WEIGHT_LABELS.filter(({ key }) => (weights[key] ?? 0) > 0);
+  const blendSummary =
+    activeWeightParts.length === 3 &&
+    activeWeightParts.every(({ key }) => LEARNED_WEIGHT_KEYS.has(key))
+      ? "Learned 3-head"
+      : activeWeightParts.map(({ label }) => label).join(" + ") || "No weights";
 
   return (
     <>
-      <button
-        className="btn btn-primary"
-        onClick={() => onRun(parseInt(customN, 10) || DEFAULT_N_CLUSTERS)}
-        disabled={loading}
-      >
-        {loading ? "Clustering..." : "Run Clustering"}
-      </button>
+      {/* One segmented island: cut tuning · blend popover · overflow */}
+      <div className="toolbar-group">
+        <label className="toolbar-field" title="Cut the tree into exactly N clusters">
+          N
+          <input
+            type="number"
+            value={desiredN}
+            onChange={(e) => setDesiredN(parseInt(e.target.value, 10) || 0)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onRecut(desiredN);
+            }}
+            className="cluster-n-input"
+            min={2}
+            disabled={loading}
+          />
+        </label>
+        <button
+          className="btn btn-secondary"
+          onClick={() => onRecut(desiredN)}
+          disabled={loading || !totalClusters}
+          title="Re-cut the cached tree into exactly N clusters"
+        >
+          Re-cut
+        </button>
+        {hasProfile && (
+          <>
+            <div className="toolbar-divider" />
+            <label
+              className="toolbar-field"
+              title="Min cluster size — adaptive (HDBSCAN-style) cut; smaller = more granular clusters"
+            >
+              Min
+              <input
+                type="number"
+                value={customMin}
+                onChange={(e) => setCustomMin(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onRecutAdaptive(minClusterSize);
+                }}
+                className="cluster-n-input cluster-n-input--narrow"
+                min={2}
+                max={30}
+                disabled={loading}
+              />
+            </label>
+            <button
+              className="btn btn-secondary"
+              onClick={() => onRecutAdaptive(minClusterSize)}
+              disabled={loading || !totalClusters}
+              title="Adaptive re-cut with this minimum cluster size"
+            >
+              Adaptive
+            </button>
+          </>
+        )}
+        <div className="toolbar-divider" />
 
-      {/* Configuration: weights + patches toggle */}
-      <div className="toolbar-group" title="Embedding configuration">
-        <div className="cluster-weights-control">
+        {/* Blend + rarely-touched knobs live in one settings popover */}
+        <div className="cluster-weights-control" ref={settingsRef}>
           <button
-            className="btn"
-            onClick={() => setShowWeights(!showWeights)}
-            title="Configure embedding weights"
+            className="btn btn-secondary"
+            onClick={() => setShowSettings(!showSettings)}
+            aria-expanded={showSettings}
+            title="Embedding blend, linkage and distance options"
           >
-            {activeWeightParts.join(", ") || "No weights"}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" role="presentation">
+              <path
+                d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h13M20 18h0"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+              <circle cx="16" cy="6" r="2" stroke="currentColor" strokeWidth="2" />
+              <circle cx="10" cy="12" r="2" stroke="currentColor" strokeWidth="2" />
+              <circle cx="18.5" cy="18" r="2" stroke="currentColor" strokeWidth="2" />
+            </svg>
+            {blendSummary}
           </button>
-          {showWeights && (
+          {showSettings && (
             <div className="cluster-weights-dropdown">
+              <div className="cluster-settings-section">Presets</div>
               <div className="cluster-weights-presets">
                 {WEIGHT_PRESETS.map((p) => (
                   <button
@@ -153,7 +213,6 @@ export function ClusterToolbar({
                     className="btn btn-small"
                     onClick={() => {
                       onWeightsChange(p.weights);
-                      setShowWeights(false);
                     }}
                   >
                     {p.label}
@@ -187,165 +246,108 @@ export function ClusterToolbar({
                   );
                 })}
               </div>
+              <div className="cluster-settings-section">Distance</div>
+              <label
+                className="cluster-patches-toggle"
+                title="Linkage method for the cluster tree. Ward (default) suits evenly-sized compact shoots; Average suits a few large or uneven sets; Complete suits tight clusters of moderately uneven size."
+              >
+                Linkage
+                <select
+                  className="cluster-linkage-select"
+                  value={linkage}
+                  onChange={(e) => onLinkageChange(e.target.value as LinkageMethod)}
+                >
+                  <option value="ward">Ward</option>
+                  <option value="average">Average</option>
+                  <option value="complete">Complete</option>
+                </select>
+              </label>
+              <label
+                className="cluster-patches-toggle"
+                title="k-reciprocal re-ranking — kNN-graph structure on top of cosine (~3s precompute). Useful on datasets with large, well-separated shoots."
+              >
+                <input
+                  type="checkbox"
+                  checked={useRerank}
+                  onChange={(e) => onUseRerankChange(e.target.checked)}
+                />
+                Re-rank
+              </label>
+              {useRerank && (
+                <label
+                  className="cluster-patches-toggle"
+                  title="Re-rank blend: 0 = cosine only, 1 = re-rank only. Default 0.7."
+                >
+                  <span className="cluster-rerank-blend__hint">blend</span>
+                  <input
+                    className="cluster-rerank-blend__slider"
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={rerankBlend}
+                    onChange={(e) => onRerankBlendChange(parseFloat(e.target.value))}
+                  />
+                  <span className="cluster-rerank-blend__value">{rerankBlend.toFixed(2)}</span>
+                </label>
+              )}
+              <label
+                className="cluster-patches-toggle"
+                title="Use DINOv3 patch-level distances (mutually exclusive with re-rank — re-rank wins if both enabled)"
+              >
+                <input
+                  type="checkbox"
+                  checked={usePatches}
+                  disabled={useRerank}
+                  onChange={(e) => onUsePatchesChange(e.target.checked)}
+                />
+                Patches
+              </label>
             </div>
           )}
         </div>
 
-        <label
-          className="cluster-patches-toggle"
-          title="k-reciprocal re-ranking — kNN-graph structure on top of cosine (~3s precompute). Useful on datasets with large, well-separated shoots."
-        >
-          <input
-            type="checkbox"
-            checked={useRerank}
-            onChange={(e) => onUseRerankChange(e.target.checked)}
-          />
-          Re-rank
-        </label>
-        {useRerank && (
-          <label
-            className="cluster-patches-toggle"
-            title="Re-rank blend: 0 = cosine only, 1 = re-rank only. Default 0.7."
-          >
-            <span className="cluster-rerank-blend__hint">blend</span>
-            <input
-              className="cluster-rerank-blend__slider"
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={rerankBlend}
-              onChange={(e) => onRerankBlendChange(parseFloat(e.target.value))}
-            />
-            <span className="cluster-rerank-blend__value">{rerankBlend.toFixed(2)}</span>
-          </label>
-        )}
-        <label
-          className="cluster-patches-toggle"
-          title="Use DINOv3 patch-level distances (mutually exclusive with re-rank — re-rank wins if both enabled)"
-        >
-          <input
-            type="checkbox"
-            checked={usePatches}
-            disabled={useRerank}
-            onChange={(e) => onUsePatchesChange(e.target.checked)}
-          />
-          Patches
-        </label>
-        <label
-          className="cluster-patches-toggle"
-          title={
-            "Linkage method for the cluster tree:\n" +
-            "• Ward (default) — best for evenly-sized, compact shoots; wins on most sets (e.g. amanda, alina).\n" +
-            "• Average — few large or uneven-sized sets, where Ward's equal-size bias splits them (e.g. lily).\n" +
-            "• Complete — tight clusters of moderately uneven size (e.g. darshelle)."
-          }
-        >
-          Linkage
-          <select
-            className="cluster-linkage-select"
-            value={linkage}
-            onChange={(e) => onLinkageChange(e.target.value as LinkageMethod)}
-          >
-            <option value="ward">Ward</option>
-            <option value="average">Average</option>
-            <option value="complete">Complete</option>
-          </select>
-        </label>
-      </div>
-
-      {/* Cut tuning: exact cluster count (number input) + optional adaptive min-size */}
-      <div className="toolbar-group" title="Cut tuning">
-        <label className="cluster-n-selector" title="Cut the tree into exactly N clusters">
-          N=
-          <input
-            type="number"
-            value={customN}
-            onChange={(e) => setCustomN(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") onRecut(parseInt(customN, 10) || DEFAULT_N_CLUSTERS);
-            }}
-            className="cluster-n-input"
-            min={2}
+        <div className="toolbar-divider" />
+        <OverflowMenu label="More cluster actions" align="right">
+          <OverflowMenuItem onClick={onExpandAll} disabled={!totalClusters}>
+            Expand all
+          </OverflowMenuItem>
+          <OverflowMenuItem onClick={onCollapseAll} disabled={!totalClusters}>
+            Collapse all
+          </OverflowMenuItem>
+          <OverflowMenuDivider />
+          <OverflowMenuItem onClick={() => onAcceptAll(minClusterSize)} disabled={!totalClusters}>
+            Accept all
+          </OverflowMenuItem>
+          <OverflowMenuDivider />
+          <OverflowMenuItem
+            onClick={() => fileInputRef.current?.click()}
             disabled={loading}
-          />
-          <button
-            className="btn btn-small"
-            onClick={() => onRecut(parseInt(customN, 10) || DEFAULT_N_CLUSTERS)}
-            disabled={loading || !totalClusters}
+            title="Import clusters from a JSON file (bypasses the clustering pipeline)"
           >
-            Re-cut
-          </button>
-        </label>
-        {hasProfile && (
-          <label
-            className="cluster-n-selector"
-            title="Min cluster size — adaptive (HDBSCAN-style) cut; smaller = more granular clusters"
+            Import JSON…
+          </OverflowMenuItem>
+          <OverflowMenuItem
+            danger
+            closeBeforeClick
+            onClick={() => {
+              if (
+                confirm("Clear imported clusters? The linkage-tree cache (if any) will remain.")
+              ) {
+                onClearImported();
+              }
+            }}
+            disabled={loading}
+            title="Delete the imported-clusters cache so the view falls back to the linkage tree"
           >
-            Min=
-            <input
-              type="number"
-              value={customMin}
-              onChange={(e) => setCustomMin(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") onRecutAdaptive(minClusterSize);
-              }}
-              className="cluster-n-input"
-              min={2}
-              max={30}
-              disabled={loading}
-            />
-            <button
-              className="btn btn-small"
-              onClick={() => onRecutAdaptive(minClusterSize)}
-              disabled={loading || !totalClusters}
-            >
-              Re-cut
-            </button>
-          </label>
-        )}
+            Clear import
+          </OverflowMenuItem>
+        </OverflowMenu>
       </div>
 
       {(loading || hasError) && (
         <span className={`cluster-progress ${hasError ? "cluster-error" : ""}`}>{progress}</span>
       )}
-      {totalClusters > 0 && !hasProfile && (
-        <span className="cluster-count">{totalClusters} clusters</span>
-      )}
-
-      <OverflowMenu label="More cluster actions" align="right">
-        <OverflowMenuItem onClick={onExpandAll} disabled={!totalClusters}>
-          Expand all
-        </OverflowMenuItem>
-        <OverflowMenuItem onClick={onCollapseAll} disabled={!totalClusters}>
-          Collapse all
-        </OverflowMenuItem>
-        <OverflowMenuDivider />
-        <OverflowMenuItem onClick={() => onAcceptAll(minClusterSize)} disabled={!totalClusters}>
-          Accept all
-        </OverflowMenuItem>
-        <OverflowMenuDivider />
-        <OverflowMenuItem
-          onClick={() => fileInputRef.current?.click()}
-          disabled={loading}
-          title="Import clusters from a JSON file (bypasses the clustering pipeline)"
-        >
-          Import JSON…
-        </OverflowMenuItem>
-        <OverflowMenuItem
-          danger
-          closeBeforeClick
-          onClick={() => {
-            if (confirm("Clear imported clusters? The linkage-tree cache (if any) will remain.")) {
-              onClearImported();
-            }
-          }}
-          disabled={loading}
-          title="Delete the imported-clusters cache so the view falls back to the linkage tree"
-        >
-          Clear import
-        </OverflowMenuItem>
-      </OverflowMenu>
       <input
         ref={fileInputRef}
         type="file"

@@ -27,6 +27,7 @@ import { useDndStore } from "../../stores/dndStore.ts";
 import { useFolderStore } from "../../stores/folderStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useImageStore } from "../../stores/imageStore.ts";
+import { useLockedImagesStore } from "../../stores/lockedImagesStore.ts";
 import { useSortHistoryStore } from "../../stores/sortHistoryStore.ts";
 import { useTrashStore } from "../../stores/trashStore.ts";
 import { computeGridItems, gridItemId } from "../../utils/gridItems.ts";
@@ -50,6 +51,7 @@ import { NamingRulesModal } from "../shared/NamingRulesModal.tsx";
 import { OrganizeModal } from "../shared/OrganizeModal.tsx";
 import { PathsModal } from "../shared/PathsModal.tsx";
 import { PreviewModal } from "../shared/PreviewModal.tsx";
+import { RankModal } from "../shared/RankModal.tsx";
 import { ReviewModal } from "../shared/ReviewModal.tsx";
 import { SearchBar, SearchContext, useSearchState } from "../shared/SearchBar.tsx";
 import { Slideshow } from "../shared/Slideshow.tsx";
@@ -92,6 +94,7 @@ export function ReorderView() {
   const applyOrganize = useGroupStore((s) => s.applyOrganize);
 
   const folderModeEnabled = useFolderStore((s) => s.folderModeEnabled);
+  const flattenFolders = useFolderStore((s) => s.flattenFolders);
   const folders = useFolderStore((s) => s.folders);
   const folderMap = useFolderStore((s) => s.folderMap);
   const expandedFolderName = useFolderStore((s) => s.expandedFolderName);
@@ -101,6 +104,8 @@ export function ReorderView() {
 
   const markedTrashIds = useSelectionStore((s) => s.contexts.trash);
   const pruneTrashToValid = useTrashStore((s) => s.pruneToValid);
+  const lockedImageIds = useSelectionStore((s) => s.contexts.lock);
+  const pruneLocksToValid = useLockedImagesStore((s) => s.pruneToValid);
 
   const handleToggleGroupMarkAll = useCallback((groupId: string) => {
     const group = useGroupStore.getState().groups.find((g) => g.id === groupId);
@@ -117,6 +122,7 @@ export function ReorderView() {
   const showOrganize = useModalStore((s) => s.open.organize);
   const showPaths = useModalStore((s) => s.open.paths);
   const showReview = useModalStore((s) => s.open.review);
+  const showRank = useModalStore((s) => s.open.rank);
   const showNamingRules = useModalStore((s) => s.open.namingRules);
   const showCreateGroups = useModalStore((s) => s.open.createGroups);
   const showTrashModal = useModalStore((s) => s.open.trash);
@@ -200,7 +206,7 @@ export function ReorderView() {
       computeGridItems(
         effectiveImages,
         folderModeEnabled
-          ? { mode: "folders", folders, expandedFolderName }
+          ? { mode: "folders", folders, expandedFolderName, flatten: flattenFolders }
           : { mode: "groups", groups: effectiveGroups, enabled: groupsEnabled, expandedGroupId },
       ),
     [
@@ -210,6 +216,7 @@ export function ReorderView() {
       expandedGroupId,
       folders,
       folderModeEnabled,
+      flattenFolders,
       expandedFolderName,
     ],
   );
@@ -357,6 +364,12 @@ export function ReorderView() {
     pruneTrashToValid(images.map((i) => i.filename));
   }, [folderModeEnabled, images, pruneTrashToValid]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: lockedImageIds gates the work; including it would force the prune even when it's already empty
+  useEffect(() => {
+    if (folderModeEnabled || images.length === 0 || lockedImageIds.size === 0) return;
+    pruneLocksToValid(images.map((i) => i.filename));
+  }, [folderModeEnabled, images, pruneLocksToValid]);
+
   // Clean stale group entries when images change
   useEffect(() => {
     if (folderModeEnabled || images.length === 0 || !groupsLoaded || saving) return;
@@ -499,7 +512,7 @@ export function ReorderView() {
           onDragEnd={handleDragEnd}
         >
           <SortableContext items={gridIds} strategy={rectSortingStrategy}>
-            <div style={{ position: "relative" }}>
+            <div className="reorder-view-fill" style={{ position: "relative" }}>
               <SearchBar
                 gridItems={gridItems}
                 onScrollToRow={scrollToRow}
@@ -655,6 +668,7 @@ export function ReorderView() {
                               isSearchMatch={searchState.matchIds.has(item.filename)}
                               isCurrentSearchMatch={searchState.currentMatchId === item.filename}
                               isMarkedForTrash={markedTrashIds.has(item.filename)}
+                              isLocked={lockedImageIds.has(item.filename)}
                               lightboxImages={allFilenames}
                               onSelect={handleImageSelect}
                               onRangeSelect={handleImageRangeSelect}
@@ -749,6 +763,8 @@ export function ReorderView() {
       )}
 
       {showReview && <ReviewModal onClose={() => closeModal("review")} />}
+
+      {showRank && <RankModal onClose={() => closeModal("rank")} />}
 
       {showNamingRules && <NamingRulesModal onClose={() => closeModal("namingRules")} />}
 

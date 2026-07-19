@@ -112,8 +112,8 @@ export function ReviewModal({ onClose }: ReviewModalProps) {
 
     beginSortTransition();
     const { images, imageMap, setImages } = useImageStore.getState();
-    // Locked groups keep their current gallery slot; the categorised order
-    // fills in around them.
+    // Locked groups keep their relative order; the categorised order fills in
+    // around them, with unlocked groups free to interleave between them.
     const finalOrder = withLockedGroupsInPlace(
       groupsInGalleryOrder(useGroupStore.getState().groups, images),
       tagged,

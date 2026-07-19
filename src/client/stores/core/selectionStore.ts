@@ -12,7 +12,8 @@ export type SelectionContext =
   | "cluster:merge" // cluster IDs in merge bar
   | "expand" // filenames in ExpandModal
   | "nn" // result filenames in NNResultsModal
-  | "trash"; // filenames marked for trash
+  | "trash" // filenames marked for trash
+  | "lock"; // ungrouped filenames locked in relative order for sorting
 
 export type RowSelectionContext = "merge-suggestions";
 
@@ -60,6 +61,7 @@ const INITIAL_CONTEXTS: Record<SelectionContext, Set<string>> = {
   expand: new Set(),
   nn: new Set(),
   trash: new Set(),
+  lock: new Set(),
 };
 
 const INITIAL_ANCHORS: Record<SelectionContext, string | null> = {
@@ -69,6 +71,7 @@ const INITIAL_ANCHORS: Record<SelectionContext, string | null> = {
   expand: null,
   nn: null,
   trash: null,
+  lock: null,
 };
 
 export const useSelectionStore = create<SelectionState>((set, get) => ({

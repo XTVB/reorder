@@ -30,9 +30,10 @@ export interface ImageGroup {
    */
   tags?: string[];
   /**
-   * Locked groups keep their gallery slot when a sort is applied (Sort
-   * Similar / Review Apply Order) — only unlocked groups move around them.
-   * Toggled with L on selected groups; absent means unlocked.
+   * Locked groups keep their relative order when a sort is applied (Sort
+   * Similar / Review Apply Order) — unlocked groups reorder freely around
+   * them and may interleave between them. Toggled with L on selected groups;
+   * absent means unlocked.
    */
   locked?: boolean;
 }

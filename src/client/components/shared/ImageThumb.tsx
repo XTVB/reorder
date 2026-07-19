@@ -10,6 +10,7 @@ interface ImageThumbProps {
 
   isSelected?: boolean;
   isMarkedForTrash?: boolean;
+  isLocked?: boolean;
   isSearchMatch?: boolean;
   isCurrentSearchMatch?: boolean;
   isGhost?: boolean;
@@ -43,6 +44,7 @@ export const ImageThumb = memo(function ImageThumb({
   filename,
   isSelected = false,
   isMarkedForTrash = false,
+  isLocked = false,
   isSearchMatch = false,
   isCurrentSearchMatch = false,
   isGhost = false,
@@ -93,6 +95,7 @@ export const ImageThumb = memo(function ImageThumb({
         isSearchMatch && "image-thumb-search-match",
         isCurrentSearchMatch && "image-thumb-search-current",
         isMarkedForTrash && "image-thumb-marked-trash",
+        isLocked && "image-thumb-locked",
         variant === "confirmed" && "image-thumb-confirmed",
         variant === "suggested" && "image-thumb-suggested",
       )}
@@ -120,6 +123,15 @@ export const ImageThumb = memo(function ImageThumb({
             {isSelected ? "✓" : ""}
           </span>
         </button>
+      )}
+      {isLocked && (
+        <span
+          className="image-thumb-lock-badge"
+          title="Locked — keeps its relative order when sorting (L to unlock)"
+          aria-label="Locked"
+        >
+          🔒
+        </span>
       )}
       {(isMarkedForTrash || topRight) && (
         <div className="image-thumb-top-right">

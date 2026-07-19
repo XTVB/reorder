@@ -101,36 +101,32 @@ export function groupsInGalleryOrder(groups: ImageGroup[], images: ImageInfo[]):
 }
 
 /**
- * Re-pin locked groups to their pre-sort slots: groups marked `locked` keep
- * the position (among groups) they hold in `currentOrder`, and the remaining
- * slots are filled with the unlocked groups in `proposed` order. Defensive
- * about set mismatches — a locked group absent from `proposed` is simply not
- * pinned, and proposed groups absent from `currentOrder` fill slots normally.
+ * Re-pin locked groups so they keep their *relative* order rather than their
+ * absolute slot: groups marked `locked` appear in the order they hold in
+ * `currentOrder`, but unlocked groups stay exactly where `proposed` put them —
+ * so an unlocked group may land between two locked ones (interleaving). This
+ * mirrors the ungrouped-image lock (see `reorderSubsetWithinSlots`): only the
+ * proposal's slots that fall on locked groups are rewritten, in locked order.
+ *
+ * Defensive about set mismatches — a locked group absent from `proposed` is
+ * simply dropped from the pin, and a `proposed` group not in `currentOrder`
+ * (hence never locked) keeps its proposed position.
  */
 export function withLockedGroupsInPlace(
   currentOrder: ImageGroup[],
   proposed: ImageGroup[],
 ): ImageGroup[] {
-  const proposedById = new Map(proposed.map((g) => [g.id, g]));
-  // Slot index (among groups in the current order) -> locked group id.
-  const lockedAt = new Map<number, string>();
-  currentOrder.forEach((g, i) => {
-    if (g.locked && proposedById.has(g.id)) lockedAt.set(i, g.id);
-  });
-  if (lockedAt.size === 0) return proposed;
+  const lockedIds = new Set<string>();
+  for (const g of currentOrder) if (g.locked) lockedIds.add(g.id);
+  if (lockedIds.size === 0) return proposed;
 
-  const lockedIds = new Set(lockedAt.values());
-  const rest = proposed.filter((g) => !lockedIds.has(g.id));
-  const out: ImageGroup[] = [];
-  let u = 0;
-  for (let i = 0; i < currentOrder.length && out.length < proposed.length; i++) {
-    const lockedId = lockedAt.get(i);
-    if (lockedId) out.push(proposedById.get(lockedId)!);
-    else if (u < rest.length) out.push(rest[u++]!);
-    // else: more current slots than proposed groups — nothing to fill here.
-  }
-  while (u < rest.length) out.push(rest[u++]!);
-  return out;
+  // Locked groups present in the proposal, in their current gallery order.
+  const inProposed = new Set(proposed.map((g) => g.id));
+  const queue = currentOrder.filter((g) => lockedIds.has(g.id) && inProposed.has(g.id));
+  // Every proposal slot holding a locked group is filled from `queue` in order;
+  // there are exactly `queue.length` such slots, so the queue is fully consumed.
+  let q = 0;
+  return proposed.map((g) => (lockedIds.has(g.id) ? queue[q++]! : g));
 }
 
 /**

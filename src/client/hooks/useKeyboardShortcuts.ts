@@ -3,12 +3,14 @@ import { useModalStore } from "../stores/core/modalStore.ts";
 import { useSelectionStore } from "../stores/core/selectionStore.ts";
 import { useFolderStore } from "../stores/folderStore.ts";
 import { useGroupStore } from "../stores/groupStore.ts";
+import { useLockedImagesStore } from "../stores/lockedImagesStore.ts";
 import { useTrashStore } from "../stores/trashStore.ts";
 import {
   fromFolderSortId,
   fromGroupSortId,
   isFolderSortId,
   isGroupSortId,
+  selectedImageFilenames,
 } from "../utils/helpers.ts";
 import { reverseSelection } from "../utils/reverseSelection.ts";
 
@@ -72,14 +74,22 @@ export function useKeyboardShortcuts({
       } else if (e.key === "r" || e.key === "R") {
         if (useSelectionStore.getState().contexts.reorder.size >= 2) reverseSelection();
       } else if (e.key === "l" || e.key === "L") {
-        // Toggle the sort lock on selected groups. Guard against the lightbox
-        // and modals — the grouping-sort modal uses l/h for navigation.
+        // Toggle the sort lock on the selection. Groups keep their gallery
+        // slot; ungrouped images keep their relative order (see
+        // lockedImagesStore). Guard against the lightbox and modals — the
+        // grouping-sort modal uses l/h for navigation.
         if (lightboxOpenRef.current) return;
         if (Object.values(useModalStore.getState().open).some(Boolean)) return;
-        const groupIds = [...useSelectionStore.getState().contexts.reorder]
-          .filter(isGroupSortId)
-          .map(fromGroupSortId);
+        const selection = [...useSelectionStore.getState().contexts.reorder];
+        const groupIds = selection.filter(isGroupSortId).map(fromGroupSortId);
         if (groupIds.length > 0) useGroupStore.getState().toggleGroupsLocked(groupIds);
+        // Locking individual images only makes sense in the normal grid, not
+        // folder mode (where plain ids are a folder's contents).
+        if (!useFolderStore.getState().folderModeEnabled) {
+          const imageFilenames = selectedImageFilenames(selection);
+          if (imageFilenames.length > 0)
+            useLockedImagesStore.getState().toggleLocked(imageFilenames);
+        }
       } else if (e.key === "d" || e.key === "D") {
         const selection = useSelectionStore.getState().contexts.reorder;
         if (selection.size === 0) return;

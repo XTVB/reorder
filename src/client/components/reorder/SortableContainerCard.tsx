@@ -154,7 +154,7 @@ export const SortableContainerCard = memo(function SortableContainerCard(props: 
       {isLocked && (
         <span
           className="card-lock-badge"
-          title="Locked — keeps its place when sorting (L to unlock)"
+          title="Locked — keeps its relative order when sorting (L to unlock)"
           aria-label="Locked in place"
         >
           🔒

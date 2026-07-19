@@ -12,6 +12,7 @@ export const SortableCard = React.memo(function SortableCard({
   isSearchMatch,
   isCurrentSearchMatch,
   isMarkedForTrash,
+  isLocked,
   lightboxImages,
   onSelect,
   onRangeSelect,
@@ -23,6 +24,7 @@ export const SortableCard = React.memo(function SortableCard({
   isSearchMatch?: boolean;
   isCurrentSearchMatch?: boolean;
   isMarkedForTrash?: boolean;
+  isLocked?: boolean;
   lightboxImages: string[];
   onSelect: (filename: string, e: React.MouseEvent) => void;
   onRangeSelect: (filename: string, e: React.MouseEvent) => void;
@@ -43,6 +45,7 @@ export const SortableCard = React.memo(function SortableCard({
       isSearchMatch={isSearchMatch}
       isCurrentSearchMatch={isCurrentSearchMatch}
       isMarkedForTrash={isMarkedForTrash}
+      isLocked={isLocked}
       onSelect={onSelect}
       onRangeSelect={onRangeSelect}
       lightboxImages={lightboxImages}

@@ -9,6 +9,7 @@ import { useSelectionStore } from "./core/selectionStore.ts";
 import { useSessionStore } from "./core/sessionStore.ts";
 import { useToastStore } from "./core/toastStore.ts";
 import { useImageStore } from "./imageStore.ts";
+import { useLockedImagesStore } from "./lockedImagesStore.ts";
 import { useSortHistoryStore } from "./sortHistoryStore.ts";
 import { useTrashStore } from "./trashStore.ts";
 
@@ -57,7 +58,8 @@ interface GroupState {
   /**
    * Toggle the sort lock on the given groups: locks all of them unless every
    * one is already locked, in which case all are unlocked. Locked groups keep
-   * their gallery slot when a sort is applied.
+   * their relative order when a sort is applied (unlocked groups may interleave
+   * between them).
    */
   toggleGroupsLocked: (groupIds: string[]) => void;
 
@@ -279,7 +281,7 @@ export const useGroupStore = create<GroupState>((set, get) => ({
       .getState()
       .showToast(
         lock
-          ? `Locked ${targets.length} group${targets.length === 1 ? "" : "s"} — kept in place when sorting`
+          ? `Locked ${targets.length} group${targets.length === 1 ? "" : "s"} — relative order kept when sorting`
           : `Unlocked ${targets.length} group${targets.length === 1 ? "" : "s"}`,
         "success",
       );
@@ -306,6 +308,7 @@ export const useGroupStore = create<GroupState>((set, get) => ({
       if (!data.success) throw new Error("Rename failed");
       const renames = (data.renames ?? []) as RenameMapping[];
       useTrashStore.getState().remap(renames);
+      useLockedImagesStore.getState().remap(renames);
       // Filenames just changed on disk — the pre-sort ⌥-peek snapshot is stale.
       useSortHistoryStore.getState().clearPreviousOrder();
       if (data.warnings && data.warnings.length > 0) {

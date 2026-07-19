@@ -10,7 +10,10 @@ import {
   DINOV3_PATCHES_HASHES_FILE,
   HASH_CACHE_FILE,
   HASH_ORDER_FILE,
+  IMAGE_RANK_SCORES_FILE,
   LEGACY_HASH_CACHE_FILE,
+  RANK_JUDGEMENTS_FILE,
+  RANK_SCORES_FILE,
 } from "./fs/paths.ts";
 
 const THUMB_WIDTH = 400;
@@ -23,11 +26,13 @@ function cacheKey(ino: number, size: number): string {
 
 const _ensuredDirs = new Set<string>();
 
+const NOBACKUP_FILE = ".nobackup";
+
 async function ensureCacheDir(targetDir: string): Promise<string> {
   const dir = cacheDir(targetDir);
   if (_ensuredDirs.has(dir)) return dir;
   await mkdir(dir, { recursive: true });
-  const noBackup = Bun.file(join(dir, ".nobackup"));
+  const noBackup = Bun.file(join(dir, NOBACKUP_FILE));
   if (!(await noBackup.exists())) await Bun.write(noBackup, "").catch(() => {});
   _ensuredDirs.add(dir);
   return dir;
@@ -68,10 +73,17 @@ export async function getThumbnail(targetDir: string, filename: string): Promise
 }
 
 /**
- * Embedding/patch extraction outputs — the only caches worth preserving (the
- * ~5min extraction). `.nobackup` is kept so the dir stays backup-excluded.
- * Everything else (thumbnails, contact sheets, linkage tree, dist matrices) is
- * cheap to regenerate.
+ * Irreplaceable human input that must survive a cache clear regardless of
+ * whether any embeddings were extracted — deleting it discards real user
+ * effort, not a regenerable computation. Kept on *both* clear paths.
+ */
+const ALWAYS_KEEP_FILES = new Set([RANK_SCORES_FILE, IMAGE_RANK_SCORES_FILE, RANK_JUDGEMENTS_FILE]);
+
+/**
+ * Embedding/patch extraction outputs — expensive (~5min) but regenerable, so
+ * only worth keeping as a set when embeddings actually exist. `.nobackup` is
+ * kept so the dir stays backup-excluded. Everything else (thumbnails, contact
+ * sheets, linkage tree, dist matrices) is cheap to regenerate.
  */
 const KEEP_FILES = new Set([
   HASH_CACHE_FILE,
@@ -81,7 +93,8 @@ const KEEP_FILES = new Set([
   DINOV3_PATCHES_FILE,
   DINOV3_PATCHES_FULL_FILE,
   DINOV3_PATCHES_HASHES_FILE,
-  ".nobackup",
+  NOBACKUP_FILE,
+  ...ALWAYS_KEEP_FILES,
 ]);
 
 /** Embedding caches whose presence means the cache dir is worth preserving. */
@@ -89,8 +102,10 @@ const EMBEDDING_FILES = [HASH_CACHE_FILE];
 
 /**
  * Clear regenerable caches (thumbnails, contact sheets, linkage tree, etc.)
- * while preserving the expensive embedding/patch extraction outputs. If no
- * embeddings were ever extracted, the whole cache dir is removed instead.
+ * while preserving the expensive embedding/patch extraction outputs and any
+ * irreplaceable human input (rank scores). When no embeddings were ever
+ * extracted the extraction outputs aren't worth keeping, but rank scores still
+ * are — so remove the whole dir only if nothing in ALWAYS_KEEP_FILES survives.
  */
 export async function clearRegenerableCaches(targetDir: string): Promise<void> {
   const dir = cacheDir(targetDir);
@@ -101,15 +116,23 @@ export async function clearRegenerableCaches(targetDir: string): Promise<void> {
     return; // no cache dir
   }
 
-  if (!entries.some((name) => EMBEDDING_FILES.includes(name))) {
+  const hasEmbeddings = entries.some((name) => EMBEDDING_FILES.includes(name));
+  const hasAlwaysKeep = entries.some((name) => ALWAYS_KEEP_FILES.has(name));
+
+  if (!hasEmbeddings && !hasAlwaysKeep) {
     await rm(dir, { recursive: true, force: true });
     _ensuredDirs.delete(dir);
     return;
   }
 
+  // With embeddings present, preserve the full KEEP_FILES set; without them,
+  // only the always-keep human input is worth retaining — plus `.nobackup`,
+  // which ensureCacheDir won't recreate this process (memoized) and the
+  // surviving dir still needs.
+  const keep = hasEmbeddings ? KEEP_FILES : new Set([NOBACKUP_FILE, ...ALWAYS_KEEP_FILES]);
   await Promise.all(
     entries
-      .filter((name) => !KEEP_FILES.has(name))
+      .filter((name) => !keep.has(name))
       .map((name) => rm(join(dir, name), { recursive: true, force: true })),
   );
 }

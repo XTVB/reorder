@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "updatedAt": "2026-07-13T23:54:01.641Z",
+  "entries": {
+    "1c1e2a43-ff2b-486b-aee6-3b8f557f610c": {
+      "mu": 2.57473138670501,
+      "sigma": 0.3961684848918015,
+      "tier": 0,
+      "confident": false
+    },
+    "3f71019b-d720-49d2-843e-2a94b5c7eeb7": {
+      "mu": 0.692578291307899,
+      "sigma": 0.4328641395004315,
+      "tier": 0,
+      "confident": false
+    },
+    "4bbcabf9-fb2f-4a7f-a80b-f225f7402310": {
+      "mu": 3.2913069572034845,
+      "sigma": 0.49158083140212366,
+      "tier": 0,
+      "confident": false
+    },
+    "5a9be16a-581d-4a76-ace3-7bd13f7e6f51": {
+      "mu": 2.3669280535623103,
+      "sigma": 0.3951436741615094,
+      "tier": 0,
+      "confident": false
+    },
+    "94f8ef88-2bb7-4966-80ad-df39d2ea4ead": {
+      "mu": 0.45998238054116136,
+      "sigma": 0.5088149236563478,
+      "tier": 0,
+      "confident": false
+    },
+    "0ab40cb0-074b-41a9-b096-46f0dcfd6661": {
+      "mu": 1.836240134139202,
+      "sigma": 0.4018512885398774,
+      "tier": 0,
+      "confident": false
+    },
+    "1ad0e8ea-bad7-4388-a309-cd3d737bcb7a": {
+      "mu": 1.313145438509806,
+      "sigma": 0.4434216953314169,
+      "tier": 0,
+      "confident": false
+    },
+    "920999b8-af33-4ed1-a542-e9663daff9da": {
+      "mu": 1.2713235639691816,
+      "sigma": 0.46353350584108666,
+      "tier": 0,
+      "confident": false
+    },
+    "97db8c19-b9e3-428d-a3e0-be744419bc82": {
+      "mu": 1.7056422479629172,
+      "sigma": 0.43404994248237366,
+      "tier": 0,
+      "confident": false
+    }
+  },
+  "pairs": {
+    "1c1e2a43-ff2b-486b-aee6-3b8f557f610c\u00004bbcabf9-fb2f-4a7f-a80b-f225f7402310": 3,
+    "3f71019b-d720-49d2-843e-2a94b5c7eeb7\u00004bbcabf9-fb2f-4a7f-a80b-f225f7402310": 1,
+    "4bbcabf9-fb2f-4a7f-a80b-f225f7402310\u00005a9be16a-581d-4a76-ace3-7bd13f7e6f51": 1,
+    "0ab40cb0-074b-41a9-b096-46f0dcfd6661\u000094f8ef88-2bb7-4966-80ad-df39d2ea4ead": 2,
+    "1ad0e8ea-bad7-4388-a309-cd3d737bcb7a\u0000920999b8-af33-4ed1-a542-e9663daff9da": 2,
+    "5a9be16a-581d-4a76-ace3-7bd13f7e6f51\u000097db8c19-b9e3-428d-a3e0-be744419bc82": 3,
+    "1c1e2a43-ff2b-486b-aee6-3b8f557f610c\u00003f71019b-d720-49d2-843e-2a94b5c7eeb7": 1,
+    "1c1e2a43-ff2b-486b-aee6-3b8f557f610c\u000094f8ef88-2bb7-4966-80ad-df39d2ea4ead": 1,
+    "1c1e2a43-ff2b-486b-aee6-3b8f557f610c\u00005a9be16a-581d-4a76-ace3-7bd13f7e6f51": 2,
+    "0ab40cb0-074b-41a9-b096-46f0dcfd6661\u00001ad0e8ea-bad7-4388-a309-cd3d737bcb7a": 1,
+    "920999b8-af33-4ed1-a542-e9663daff9da\u000097db8c19-b9e3-428d-a3e0-be744419bc82": 2,
+    "3f71019b-d720-49d2-843e-2a94b5c7eeb7\u000094f8ef88-2bb7-4966-80ad-df39d2ea4ead": 2,
+    "0ab40cb0-074b-41a9-b096-46f0dcfd6661\u00004bbcabf9-fb2f-4a7f-a80b-f225f7402310": 2,
+    "1ad0e8ea-bad7-4388-a309-cd3d737bcb7a\u00004bbcabf9-fb2f-4a7f-a80b-f225f7402310": 1,
+    "1ad0e8ea-bad7-4388-a309-cd3d737bcb7a\u000097db8c19-b9e3-428d-a3e0-be744419bc82": 1,
+    "920999b8-af33-4ed1-a542-e9663daff9da\u000094f8ef88-2bb7-4966-80ad-df39d2ea4ead": 2,
+    "3f71019b-d720-49d2-843e-2a94b5c7eeb7\u00005a9be16a-581d-4a76-ace3-7bd13f7e6f51": 1,
+    "4bbcabf9-fb2f-4a7f-a80b-f225f7402310\u000097db8c19-b9e3-428d-a3e0-be744419bc82": 1,
+    "3f71019b-d720-49d2-843e-2a94b5c7eeb7\u0000920999b8-af33-4ed1-a542-e9663daff9da": 2,
+    "0ab40cb0-074b-41a9-b096-46f0dcfd6661\u00005a9be16a-581d-4a76-ace3-7bd13f7e6f51": 3,
+    "1c1e2a43-ff2b-486b-aee6-3b8f557f610c\u000097db8c19-b9e3-428d-a3e0-be744419bc82": 1,
+    "1ad0e8ea-bad7-4388-a309-cd3d737bcb7a\u00003f71019b-d720-49d2-843e-2a94b5c7eeb7": 2,
+    "1ad0e8ea-bad7-4388-a309-cd3d737bcb7a\u000094f8ef88-2bb7-4966-80ad-df39d2ea4ead": 1,
+    "0ab40cb0-074b-41a9-b096-46f0dcfd6661\u0000920999b8-af33-4ed1-a542-e9663daff9da": 2,
+    "0ab40cb0-074b-41a9-b096-46f0dcfd6661\u00001c1e2a43-ff2b-486b-aee6-3b8f557f610c": 1,
+    "1ad0e8ea-bad7-4388-a309-cd3d737bcb7a\u00005a9be16a-581d-4a76-ace3-7bd13f7e6f51": 2,
+    "0ab40cb0-074b-41a9-b096-46f0dcfd6661\u000097db8c19-b9e3-428d-a3e0-be744419bc82": 1,
+    "5a9be16a-581d-4a76-ace3-7bd13f7e6f51\u0000920999b8-af33-4ed1-a542-e9663daff9da": 1,
+    "3f71019b-d720-49d2-843e-2a94b5c7eeb7\u000097db8c19-b9e3-428d-a3e0-be744419bc82": 1,
+    "94f8ef88-2bb7-4966-80ad-df39d2ea4ead\u000097db8c19-b9e3-428d-a3e0-be744419bc82": 1,
+    "1c1e2a43-ff2b-486b-aee6-3b8f557f610c\u0000920999b8-af33-4ed1-a542-e9663daff9da": 1,
+    "0ab40cb0-074b-41a9-b096-46f0dcfd6661\u00003f71019b-d720-49d2-843e-2a94b5c7eeb7": 1,
+    "1ad0e8ea-bad7-4388-a309-cd3d737bcb7a\u00001c1e2a43-ff2b-486b-aee6-3b8f557f610c": 1
+  },
+  "compareCount": 30,
+  "tieCount": 0
+}

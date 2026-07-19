@@ -81,6 +81,14 @@ const KNOWN_COLORS: Record<string, string> = {
   top: "#63b3ed",
   middle: "#9ca3af",
   bottom: "#b482ff",
+  // Rank Groups modal tiers (best → least) + cull floor
+  rank1: "#22c55e",
+  rank2: "#63b3ed",
+  rank3: "#fbbf24",
+  rank4: "#b482ff",
+  rank5: "#9ca3af",
+  rankConsidering: "#f97316",
+  rankDelete: "#ff5757",
 };
 
 const PALETTE = [
@@ -133,6 +141,12 @@ export function slotForKeyEvent(e: { code: string; shiftKey: boolean }): number 
   const base = DIGIT_CODE_SLOT[e.code];
   if (base === undefined) return null;
   return e.shiftKey ? base + 10 : base;
+}
+
+/** Digit-row slot ignoring Shift — for modals where Shift is a modifier
+ * (confident assignment) rather than the second slot band. */
+export function baseSlotForKeyEvent(e: { code: string }): number | null {
+  return DIGIT_CODE_SLOT[e.code] ?? null;
 }
 
 export function isValidConfig(c: unknown): c is ReviewConfig {

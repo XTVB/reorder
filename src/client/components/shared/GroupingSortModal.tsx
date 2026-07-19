@@ -3,6 +3,7 @@ import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useToastStore } from "../../stores/core/toastStore.ts";
 import { cn } from "../../utils/helpers.ts";
 import {
+  baseSlotForKeyEvent,
   type ConfigStore,
   cloneConfig,
   colorForId,
@@ -85,6 +86,30 @@ export interface GroupingSortModalProps<T> {
    * with no media.
    */
   getLightboxTarget?: (item: T) => { filenames: string[]; index: number } | null;
+  /**
+   * Rank-style extensions. `hideConfigControls` removes the config
+   * picker/editor and the `n` add-category shortcut (fixed vocabulary).
+   * `shiftConfident` repurposes Shift+digit from the second slot band into a
+   * "confident" modifier on the same slot, reported via `onAssign`.
+   * `toggleOffOnRepeat: false` makes re-choosing the current category a
+   * confirm-and-advance instead of a toggle-off. `suspendKeys` mutes the
+   * keyboard listener while a caller overlay (e.g. a comparison screen) owns
+   * the keys. `onAssign` fires after every top-level category change with the
+   * resulting category (null = toggled off).
+   */
+  hideConfigControls?: boolean;
+  shiftConfident?: boolean;
+  toggleOffOnRepeat?: boolean;
+  suspendKeys?: boolean;
+  /**
+   * Hand top-level item navigation to the caller (used by Rank's Auto mode to
+   * weave the rating cards into one Back/Forward timeline with the comparison
+   * overlay). When set, `index` is the controlled top-level cursor and every
+   * arrow / Prev-Next / post-assign advance calls `onStep(delta)` instead of
+   * moving an internal index. Ignored while browsing a bucket.
+   */
+  navControl?: { index: number; onStep: (delta: number) => void };
+  onAssign?: (id: string, categoryId: string | null, meta: { confident: boolean }) => void;
   apply: {
     /** Derive the Apply button state from the current assignments (one pass). */
     describe: (ctx: SortContext<T>) => { label: string; disabled: boolean; title?: string };
@@ -121,6 +146,12 @@ export function GroupingSortModal<T>({
   renderMedia,
   renderProgressExtra,
   getLightboxTarget,
+  hideConfigControls = false,
+  shiftConfident = false,
+  toggleOffOnRepeat = true,
+  suspendKeys = false,
+  navControl,
+  onAssign,
   apply,
   onClose,
 }: GroupingSortModalProps<T>) {
@@ -194,7 +225,12 @@ export function GroupingSortModal<T>({
   }, [items, statuses, bucket, activeConfig]);
 
   const total = filtered.length;
-  const currentIndex = bucket ? subIndex : topIndex;
+  // In controlled top-level navigation (navControl) the caller owns the cursor.
+  const topLevelIndex =
+    navControl && !bucket
+      ? Math.min(Math.max(navControl.index, 0), Math.max(0, total - 1))
+      : topIndex;
+  const currentIndex = bucket ? subIndex : topLevelIndex;
   const current = filtered[currentIndex];
 
   const bucketCategory: ReviewCategory | undefined = useMemo(
@@ -231,11 +267,15 @@ export function GroupingSortModal<T>({
   }
 
   function advance(delta: number) {
+    if (navControl && !bucket) {
+      navControl.onStep(delta);
+      return;
+    }
     const setter = bucket ? setSubIndex : setTopIndex;
     setter((i) => Math.min(total - 1, Math.max(0, i + delta)));
   }
 
-  function chooseAndAdvance(slot: number) {
+  function chooseAndAdvance(slot: number, confident = false) {
     if (!current) return;
     const id = getId(current);
     if (bucket && bucketCategory) {
@@ -249,8 +289,15 @@ export function GroupingSortModal<T>({
       const cat = activeConfig.categories[slot];
       if (!cat) return;
       const wasSame = statuses.get(id) === cat.id;
-      setStatusFor(id, cat.id);
-      if (!wasSame) setTopIndex((i) => Math.min(total - 1, i + 1));
+      // With toggle-off disabled, re-choosing the current category is a
+      // confirm: no state change, but the assignment still reports and the
+      // cursor still advances.
+      if (!wasSame || toggleOffOnRepeat) setStatusFor(id, cat.id);
+      const resulting = wasSame && toggleOffOnRepeat ? null : cat.id;
+      onAssign?.(id, resulting, { confident });
+      // When the caller owns navigation it advances the cursor itself (via
+      // onAssign), so don't also bump the internal index.
+      if (resulting !== null && !navControl) setTopIndex((i) => Math.min(total - 1, i + 1));
     }
   }
 
@@ -296,6 +343,7 @@ export function GroupingSortModal<T>({
   }
 
   function addCategoryViaShortcut() {
+    if (hideConfigControls) return;
     const cat = bucket ? activeConfig.categories.find((c) => c.id === bucket) : undefined;
     if (bucket && !cat) return;
     const promptMsg = cat ? `New ${terms.sub} in "${cat.label}":` : `New ${terms.group}:`;
@@ -329,13 +377,14 @@ export function GroupingSortModal<T>({
 
   // Keyboard handlers read through refs so the listener stays subscribed.
   const handlersRef = useRef<{
-    chooseAndAdvance: (slot: number) => void;
+    chooseAndAdvance: (slot: number, confident?: boolean) => void;
     advance: (delta: number) => void;
     onClose: () => void;
     exitBucket: () => void;
     addCategoryViaShortcut: () => void;
     gotoNextUncategorised: () => void;
     bucket: string | null;
+    shiftConfident: boolean;
   }>(null!);
   handlersRef.current = {
     chooseAndAdvance,
@@ -345,6 +394,7 @@ export function GroupingSortModal<T>({
     addCategoryViaShortcut,
     gotoNextUncategorised,
     bucket,
+    shiftConfident,
   };
 
   const slotCount = bucketCategory
@@ -354,7 +404,15 @@ export function GroupingSortModal<T>({
   slotCountRef.current = slotCount;
 
   useEffect(() => {
-    if (editor) return;
+    if (editor || suspendKeys) return;
+    // With shiftConfident, Shift+digit is a "confident" assignment of the same
+    // slot instead of the 10-19 slot band.
+    function resolveSlot(e: KeyboardEvent): { slot: number; confident: boolean } | null {
+      const h = handlersRef.current;
+      const slot = h.shiftConfident ? baseSlotForKeyEvent(e) : slotForKeyEvent(e);
+      if (slot === null || slot >= slotCountRef.current) return null;
+      return { slot, confident: h.shiftConfident && e.shiftKey };
+    }
     function handleKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLElement) {
         const tag = e.target.tagName;
@@ -366,10 +424,10 @@ export function GroupingSortModal<T>({
       // open lightbox follows the cursor (see the sync effect below). Esc /
       // navigation / add-category stay with the lightbox so they don't fight it.
       if (lightboxOpen) {
-        const slot = slotForKeyEvent(e);
-        if (slot !== null && slot < slotCountRef.current) {
+        const resolved = resolveSlot(e);
+        if (resolved) {
           e.preventDefault();
-          h.chooseAndAdvance(slot);
+          h.chooseAndAdvance(resolved.slot, resolved.confident);
         }
         return;
       }
@@ -388,10 +446,10 @@ export function GroupingSortModal<T>({
         h.gotoNextUncategorised();
         return;
       }
-      const slot = slotForKeyEvent(e);
-      if (slot !== null && slot < slotCountRef.current) {
+      const resolved = resolveSlot(e);
+      if (resolved) {
         e.preventDefault();
-        h.chooseAndAdvance(slot);
+        h.chooseAndAdvance(resolved.slot, resolved.confident);
         return;
       }
       if (e.key === "ArrowLeft" || e.key === "h") {
@@ -404,7 +462,7 @@ export function GroupingSortModal<T>({
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [lightboxOpen, editor]);
+  }, [lightboxOpen, editor, suspendKeys]);
 
   // Keep an open lightbox pinned to the item under the cursor. When
   // categorising via slot keys advances to a new item (or the cursor otherwise
@@ -473,6 +531,8 @@ export function GroupingSortModal<T>({
 
   function gotoNextUncategorised() {
     if (nextUncategorisedIndex < 0) return;
+    // The caller-owned timeline has no free "jump" (its order is fixed).
+    if (navControl && !bucket) return;
     (bucket ? setSubIndex : setTopIndex)(nextUncategorisedIndex);
   }
 
@@ -535,7 +595,7 @@ export function GroupingSortModal<T>({
     : undefined;
   const currentSub = current ? subs.get(getId(current)) : undefined;
 
-  const headerControls = (
+  const headerControls = hideConfigControls ? null : (
     <div className="review-config-picker">
       <select
         className="review-config-select"
@@ -622,7 +682,7 @@ export function GroupingSortModal<T>({
         return k ? `${k} ${it.label.toLowerCase()}` : null;
       })
       .filter(Boolean),
-    `n add ${bucketCategory ? terms.sub : terms.group}`,
+    ...(hideConfigControls ? [] : [`n add ${bucketCategory ? terms.sub : terms.group}`]),
     "← → navigate",
     bucketCategory ? "Esc back" : tailHint,
   ].join(" · ");
@@ -668,6 +728,7 @@ export function GroupingSortModal<T>({
         className={cn("review-modal", modalClassName)}
         headerClassName="review-modal-header"
         bodyClassName="review-modal-body"
+        closeOnEscape={false}
       >
         {bucketCategory && (
           <div className="review-sub-banner">
@@ -700,7 +761,7 @@ export function GroupingSortModal<T>({
                 type="button"
                 className="btn btn-secondary btn-small"
                 onClick={() => advance(-1)}
-                disabled={currentIndex === 0}
+                disabled={!navControl && currentIndex === 0}
                 aria-label="Previous"
               >
                 ← Prev
@@ -713,20 +774,22 @@ export function GroupingSortModal<T>({
                 type="button"
                 className="btn btn-secondary btn-small"
                 onClick={() => advance(1)}
-                disabled={currentIndex === total - 1}
+                disabled={!navControl && currentIndex === total - 1}
                 aria-label="Next"
               >
                 Next →
               </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-small review-single-skip"
-                onClick={gotoNextUncategorised}
-                disabled={nextUncategorisedIndex < 0}
-                title="Jump to the next item you haven't sorted yet"
-              >
-                Next uncategorised ⇥
-              </button>
+              {!navControl && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small review-single-skip"
+                  onClick={gotoNextUncategorised}
+                  disabled={nextUncategorisedIndex < 0}
+                  title="Jump to the next item you haven't sorted yet"
+                >
+                  Next uncategorised ⇥
+                </button>
+              )}
             </div>
 
             {renderMedia(current)}
@@ -739,7 +802,15 @@ export function GroupingSortModal<T>({
             >
               {bucketCategory && slotItems.length === 0 && (
                 <span className="review-single-no-subs">
-                  No {terms.sub}s yet — press <kbd>n</kbd> to add one.
+                  {hideConfigControls ? (
+                    <>
+                      Browsing this {terms.group} — <kbd>Esc</kbd> to go back.
+                    </>
+                  ) : (
+                    <>
+                      No {terms.sub}s yet — press <kbd>n</kbd> to add one.
+                    </>
+                  )}
                 </span>
               )}
               {slotItems.map((item, idx) => {
@@ -753,7 +824,7 @@ export function GroupingSortModal<T>({
                       item.active ? "review-status-active" : "btn-secondary",
                     )}
                     style={reviewColorVar(item.color)}
-                    onClick={() => chooseAndAdvance(idx)}
+                    onClick={(e) => chooseAndAdvance(idx, shiftConfident && e.shiftKey)}
                   >
                     {shortcut && <span className="review-single-status-key">{shortcut}</span>}
                     {item.label}

@@ -1,0 +1,843 @@
+{
+  "version": 1,
+  "sessions": [
+    {
+      "id": "212cfe14-c41e-409f-9f6c-dfda2c4977cf",
+      "target": "groups",
+      "at": "2026-07-15T08:56:07.343Z",
+      "events": [
+        {
+          "kind": "rate",
+          "id": "df1680da-0ee4-4c7c-ae57-17b65848d8d3",
+          "slot": 1,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "e1fd42f5-e5bf-4064-8a18-feada8fd6d68",
+          "slot": 3,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "93b59e07-4713-4909-81a5-944e7ac7ca7c",
+          "slot": 1,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "32e0f9c9-9790-4e0c-9f45-4aac99dc74ab",
+          "slot": 1,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "b1b36418-1f5b-4d93-90df-51dff2d0a189",
+          "slot": 1,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "1f7e9668-13c6-4080-a80a-bf84df033e40",
+          "slot": 0,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "c49fa3ba-5ec8-4d08-99ee-0d0ec84f70bc",
+          "slot": 1,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "e72a5e08-e52f-4aea-8020-03d9aacd009d",
+          "slot": 0,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "e36e2383-8ed1-4a5f-a14d-6d2aa00ae770",
+          "slot": 1,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "2d11475b-d58a-4dfd-87c0-7a0e7dd7015c",
+          "slot": 0,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "b0d75cf1-16fe-4977-bf4f-f69ce5fbe548",
+          "slot": 0,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "5181fb3e-748c-420b-9fc8-4bedff3ef349",
+          "slot": 0,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "886ad1d5-a766-4168-905f-7f19678303d7",
+          "slot": 0,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "cb35d71f-4df5-4814-8208-a8e17a403b39",
+          "slot": 1,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "d613374b-b23f-487b-9b3c-f437673bebeb",
+          "slot": 1,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "df20b219-944f-457d-ac03-8f7c4ab17d29",
+          "slot": 1,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "9d4504ee-bfc1-45af-b8d3-537514283393",
+          "slot": 2,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "fcbab68f-ed8e-4762-8423-6b386c6f23e3",
+          "slot": 2,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "51e77f82-c305-475c-8af3-00d4e31f1602",
+          "slot": 3,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "c9159f50-4575-42b4-b5d9-7b3573b64f61",
+          "slot": 3,
+          "confident": false
+        },
+        {
+          "kind": "rate",
+          "id": "3244e238-7d70-4faf-8040-9e5cffe29778",
+          "slot": 2,
+          "confident": false
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "1f7e9668-13c6-4080-a80a-bf84df033e40",
+            "e72a5e08-e52f-4aea-8020-03d9aacd009d"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "1f7e9668-13c6-4080-a80a-bf84df033e40"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "2d11475b-d58a-4dfd-87c0-7a0e7dd7015c",
+            "b0d75cf1-16fe-4977-bf4f-f69ce5fbe548"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "2d11475b-d58a-4dfd-87c0-7a0e7dd7015c"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "5181fb3e-748c-420b-9fc8-4bedff3ef349",
+            "886ad1d5-a766-4168-905f-7f19678303d7"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "df1680da-0ee4-4c7c-ae57-17b65848d8d3",
+            "93b59e07-4713-4909-81a5-944e7ac7ca7c",
+            "32e0f9c9-9790-4e0c-9f45-4aac99dc74ab",
+            "b0d75cf1-16fe-4977-bf4f-f69ce5fbe548"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "b0d75cf1-16fe-4977-bf4f-f69ce5fbe548"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "b1b36418-1f5b-4d93-90df-51dff2d0a189",
+            "c49fa3ba-5ec8-4d08-99ee-0d0ec84f70bc"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "b1b36418-1f5b-4d93-90df-51dff2d0a189"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "e36e2383-8ed1-4a5f-a14d-6d2aa00ae770",
+            "cb35d71f-4df5-4814-8208-a8e17a403b39"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "cb35d71f-4df5-4814-8208-a8e17a403b39"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "d613374b-b23f-487b-9b3c-f437673bebeb",
+            "df20b219-944f-457d-ac03-8f7c4ab17d29"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "df20b219-944f-457d-ac03-8f7c4ab17d29"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "9d4504ee-bfc1-45af-b8d3-537514283393",
+            "fcbab68f-ed8e-4762-8423-6b386c6f23e3",
+            "3244e238-7d70-4faf-8040-9e5cffe29778",
+            "d613374b-b23f-487b-9b3c-f437673bebeb"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "d613374b-b23f-487b-9b3c-f437673bebeb"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "e1fd42f5-e5bf-4064-8a18-feada8fd6d68",
+            "51e77f82-c305-475c-8af3-00d4e31f1602"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "e1fd42f5-e5bf-4064-8a18-feada8fd6d68"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "32e0f9c9-9790-4e0c-9f45-4aac99dc74ab",
+            "93b59e07-4713-4909-81a5-944e7ac7ca7c"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "93b59e07-4713-4909-81a5-944e7ac7ca7c"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "3244e238-7d70-4faf-8040-9e5cffe29778",
+            "fcbab68f-ed8e-4762-8423-6b386c6f23e3"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "fcbab68f-ed8e-4762-8423-6b386c6f23e3"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "e1fd42f5-e5bf-4064-8a18-feada8fd6d68",
+            "c9159f50-4575-42b4-b5d9-7b3573b64f61",
+            "51e77f82-c305-475c-8af3-00d4e31f1602",
+            "3244e238-7d70-4faf-8040-9e5cffe29778"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "3244e238-7d70-4faf-8040-9e5cffe29778"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "df1680da-0ee4-4c7c-ae57-17b65848d8d3",
+            "c49fa3ba-5ec8-4d08-99ee-0d0ec84f70bc"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "df1680da-0ee4-4c7c-ae57-17b65848d8d3"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "1f7e9668-13c6-4080-a80a-bf84df033e40",
+            "2d11475b-d58a-4dfd-87c0-7a0e7dd7015c"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "1f7e9668-13c6-4080-a80a-bf84df033e40"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "b1b36418-1f5b-4d93-90df-51dff2d0a189",
+            "cb35d71f-4df5-4814-8208-a8e17a403b39"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "cb35d71f-4df5-4814-8208-a8e17a403b39"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "c9159f50-4575-42b4-b5d9-7b3573b64f61",
+            "51e77f82-c305-475c-8af3-00d4e31f1602",
+            "e1fd42f5-e5bf-4064-8a18-feada8fd6d68"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "fcbab68f-ed8e-4762-8423-6b386c6f23e3",
+            "9d4504ee-bfc1-45af-b8d3-537514283393"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "fcbab68f-ed8e-4762-8423-6b386c6f23e3"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "e36e2383-8ed1-4a5f-a14d-6d2aa00ae770",
+            "32e0f9c9-9790-4e0c-9f45-4aac99dc74ab"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "df20b219-944f-457d-ac03-8f7c4ab17d29",
+            "93b59e07-4713-4909-81a5-944e7ac7ca7c"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "93b59e07-4713-4909-81a5-944e7ac7ca7c"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "5181fb3e-748c-420b-9fc8-4bedff3ef349",
+            "e72a5e08-e52f-4aea-8020-03d9aacd009d",
+            "cb35d71f-4df5-4814-8208-a8e17a403b39",
+            "2d11475b-d58a-4dfd-87c0-7a0e7dd7015c"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "2d11475b-d58a-4dfd-87c0-7a0e7dd7015c"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "df1680da-0ee4-4c7c-ae57-17b65848d8d3",
+            "b1b36418-1f5b-4d93-90df-51dff2d0a189"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "df1680da-0ee4-4c7c-ae57-17b65848d8d3"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "886ad1d5-a766-4168-905f-7f19678303d7",
+            "b0d75cf1-16fe-4977-bf4f-f69ce5fbe548"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "b0d75cf1-16fe-4977-bf4f-f69ce5fbe548"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "e72a5e08-e52f-4aea-8020-03d9aacd009d",
+            "cb35d71f-4df5-4814-8208-a8e17a403b39"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "3244e238-7d70-4faf-8040-9e5cffe29778",
+            "9d4504ee-bfc1-45af-b8d3-537514283393",
+            "e1fd42f5-e5bf-4064-8a18-feada8fd6d68",
+            "c9159f50-4575-42b4-b5d9-7b3573b64f61"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "c49fa3ba-5ec8-4d08-99ee-0d0ec84f70bc",
+            "fcbab68f-ed8e-4762-8423-6b386c6f23e3"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "fcbab68f-ed8e-4762-8423-6b386c6f23e3"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "93b59e07-4713-4909-81a5-944e7ac7ca7c",
+            "df1680da-0ee4-4c7c-ae57-17b65848d8d3"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "df20b219-944f-457d-ac03-8f7c4ab17d29",
+            "b1b36418-1f5b-4d93-90df-51dff2d0a189"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "d613374b-b23f-487b-9b3c-f437673bebeb",
+            "e36e2383-8ed1-4a5f-a14d-6d2aa00ae770",
+            "32e0f9c9-9790-4e0c-9f45-4aac99dc74ab",
+            "df1680da-0ee4-4c7c-ae57-17b65848d8d3"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "32e0f9c9-9790-4e0c-9f45-4aac99dc74ab"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "1f7e9668-13c6-4080-a80a-bf84df033e40",
+            "b0d75cf1-16fe-4977-bf4f-f69ce5fbe548"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "1f7e9668-13c6-4080-a80a-bf84df033e40"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "5181fb3e-748c-420b-9fc8-4bedff3ef349",
+            "e72a5e08-e52f-4aea-8020-03d9aacd009d"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "5181fb3e-748c-420b-9fc8-4bedff3ef349"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "d613374b-b23f-487b-9b3c-f437673bebeb",
+            "e36e2383-8ed1-4a5f-a14d-6d2aa00ae770"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "e36e2383-8ed1-4a5f-a14d-6d2aa00ae770"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "b0d75cf1-16fe-4977-bf4f-f69ce5fbe548",
+            "5181fb3e-748c-420b-9fc8-4bedff3ef349",
+            "886ad1d5-a766-4168-905f-7f19678303d7",
+            "2d11475b-d58a-4dfd-87c0-7a0e7dd7015c"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "2d11475b-d58a-4dfd-87c0-7a0e7dd7015c"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "886ad1d5-a766-4168-905f-7f19678303d7",
+            "cb35d71f-4df5-4814-8208-a8e17a403b39"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "886ad1d5-a766-4168-905f-7f19678303d7"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "d613374b-b23f-487b-9b3c-f437673bebeb",
+            "c49fa3ba-5ec8-4d08-99ee-0d0ec84f70bc"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "c49fa3ba-5ec8-4d08-99ee-0d0ec84f70bc"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "b0d75cf1-16fe-4977-bf4f-f69ce5fbe548",
+            "5181fb3e-748c-420b-9fc8-4bedff3ef349"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "b0d75cf1-16fe-4977-bf4f-f69ce5fbe548"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "e36e2383-8ed1-4a5f-a14d-6d2aa00ae770",
+            "fcbab68f-ed8e-4762-8423-6b386c6f23e3",
+            "c49fa3ba-5ec8-4d08-99ee-0d0ec84f70bc",
+            "b1b36418-1f5b-4d93-90df-51dff2d0a189"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "fcbab68f-ed8e-4762-8423-6b386c6f23e3"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "e72a5e08-e52f-4aea-8020-03d9aacd009d",
+            "93b59e07-4713-4909-81a5-944e7ac7ca7c"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "93b59e07-4713-4909-81a5-944e7ac7ca7c"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "df20b219-944f-457d-ac03-8f7c4ab17d29",
+            "fcbab68f-ed8e-4762-8423-6b386c6f23e3"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "93b59e07-4713-4909-81a5-944e7ac7ca7c",
+            "cb35d71f-4df5-4814-8208-a8e17a403b39"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "93b59e07-4713-4909-81a5-944e7ac7ca7c"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "e72a5e08-e52f-4aea-8020-03d9aacd009d",
+            "df1680da-0ee4-4c7c-ae57-17b65848d8d3",
+            "32e0f9c9-9790-4e0c-9f45-4aac99dc74ab",
+            "93b59e07-4713-4909-81a5-944e7ac7ca7c"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "e36e2383-8ed1-4a5f-a14d-6d2aa00ae770",
+            "c49fa3ba-5ec8-4d08-99ee-0d0ec84f70bc"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "b1b36418-1f5b-4d93-90df-51dff2d0a189",
+            "e36e2383-8ed1-4a5f-a14d-6d2aa00ae770"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "cb35d71f-4df5-4814-8208-a8e17a403b39",
+            "df20b219-944f-457d-ac03-8f7c4ab17d29"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "cb35d71f-4df5-4814-8208-a8e17a403b39"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "5181fb3e-748c-420b-9fc8-4bedff3ef349",
+            "cb35d71f-4df5-4814-8208-a8e17a403b39",
+            "e72a5e08-e52f-4aea-8020-03d9aacd009d",
+            "886ad1d5-a766-4168-905f-7f19678303d7"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "5181fb3e-748c-420b-9fc8-4bedff3ef349"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "886ad1d5-a766-4168-905f-7f19678303d7",
+            "93b59e07-4713-4909-81a5-944e7ac7ca7c"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "886ad1d5-a766-4168-905f-7f19678303d7"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "b1b36418-1f5b-4d93-90df-51dff2d0a189",
+            "d613374b-b23f-487b-9b3c-f437673bebeb"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "b1b36418-1f5b-4d93-90df-51dff2d0a189"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "1f7e9668-13c6-4080-a80a-bf84df033e40",
+            "5181fb3e-748c-420b-9fc8-4bedff3ef349"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "1f7e9668-13c6-4080-a80a-bf84df033e40"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "cb35d71f-4df5-4814-8208-a8e17a403b39",
+            "df1680da-0ee4-4c7c-ae57-17b65848d8d3",
+            "32e0f9c9-9790-4e0c-9f45-4aac99dc74ab",
+            "93b59e07-4713-4909-81a5-944e7ac7ca7c"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "cb35d71f-4df5-4814-8208-a8e17a403b39"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "9d4504ee-bfc1-45af-b8d3-537514283393",
+            "51e77f82-c305-475c-8af3-00d4e31f1602"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "df20b219-944f-457d-ac03-8f7c4ab17d29",
+            "e36e2383-8ed1-4a5f-a14d-6d2aa00ae770"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "df20b219-944f-457d-ac03-8f7c4ab17d29"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "32e0f9c9-9790-4e0c-9f45-4aac99dc74ab",
+            "fcbab68f-ed8e-4762-8423-6b386c6f23e3"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "32e0f9c9-9790-4e0c-9f45-4aac99dc74ab"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "df1680da-0ee4-4c7c-ae57-17b65848d8d3",
+            "df20b219-944f-457d-ac03-8f7c4ab17d29",
+            "fcbab68f-ed8e-4762-8423-6b386c6f23e3",
+            "32e0f9c9-9790-4e0c-9f45-4aac99dc74ab"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "e72a5e08-e52f-4aea-8020-03d9aacd009d",
+            "df20b219-944f-457d-ac03-8f7c4ab17d29"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "b0d75cf1-16fe-4977-bf4f-f69ce5fbe548",
+            "cb35d71f-4df5-4814-8208-a8e17a403b39"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "b0d75cf1-16fe-4977-bf4f-f69ce5fbe548"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "1f7e9668-13c6-4080-a80a-bf84df033e40",
+            "886ad1d5-a766-4168-905f-7f19678303d7"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "1f7e9668-13c6-4080-a80a-bf84df033e40"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "32e0f9c9-9790-4e0c-9f45-4aac99dc74ab",
+            "b1b36418-1f5b-4d93-90df-51dff2d0a189",
+            "e36e2383-8ed1-4a5f-a14d-6d2aa00ae770",
+            "e72a5e08-e52f-4aea-8020-03d9aacd009d"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "e72a5e08-e52f-4aea-8020-03d9aacd009d",
+            "fcbab68f-ed8e-4762-8423-6b386c6f23e3"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "5181fb3e-748c-420b-9fc8-4bedff3ef349",
+            "93b59e07-4713-4909-81a5-944e7ac7ca7c"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "5181fb3e-748c-420b-9fc8-4bedff3ef349"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "df20b219-944f-457d-ac03-8f7c4ab17d29",
+            "c49fa3ba-5ec8-4d08-99ee-0d0ec84f70bc"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "df20b219-944f-457d-ac03-8f7c4ab17d29"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "1f7e9668-13c6-4080-a80a-bf84df033e40",
+            "2d11475b-d58a-4dfd-87c0-7a0e7dd7015c",
+            "b0d75cf1-16fe-4977-bf4f-f69ce5fbe548",
+            "5181fb3e-748c-420b-9fc8-4bedff3ef349"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "1f7e9668-13c6-4080-a80a-bf84df033e40"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "886ad1d5-a766-4168-905f-7f19678303d7",
+            "df1680da-0ee4-4c7c-ae57-17b65848d8d3"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "886ad1d5-a766-4168-905f-7f19678303d7"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "c49fa3ba-5ec8-4d08-99ee-0d0ec84f70bc",
+            "3244e238-7d70-4faf-8040-9e5cffe29778"
+          ],
+          "outcome": {
+            "kind": "win",
+            "winnerId": "c49fa3ba-5ec8-4d08-99ee-0d0ec84f70bc"
+          }
+        },
+        {
+          "kind": "compare",
+          "ids": [
+            "c9159f50-4575-42b4-b5d9-7b3573b64f61",
+            "51e77f82-c305-475c-8af3-00d4e31f1602"
+          ],
+          "outcome": {
+            "kind": "tie"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -17,6 +17,7 @@ import { imagesRoutes } from "./routes/images.ts";
 import { mergeRoutes } from "./routes/merge.ts";
 import { nnRoutes } from "./routes/nn.ts";
 import { organizeRoutes } from "./routes/organize.ts";
+import { rankRoutes } from "./routes/rank.ts";
 import { remapGroups, renameRoutes } from "./routes/rename.ts";
 import { treeNavRoutes } from "./routes/tree-nav.ts";
 import type { RouteHandler } from "./types.ts";
@@ -26,6 +27,7 @@ const ROUTE_HANDLERS: RouteHandler[] = [
   renameRoutes,
   deleteRoutes,
   groupsRoutes,
+  rankRoutes,
   constraintsRoutes,
   organizeRoutes,
   foldersRoutes,

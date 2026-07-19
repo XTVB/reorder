@@ -1,0 +1,385 @@
+/* Rank Groups modal: setup screen, header extras, and the comparison overlay. */
+
+.rank-setup-modal {
+  max-width: 560px;
+}
+
+/* Ranking single ungrouped images: force full height so the one large photo
+   per step flex-fills, mirroring Create Groups' single-photo layout. */
+.review-modal.rank-images-modal {
+  height: 92vh;
+}
+
+.rank-setup-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.rank-setup-body p {
+  margin: 0;
+}
+
+.rank-setup-body kbd {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 11px;
+}
+
+/* Segmented toggles: the kind (groups vs images) and the scope within it (all /
+   the grid selection / the selected groups' contents). */
+.rank-target-toggle {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.rank-target-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  cursor: pointer;
+}
+
+.rank-target-btn + .rank-target-btn {
+  border-left: 1px solid var(--border);
+}
+
+.rank-target-btn:hover:not(:disabled) {
+  color: var(--text);
+}
+
+/* A scope with nothing to rank (no selection) — the title says what to select. */
+.rank-target-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.rank-target-btn-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.rank-setup-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.rank-setup-option input {
+  margin-top: 2px;
+}
+
+.rank-setup-status {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ---- Header extras (target/cull/start-over + mode toggle + meter) ---- */
+
+.rank-progress-extra {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 8px;
+}
+
+/* Target toggle + cull + start-over, shared by the header and the not-ready
+   shell (where it sits at the top of the flex column). */
+.rank-controls {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 8px;
+}
+
+/* A standalone toggle button (Cull / Start over) needs its own border since it
+   isn't wrapped in a segmented-toggle container like the mode buttons. */
+.rank-toggle-btn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.rank-mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.rank-mode-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  cursor: pointer;
+}
+
+.rank-mode-btn + .rank-mode-btn {
+  border-left: 1px solid var(--border);
+}
+
+.rank-mode-btn:hover {
+  color: var(--text);
+}
+
+.rank-mode-btn-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.rank-progress-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.rank-progress-bar {
+  width: 88px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.rank-progress-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.rank-progress-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/* Subtitle note on items whose comparisons disagree with their rated tier. */
+.rank-misfit-note {
+  color: #e5a50a;
+  font-weight: 600;
+}
+
+/* ---- Comparison overlay (above the modal at 200, below the lightbox at 500) ---- */
+
+.rank-compare-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(6, 9, 18, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.rank-compare {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-pop);
+  width: 100%;
+  height: 100%;
+  max-width: 1700px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px;
+}
+
+.rank-compare-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rank-compare-header-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* ‹ N / M › — step through the comparisons already shown this streak. */
+.rank-compare-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rank-compare-pos {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 44px;
+  text-align: center;
+}
+
+.rank-compare-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.rank-compare-answer-note {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* The panel the user picked for this comparison (highlighted on revisit). */
+.rank-compare-panel-picked {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+/* Staged as a joint top pick — dashed reads as pending, not yet answered. */
+.rank-compare-panel-staged {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+.rank-compare-pick-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.rank-compare-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.rank-compare-panels {
+  display: grid;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.rank-compare-panels-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.rank-compare-panels-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.rank-compare-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: var(--bg);
+}
+
+.rank-compare-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.rank-compare-key {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 12px;
+}
+
+.rank-compare-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rank-compare-count {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Same thumb sizing as the rating screen — more images just means more scroll. */
+.rank-compare-thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-auto-rows: min-content;
+  align-content: start;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Image target: one large full-size photo per panel, filling the space
+   between the panel header and the action buttons. */
+.rank-compare-photo {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.rank-compare-photo img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.rank-compare-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.rank-compare-actions .btn-primary {
+  flex: 1;
+}
+
+.rank-compare-footer {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}

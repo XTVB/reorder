@@ -70,6 +70,9 @@ export const DINOV3_PATCHES_FULL_FILE = "dinov3_patches_full_hash_cache.npy";
 export const DINOV3_PATCHES_HASHES_FILE = "dinov3_patches_hashes.json";
 export const CONTACT_SHEETS_DIRNAME = "contact_sheets";
 export const CZKAWKA_SESSION_FILE = "czkawka_session.json";
+export const RANK_SCORES_FILE = "group_rank_scores.json";
+export const IMAGE_RANK_SCORES_FILE = "image_rank_scores.json";
+export const RANK_JUDGEMENTS_FILE = "rank_judgements.json";
 
 // Constraint files (Rust-resolved, inside .reorder-cache/)
 export const CANNOT_LINK_RESOLVED_FILE = ".cannot_link_resolved.json";
@@ -98,6 +101,16 @@ export function contactSheetsDir(targetDir: string): string {
 }
 export function czkawkaSessionPath(targetDir: string): string {
   return join(cacheDir(targetDir), CZKAWKA_SESSION_FILE);
+}
+/** Persisted Rank engine state. Groups and ungrouped images rank into separate
+ * files so switching target in the modal never prunes the other's scores. */
+export function rankScoresPath(targetDir: string, target: "groups" | "images" = "groups"): string {
+  return join(cacheDir(targetDir), target === "images" ? IMAGE_RANK_SCORES_FILE : RANK_SCORES_FILE);
+}
+/** The raw judgements behind those scores — one file for both targets, since
+ * it's a log rather than state. Irreplaceable: it can't be recomputed. */
+export function rankJudgementsPath(targetDir: string): string {
+  return join(cacheDir(targetDir), RANK_JUDGEMENTS_FILE);
 }
 /** Current hash-tool pipeline version prefix (v2 = fast_image_resize
  * pre-shrink; v3 = flop-only orientation hashes + luma JPEG decode). Bump the

@@ -2,6 +2,8 @@
 // position-indexed cluster artifacts (linkage tree, rerank matrix) whose row
 // indices are invalidated by any file removal. Used by the reorder delete
 // route and the czkawka compare actions. Caller must hold withRenameLock.
+// (Rank scores need no pruning — they're keyed by content hash, so a deleted
+// photo's entry simply stops resolving; see fs/rank-scores.ts.)
 
 import {
   invalidateClusterCache,

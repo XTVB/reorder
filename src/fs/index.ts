@@ -46,9 +46,14 @@ export {
   patchDistMatrixPath,
   pendingFolderSavePath,
   pendingRenamePath,
+  rankJudgementsPath,
+  rankScoresPath,
   rerankDistMatrixPath,
   tagsPath,
 } from "./paths.ts";
+export type { RankJudgementsFile, RankSession, RankTarget } from "./rank-judgements.ts";
+export { loadRankJudgements, saveRankSession } from "./rank-judgements.ts";
+export { loadImageRankScores, saveImageRankScores } from "./rank-scores.ts";
 export type { RecoveryResult } from "./recovery.ts";
 export { recoverPendingRename } from "./recovery.ts";
 export {

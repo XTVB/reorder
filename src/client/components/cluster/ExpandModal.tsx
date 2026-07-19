@@ -102,24 +102,19 @@ export function ExpandModal() {
 
   const allFilenames = useMemo(() => allFiltered.map((c) => c.filename), [allFiltered]);
 
+  // Escape-to-close is handled by Modal; only Cmd/Ctrl+Enter is ours.
   useEffect(() => {
     if (!expand || lightboxOpen) return;
     function handleKey(e: KeyboardEvent) {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-        if (e.key === "Escape") closeExpand();
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeExpand();
-      } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         confirmExpand();
       }
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [expand, closeExpand, confirmExpand, lightboxOpen]);
+  }, [expand, confirmExpand, lightboxOpen]);
 
   if (!expand || !clusterData || !source) return null;
 

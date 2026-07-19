@@ -19,7 +19,12 @@ export function useDismissOnOutside(
       if (ref.current && !ref.current.contains(e.target as Node)) onDismissRef.current();
     }
     function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onDismissRef.current();
+      if (e.key !== "Escape") return;
+      // Consume the Escape: an open popover is the topmost layer, and the
+      // keypress must not also close a modal underneath (Modal listens on
+      // window, which this document-level stop precedes).
+      e.stopPropagation();
+      onDismissRef.current();
     }
     document.addEventListener("mousedown", handleClick);
     document.addEventListener("keydown", handleKey);

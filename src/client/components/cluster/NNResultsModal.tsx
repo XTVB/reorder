@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useDismissOnOutside } from "../../hooks/useDismissOnOutside.ts";
-import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
 import { useGroupStore } from "../../stores/groupStore.ts";
 import { useNNQueryStore } from "../../stores/nnQueryStore.ts";
@@ -48,22 +47,7 @@ export function NNResultsModal() {
   const addSelectedToSourceCluster = useNNQueryStore((s) => s.addSelectedToSourceCluster);
   const sourceClusterLabel = useNNQueryStore((s) => s.sourceClusterLabel);
 
-  const lightboxOpen = useLightboxStore((s) => s.open);
-
   const resultFilenames = useMemo(() => results.map((r) => r.filename), [results]);
-
-  useEffect(() => {
-    if (!open || lightboxOpen) return;
-    function handleKey(e: KeyboardEvent) {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === "Escape") {
-        e.preventDefault();
-        close();
-      }
-    }
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [open, close, lightboxOpen]);
 
   if (!open) return null;
 

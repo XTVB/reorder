@@ -352,6 +352,7 @@ export function NamingRulesModal({ onClose }: NamingRulesModalProps) {
         className="review-modal"
         headerClassName="review-modal-header"
         bodyClassName="review-modal-body"
+        closeOnEscape={false}
       >
         {!current ? (
           <div className="review-empty">No groups to rename.</div>

@@ -1,4 +1,6 @@
 import type React from "react";
+import { useEffect } from "react";
+import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { cn } from "../../utils/helpers.ts";
 
 export function Modal({
@@ -9,6 +11,7 @@ export function Modal({
   className,
   headerClassName,
   bodyClassName,
+  closeOnEscape = true,
 }: {
   title: React.ReactNode;
   onClose: () => void;
@@ -17,7 +20,22 @@ export function Modal({
   className?: string;
   headerClassName?: string;
   bodyClassName?: string;
+  /** Opt out when the caller runs its own Escape handling (e.g. backing out
+   * of a sub-view first) — otherwise both listeners fire on one keypress. */
+  closeOnEscape?: boolean;
 }) {
+  // Escape closes the modal — unless the lightbox is layered on top of it.
+  useEffect(() => {
+    if (!closeOnEscape) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      if (useLightboxStore.getState().open) return;
+      onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, closeOnEscape]);
+
   return (
     <div
       className="modal-backdrop"

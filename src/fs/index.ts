@@ -18,11 +18,17 @@ export type { FolderData, FolderSaveRequest } from "./folder-save.ts";
 export { executeFolderSave, listFolderData, listSubdirectories } from "./folder-save.ts";
 export { loadGroups, writeGroupsFile } from "./groups.ts";
 export { assertFilesExist, assertWritable, extractTitle } from "./helpers.ts";
-export { isImageFile, listImages } from "./images.ts";
+export {
+  type ImageFileRef,
+  isImageFile,
+  listImages,
+  listImagesRecursive,
+} from "./images.ts";
 export { withRenameLock } from "./lock.ts";
 export type { OrganizeGroup, OrganizeMapping, OrganizeOptions } from "./organize.ts";
 export { computeOrganize, executeOrganize } from "./organize.ts";
 export {
+  CZKAWKA_HASH_CACHE_PREFIX,
   cacheDir,
   constraintsPath,
   contactSheetsDir,

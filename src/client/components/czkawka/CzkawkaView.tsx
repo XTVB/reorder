@@ -286,8 +286,15 @@ function StepThroughView({ onRankingToggle }: { onRankingToggle: () => void }) {
 
   const group = groups[currentIndex];
   const groupKey = group?.map(imgPath).join(" ") ?? "";
-  const multiDir = dirs.length > 1;
+  // Prefix names with their folder when comparing multiple dirs, or when a
+  // recursive scan means same-named files can live in different sub-folders.
+  const multiDir = dirs.length > 1 || dirs.some((d) => d.recursive);
   const refDir = dirs.find((d) => d.reference)?.path ?? null;
+
+  // Total matched files — the number that tracks the similarity threshold
+  // intuitively (group count alone is misleading: a looser threshold can
+  // merge groups, so fewer groups can mean more matched files).
+  const totalFiles = useMemo(() => groups.reduce((n, g) => n + g.length, 0), [groups]);
 
   // Per-image display data (name, urls, ref flag) for the current group.
   const items: DisplayImage[] = useMemo(() => {
@@ -505,16 +512,32 @@ function StepThroughView({ onRankingToggle }: { onRankingToggle: () => void }) {
     [showToast],
   );
 
+  // The lightbox navigates only the images under comparison, minus any
+  // excluded from consideration — arrow keys never land on something the
+  // user has dismissed from the compare strip or the Y/W ranking. A directly
+  // clicked image is always included even when excluded.
+  const lightboxItems = useMemo(
+    () => comparedItems.filter((it) => !excluded.has(it.path)),
+    [comparedItems, excluded],
+  );
+
+  const pinnedPathRef = useRef<string | null>(null);
   const openLightboxAt = useCallback(
     (path: string) => {
-      if (items.length === 0) return;
+      const pinned = !lightboxItems.some((it) => it.path === path);
+      pinnedPathRef.current = pinned ? path : null;
+      const candidates = pinned
+        ? comparedItems.filter((it) => !excluded.has(it.path) || it.path === path)
+        : lightboxItems;
+      const idx = candidates.findIndex((it) => it.path === path);
+      if (idx === -1) return;
       openLightbox(
-        items.map((it) => it.displayName),
-        items.findIndex((it) => it.path === path),
-        { trashMark: false, urls: items.map((it) => it.fullUrl) },
+        candidates.map((it) => it.displayName),
+        idx,
+        { trashMark: false, urls: candidates.map((it) => it.fullUrl) },
       );
     },
-    [items, openLightbox],
+    [lightboxItems, comparedItems, excluded, openLightbox],
   );
 
   // ── Effects: header subtitle, lightbox sync, preloading ─────────────
@@ -528,16 +551,21 @@ function StepThroughView({ onRankingToggle }: { onRankingToggle: () => void }) {
     return () => setHeaderSubtitle("");
   }, [groups.length, currentIndex, setHeaderSubtitle]);
 
-  // Keep an open lightbox in sync when actions mutate the current group —
-  // updateFilenames preserves zoom/pan (no remount) and closes on empty.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: sync on group identity change only
+  // Keep an open lightbox in sync when actions mutate the current group or
+  // the compare/exclusion sets change — updateFilenames preserves zoom/pan
+  // (no remount) and closes on empty. A directly-clicked excluded image
+  // (pinned at open) stays in the set rather than vanishing mid-view.
   useEffect(() => {
     if (!useLightboxStore.getState().open) return;
+    const pinned = pinnedPathRef.current;
+    const items = pinned
+      ? comparedItems.filter((it) => !excluded.has(it.path) || it.path === pinned)
+      : lightboxItems;
     updateLightboxFilenames(
       items.map((it) => it.displayName),
       items.map((it) => it.fullUrl),
     );
-  }, [groupKey, updateLightboxFilenames]);
+  }, [lightboxItems, comparedItems, excluded, updateLightboxFilenames]);
 
   // Preload the next group's full-size images so stepping feels instant.
   useEffect(() => {
@@ -670,18 +698,21 @@ function StepThroughView({ onRankingToggle }: { onRankingToggle: () => void }) {
     );
   }
 
-  // A run that found nothing (and where nothing was resolved this session)
-  // reads as "no duplicates"; an emptied-out group list after actions is the
-  // done screen below.
+  // Before the first run this is the start screen (nothing runs until the
+  // button is clicked); after a run that found nothing (and where nothing was
+  // resolved this session) it reads as "no duplicates". An emptied-out group
+  // list after actions is the done screen below.
   if (groups.length === 0 && historyLen === 0 && trashedCount === 0 && undoDepth === 0) {
     return (
       <div className="czkawka-view">
         <div className="czkawka-center">
-          <div className="czkawka-center-title">No similar images found</div>
+          <div className="czkawka-center-title">
+            {runStats ? "No similar images found" : "Find duplicate images"}
+          </div>
           <div className="czkawka-center-desc">
             {runStats
               ? `Compared ${runStats.cached + runStats.computed} images — all distinct at this threshold.`
-              : "Run a comparison to find duplicate and near-duplicate images."}
+              : "Run a comparison to hash the configured folders and find duplicate and near-duplicate images."}
           </div>
           <button className="btn btn-primary" onClick={runComparison}>
             Run Comparison
@@ -735,6 +766,11 @@ function StepThroughView({ onRankingToggle }: { onRankingToggle: () => void }) {
         />
         <span className="czkawka-progress-text">
           {currentIndex + 1} / {groups.length}
+          <span className="czkawka-progress-stats">
+            {" "}
+            · {totalFiles} file{totalFiles === 1 ? "" : "s"} in {groups.length} group
+            {groups.length === 1 ? "" : "s"}
+          </span>
           {refDir !== null && (
             <span className="czkawka-progress-stats"> · ref: {dirBase(refDir)}</span>
           )}
@@ -849,9 +885,9 @@ function StepThroughView({ onRankingToggle }: { onRankingToggle: () => void }) {
             className="btn"
             onClick={applyAllComputed}
             disabled={computedDisabled}
-            title="Auto-resolve consecutive groups with a clear winner; stops at the first tie"
+            title="Keep the ranking winner in every consecutive group with a clear winner; stops at the first tie"
           >
-            Apply All
+            Auto-keep All
           </button>
         </div>
 
@@ -868,9 +904,9 @@ function StepThroughView({ onRankingToggle }: { onRankingToggle: () => void }) {
             className="btn"
             onClick={applyAllCopyReplace}
             disabled={!copyReplaceReady}
-            title="Auto copy-replace consecutive groups with clear source+target; stops at the first tie"
+            title="Copy-replace every consecutive group with a clear source and target; stops at the first tie"
           >
-            Apply All
+            Auto-replace All
           </button>
         </div>
 
@@ -920,25 +956,15 @@ function StepThroughView({ onRankingToggle }: { onRankingToggle: () => void }) {
   );
 }
 
-// ── Mount wrapper: restore the persisted session, auto-run when empty ───
+// ── Mount wrapper: restore the persisted session (no auto-run — hashing
+// only starts from the Run Comparison button) ───────────────────────────
 
 export function CzkawkaView() {
-  const loaded = useCzkawkaStore((s) => s.loaded);
   const [rankingOpen, setRankingOpen] = useState(false);
-  const autoRan = useRef(false);
 
   useEffect(() => {
     void useCzkawkaStore.getState().loadExisting();
   }, []);
-
-  useEffect(() => {
-    if (!loaded || autoRan.current) return;
-    autoRan.current = true;
-    const s = useCzkawkaStore.getState();
-    if (s.groups.length === 0 && s.undoDepth === 0 && !s.loading && !s.error) {
-      void s.runComparison();
-    }
-  }, [loaded]);
 
   return (
     <>

@@ -2,7 +2,7 @@
 //
 // `run` is an SSE compute job (shares the cluster job mutex): content-hash
 // every image across the configured directories, perceptually hash unique
-// contents via rust/hash-tool (original + flip + flop, so mirrored duplicates
+// contents via rust/hash-tool (original + flop/mirror, so mirrored duplicates
 // match), then group by Hamming distance. Hashes are cached per directory and
 // per (alg, filter, size) config, keyed by content hash, so renames never
 // invalidate the cache and exact duplicates hash once.
@@ -18,18 +18,20 @@
 // lock, journalling every mutation to .reorder-cache/czkawka_session.json so
 // `undo` can rename files back out of ~/.Trash even after a server restart.
 
-import { createHash } from "node:crypto";
-import { copyFile, mkdir, open, stat, unlink } from "node:fs/promises";
+import { copyFile, mkdir, readdir, stat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { HASH_TOOL_BINARY, spawnJSON } from "../../cluster/index.ts";
-import { pruneContentHashes } from "../../fs/content-hashes.ts";
+import { computeContentHash, pruneContentHashes } from "../../fs/content-hashes.ts";
 import {
+  CZKAWKA_HASH_CACHE_PREFIX,
   type CzkawkaSessionData,
   cacheDir,
   czkawkaHashCachePath,
   isImageFile,
   listImages,
+  listImagesRecursive,
+  listSubdirectories,
   loadCzkawkaSession,
   readJsonTolerant,
   restoreFromTrash,
@@ -78,21 +80,30 @@ function expandHome(p: string): string {
   return p.startsWith("~/") || p === "~" ? join(homedir(), p.slice(1)) : p;
 }
 
-/** Dedupe + resolve the requested dirs, forcing targetDir into the list (a
- * request entry may flip its reference flag). */
+/** Dedupe + resolve the requested dirs. The launch dir is no longer forced in
+ * — two unrelated dirs can be compared — but an empty request falls back to
+ * it so a fresh session still has something to scan. */
 function normalizeDirs(targetDir: string, raw: unknown): CzkawkaDirEntry[] | string {
-  const list: CzkawkaDirEntry[] = [{ path: resolve(targetDir), reference: false }];
+  const list: CzkawkaDirEntry[] = [];
   if (Array.isArray(raw)) {
-    for (const item of raw as { path?: unknown; reference?: unknown }[]) {
+    for (const item of raw as {
+      path?: unknown;
+      reference?: unknown;
+      recursive?: unknown;
+    }[]) {
       if (!item || typeof item.path !== "string" || item.path.trim() === "") continue;
       const path = resolve(expandHome(item.path.trim()));
       const existing = list.find((d) => d.path === path);
       if (existing) {
         existing.reference = existing.reference || item.reference === true;
+        existing.recursive = existing.recursive || item.recursive === true;
       } else {
-        list.push({ path, reference: item.reference === true });
+        list.push({ path, reference: item.reference === true, recursive: item.recursive === true });
       }
     }
+  }
+  if (list.length === 0) {
+    list.push({ path: resolve(targetDir), reference: false, recursive: false });
   }
   if (list.filter((d) => d.reference).length > 1) {
     return "At most one directory can be marked as the reference";
@@ -114,30 +125,11 @@ function parseRunConfig(targetDir: string, body: Record<string, unknown>): RunCo
   return { hashAlg, imageFilter, hashSize, similarity, dirs };
 }
 
-// ── Content hashing (blake2b of first 16KB + filesize, matching the
-//    extraction pipeline's rename-surviving convention) ─────────────────
-
-async function computeContentHash(filePath: string): Promise<{ hash: string; size: number }> {
-  const file = await open(filePath, "r");
-  try {
-    const buf = Buffer.alloc(16384);
-    const { bytesRead } = await file.read(buf, 0, 16384);
-    const stat = await file.stat();
-    const h = createHash("blake2b256");
-    h.update(buf.subarray(0, bytesRead));
-    h.update(String(stat.size));
-    return { hash: h.digest("hex"), size: stat.size };
-  } finally {
-    await file.close();
-  }
-}
-
 // ── Perceptual-hash cache (per dir + config, keyed by content hash) ─────
 
 interface CachedHashEntry {
-  /** base64 image_hasher bytes for the original / vertical flip / mirror. */
+  /** base64 image_hasher bytes for the original / horizontal mirror (flop). */
   hash: string;
-  flipHash: string;
   flopHash: string;
   width: number;
   height: number;
@@ -149,7 +141,6 @@ interface HashToolResult {
   results: {
     key: string;
     hash: string;
-    flipHash: string;
     flopHash: string;
     width: number;
     height: number;
@@ -159,23 +150,31 @@ interface HashToolResult {
 
 // ── Hamming comparison + grouping ──────────────────────────────────────
 
-const POPCOUNT = new Uint8Array(256);
-for (let i = 0; i < 256; i++) {
-  POPCOUNT[i] = (i & 1) + POPCOUNT[i >>> 1]!;
+function popcount32(v: number): number {
+  let x = v - ((v >>> 1) & 0x55555555);
+  x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
+  x = (x + (x >>> 4)) & 0x0f0f0f0f;
+  return (x * 0x01010101) >>> 24;
 }
 
-function hamming(a: Uint8Array, b: Uint8Array): number {
+/** Hashes are compared word-wise (they're stored as Uint32Array); the compare
+ * phase is O(n²) pairs × 5 orientations, so this inner loop matters. */
+function hamming(a: Uint32Array, b: Uint32Array): number {
   let dist = 0;
   const len = Math.min(a.length, b.length);
   for (let i = 0; i < len; i++) {
-    dist += POPCOUNT[a[i]! ^ b[i]!]!;
+    dist += popcount32(a[i]! ^ b[i]!);
   }
   return dist;
 }
 
 interface FileRef {
+  /** Directory the file actually lives in (a sub-dir when a root recurses). */
   dir: string;
   filename: string;
+  /** The configured root dir this file was scanned under — used for ref/rank
+   * membership and for keying the per-root hash cache. */
+  root: string;
 }
 
 interface UniqueEntry {
@@ -184,19 +183,18 @@ interface UniqueEntry {
   size: number;
   width: number;
   height: number;
-  hash: Uint8Array;
-  flip: Uint8Array;
-  flop: Uint8Array;
+  hash: Uint32Array;
+  flop: Uint32Array;
 }
 
-/** Orientation-aware distance. Comparing both flips against both originals
- * guards against resize-rounding asymmetries; flip-vs-flip combos are
- * redundant (flipping both images preserves Hamming distance). */
+/** Orientation-aware distance: original plus the horizontal mirror (flop) —
+ * mirrored duplicates happen in practice, upside-down ones don't, so no
+ * vertical-flip hash. Comparing the flop in both directions guards against
+ * resize-rounding asymmetries; flop-vs-flop is redundant (mirroring both
+ * images preserves Hamming distance). */
 function orientedDistance(a: UniqueEntry, b: UniqueEntry): number {
-  let d = hamming(a.hash, b.hash);
-  d = Math.min(d, hamming(a.hash, b.flip), hamming(a.flip, b.hash));
-  d = Math.min(d, hamming(a.hash, b.flop), hamming(a.flop, b.hash));
-  return d;
+  const d = hamming(a.hash, b.hash);
+  return Math.min(d, hamming(a.hash, b.flop), hamming(a.flop, b.hash));
 }
 
 interface GroupMember {
@@ -206,94 +204,129 @@ interface GroupMember {
 
 function expandGroup(
   members: GroupMember[],
-  dirRank: (dir: string) => number,
+  dirRank: (root: string) => number,
   collator: Intl.Collator,
 ): CzkawkaImage[] {
-  const images: CzkawkaImage[] = members.flatMap(({ entry, difference }) =>
-    entry.files.map(({ dir, filename }) => ({
-      dir,
-      filename,
-      size: entry.size,
-      width: entry.width,
-      height: entry.height,
-      difference,
+  const rows = members.flatMap(({ entry, difference }) =>
+    entry.files.map((f) => ({
+      root: f.root,
+      img: {
+        dir: f.dir,
+        filename: f.filename,
+        size: entry.size,
+        width: entry.width,
+        height: entry.height,
+        difference,
+      } satisfies CzkawkaImage,
     })),
   );
   // Reference images lead, then the launch dir, then extras.
-  images.sort(
+  rows.sort(
     (a, b) =>
-      dirRank(a.dir) - dirRank(b.dir) ||
-      collator.compare(join(a.dir, a.filename), join(b.dir, b.filename)),
+      dirRank(a.root) - dirRank(b.root) ||
+      collator.compare(join(a.img.dir, a.img.filename), join(b.img.dir, b.img.filename)),
   );
-  return images;
+  return rows.map((r) => r.img);
 }
 
 /** Grouping over unique contents, then expansion to files. A content hash
  * carrying 2+ files forms a group even when no other content is similar —
  * that's the exact-duplicate case.
  *
- * Without a reference dir: greedy single-link over all entries.
+ * Czkawka-style best-anchor assignment: collect every in-tolerance pair,
+ * walk them tightest-first, and attach each entry to its most-similar anchor
+ * ("parent"), re-parenting when a closer anchor turns up. Groups stay
+ * star-shaped — every member is within maxDistance of its group's anchor, so
+ * no transitive chaining — but unlike the old file-order greedy the outcome
+ * doesn't depend on filename order, and a tight pair can never be broken up
+ * by a looser neighbor that happened to sort first. An entry can still go
+ * unreported when its only in-range neighbor is bound tighter to a different
+ * anchor it can't reach — inherent to disjoint star groups (czkawka too).
  *
  * With a reference dir the question becomes "which images match something in
- * the reference dir": each reference entry seeds a group and absorbs matching
- * non-reference entries. Reference entries are never compared to each other,
- * and neither are non-reference entries, so intra-reference and
- * intra-working-dir duplicates are not reported. (An entry whose identical
- * content exists on both sides is a ref↔non-ref exact match by itself.) */
+ * the reference dir": only reference→non-reference edges exist (czkawka does
+ * the same — reference hashes query a tree of working-dir hashes), so anchors
+ * are reference entries and each working-dir entry joins its closest
+ * reference. Intra-reference and intra-working-dir duplicates are not
+ * reported. (An entry whose identical content exists on both sides is a
+ * ref↔non-ref exact match by itself.) */
 function buildGroups(
   entries: UniqueEntry[],
   maxDistance: number,
   refDir: string | null,
-  dirRank: (dir: string) => number,
+  dirRank: (root: string) => number,
 ): CzkawkaGroup[] {
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-  const groups: CzkawkaGroup[] = [];
-
-  if (refDir !== null) {
-    const isRefEntry = (e: UniqueEntry) => e.files.some((f) => f.dir === refDir);
-    const refEntries = entries.filter(isRefEntry);
-    const nonRefEntries = entries.filter((e) => !isRefEntry(e));
-    const claimed = new Array<boolean>(nonRefEntries.length).fill(false);
-
-    for (const ref of refEntries) {
-      const members: GroupMember[] = [{ entry: ref, difference: 0 }];
-      for (let j = 0; j < nonRefEntries.length; j++) {
-        if (claimed[j]) continue;
-        const dist = orientedDistance(ref, nonRefEntries[j]!);
-        if (dist <= maxDistance) {
-          claimed[j] = true;
-          members.push({ entry: nonRefEntries[j]!, difference: dist });
-        }
-      }
-      const images = expandGroup(members, dirRank, collator);
-      // Needs at least one image on each side of the reference boundary.
-      if (images.some((i) => i.dir === refDir) && images.some((i) => i.dir !== refDir)) {
-        groups.push({ images });
-      }
-    }
-    return groups;
-  }
-
   const n = entries.length;
-  const visited = new Array<boolean>(n).fill(false);
+  const isRef = refDir === null ? null : entries.map((e) => e.files.some((f) => f.root === refDir));
+
+  // Candidate edges: a = anchor candidate, b = member candidate. Entries are
+  // pre-sorted (reference dir first, then launch dir, then name), so ties
+  // deterministically prefer the earlier entry as anchor.
+  const edges: { a: number; b: number; d: number }[] = [];
   for (let i = 0; i < n; i++) {
-    if (visited[i]) continue;
-    visited[i] = true;
-    const members: GroupMember[] = [{ entry: entries[i]!, difference: 0 }];
-
-    for (let j = i + 1; j < n; j++) {
-      if (visited[j]) continue;
-      const dist = orientedDistance(entries[i]!, entries[j]!);
-      if (dist <= maxDistance) {
-        visited[j] = true;
-        members.push({ entry: entries[j]!, difference: dist });
-      }
+    if (isRef !== null && !isRef[i]) continue;
+    for (let j = isRef !== null ? 0 : i + 1; j < n; j++) {
+      if (isRef !== null && (j === i || isRef[j])) continue;
+      const d = orientedDistance(entries[i]!, entries[j]!);
+      if (d <= maxDistance) edges.push({ a: i, b: j, d });
     }
+  }
+  edges.sort((x, y) => x.d - y.d || x.a - y.a || x.b - y.b);
 
-    const images = expandGroup(members, dirRank, collator);
-    if (images.length >= 2) groups.push({ images });
+  // Best-anchor assignment, tightest edges first.
+  const parent = new Int32Array(n).fill(-1);
+  const parentDist = new Int32Array(n);
+  const childCount = new Uint32Array(n);
+  const detach = (c: number) => {
+    childCount[parent[c]!]!--;
+    parent[c] = -1;
+  };
+  /** Try to attach b as a member of a's group. */
+  const attach = (a: number, b: number, d: number): boolean => {
+    if (childCount[b]! > 0) return false; // b anchors its own group
+    if (parent[b] !== -1 && parentDist[b]! <= d) return false; // b bound tighter elsewhere
+    if (parent[a] !== -1) {
+      if (parentDist[a]! <= d) return false; // a bound tighter elsewhere
+      detach(a); // a's tightest relation is this edge — promote it to anchor
+    }
+    if (parent[b] !== -1) detach(b);
+    parent[b] = a;
+    parentDist[b] = d;
+    childCount[a]!++;
+    return true;
+  };
+  for (const { a, b, d } of edges) {
+    // Without a reference dir roles are symmetric — try the reverse too.
+    if (!attach(a, b, d) && refDir === null) attach(b, a, d);
   }
 
+  // Emit groups in entry order: anchors with their members, plus unattached
+  // exact-duplicate contents (2+ files sharing a content hash; in reference
+  // mode only when those files span the reference boundary).
+  const childrenOf = new Map<number, GroupMember[]>();
+  for (let j = 0; j < n; j++) {
+    const p = parent[j]!;
+    if (p === -1) continue;
+    const list = childrenOf.get(p) ?? [];
+    list.push({ entry: entries[j]!, difference: parentDist[j]! });
+    childrenOf.set(p, list);
+  }
+  const groups: CzkawkaGroup[] = [];
+  for (let i = 0; i < n; i++) {
+    const e = entries[i]!;
+    if (childCount[i]! > 0) {
+      const members = [{ entry: e, difference: 0 }, ...childrenOf.get(i)!];
+      groups.push({ images: expandGroup(members, dirRank, collator) });
+    } else if (parent[i] === -1 && e.files.length >= 2) {
+      const spansBoundary =
+        refDir === null ||
+        (e.files.some((f) => f.root === refDir) && e.files.some((f) => f.root !== refDir));
+      if (spansBoundary) {
+        groups.push({ images: expandGroup([{ entry: e, difference: 0 }], dirRank, collator) });
+      }
+    }
+  }
   return groups;
 }
 
@@ -321,8 +354,15 @@ async function runComparison(
   await withRenameLock(async () => {
     const allFiles: FileRef[] = [];
     for (const d of config.dirs) {
-      const fns = await listImages(d.path);
-      for (const filename of fns) allFiles.push({ dir: d.path, filename });
+      if (d.recursive) {
+        for (const r of await listImagesRecursive(d.path)) {
+          allFiles.push({ dir: r.dir, filename: r.filename, root: d.path });
+        }
+      } else {
+        for (const filename of await listImages(d.path)) {
+          allFiles.push({ dir: d.path, filename, root: d.path });
+        }
+      }
     }
     const BATCH = 128;
     for (let i = 0; i < allFiles.length; i += BATCH) {
@@ -381,7 +421,6 @@ async function runComparison(
     for (const r of toolOut.results) {
       cache[r.key] = {
         hash: r.hash,
-        flipHash: r.flipHash,
         flopHash: r.flopHash,
         width: r.width,
         height: r.height,
@@ -399,11 +438,17 @@ async function runComparison(
   for (const d of config.dirs) {
     const out: HashCache = {};
     for (const [ch, { files }] of byContent) {
-      if (cache[ch] && files.some((f) => f.dir === d.path)) out[ch] = cache[ch];
+      if (cache[ch] && files.some((f) => f.root === d.path)) out[ch] = cache[ch];
     }
     try {
       await mkdir(cacheDir(d.path), { recursive: true });
       await writeJsonAtomic(cachePathFor(d.path), out, { pretty: false, atomic: true });
+      // Caches from older pipeline versions are dead weight — prune them.
+      for (const f of await readdir(cacheDir(d.path))) {
+        if (f.startsWith("czkawka_hashes_") && !f.startsWith(CZKAWKA_HASH_CACHE_PREFIX)) {
+          await unlink(join(cacheDir(d.path), f)).catch(() => {});
+        }
+      }
     } catch {
       log("czkawka", `Could not write hash cache in ${d.path} (read-only?)`);
     }
@@ -413,14 +458,21 @@ async function runComparison(
   // to be reference images and `difference` reads as distance-to-reference.
   onProgress("Comparing hashes...");
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-  const decode = (b64: string) => Uint8Array.from(Buffer.from(b64, "base64"));
+  // Copy into a fresh (aligned, zero-padded to 4 bytes) buffer so a u32 view
+  // is always valid — Buffer.from may return an unaligned pool slice.
+  const decode = (b64: string): Uint32Array => {
+    const raw = Buffer.from(b64, "base64");
+    const padded = new Uint8Array(Math.ceil(raw.length / 4) * 4);
+    padded.set(raw);
+    return new Uint32Array(padded.buffer);
+  };
   const entries: UniqueEntry[] = [];
   for (const [ch, { files, size }] of byContent) {
     const cached = cache[ch];
     if (!cached) continue;
     const sorted = [...files].sort(
       (a, b) =>
-        dirRank(a.dir) - dirRank(b.dir) ||
+        dirRank(a.root) - dirRank(b.root) ||
         collator.compare(join(a.dir, a.filename), join(b.dir, b.filename)),
     );
     entries.push({
@@ -429,13 +481,12 @@ async function runComparison(
       width: cached.width,
       height: cached.height,
       hash: decode(cached.hash),
-      flip: decode(cached.flipHash),
       flop: decode(cached.flopHash),
     });
   }
   entries.sort((a, b) => {
-    const ra = Math.min(...a.files.map((f) => dirRank(f.dir)));
-    const rb = Math.min(...b.files.map((f) => dirRank(f.dir)));
+    const ra = Math.min(...a.files.map((f) => dirRank(f.root)));
+    const rb = Math.min(...b.files.map((f) => dirRank(f.root)));
     if (ra !== rb) return ra - rb;
     return collator.compare(
       join(a.files[0]!.dir, a.files[0]!.filename),
@@ -495,9 +546,14 @@ function stateResponse(targetDir: string, session: CzkawkaSessionData): CzkawkaS
 
 const imgPath = (img: CzkawkaImage) => join(img.dir, img.filename);
 
-/** True when `path` names an image directly inside one of the session dirs. */
+/** True when `path` names an image inside one of the session dirs — directly
+ * for a plain dir, or anywhere in the tree for a recursive one. */
 function isPathInDirs(path: string, dirs: CzkawkaDirEntry[]): boolean {
-  return dirs.some((d) => dirname(path) === d.path) && isImageFile(basename(path));
+  if (!isImageFile(basename(path))) return false;
+  const dir = dirname(path);
+  return dirs.some((d) =>
+    d.recursive ? dir === d.path || dir.startsWith(`${d.path}/`) : dir === d.path,
+  );
 }
 
 // ── Actions ─────────────────────────────────────────────────────────────
@@ -581,9 +637,13 @@ async function applyOperations(targetDir: string, ops: CzkawkaOperation[]): Prom
   // Target-dir files that were trashed get pruned from reorder groups /
   // content hashes; a copy-replace target still exists but with new bytes,
   // so only its (now stale) content-hash entry goes. Files in other dirs
-  // don't touch this project's caches.
+  // don't touch this project's caches. A copy-replace trashes the target's
+  // ORIGINAL bytes (for undo) so it appears in `trashed`, but the filename is
+  // still live on disk — exclude those paths or the file gets yanked from its
+  // reorder group even though it never left.
+  const copiedSet = new Set(copiedTargets);
   const trashedLocal = trashed
-    .filter((t) => dirname(t.path) === targetDir)
+    .filter((t) => dirname(t.path) === targetDir && !copiedSet.has(t.path))
     .map((t) => basename(t.path));
   const warnings = await cleanupAfterDelete(targetDir, trashedLocal);
   const copiedLocal = copiedTargets.filter((p) => dirname(p) === targetDir).map((p) => basename(p));
@@ -652,19 +712,43 @@ export const czkawkaRoutes: RouteHandler = async (req, ctx) => {
     return serveFileWithCache(req, p, "private, max-age=300");
   }
 
-  // POST /api/czkawka/check-dir — validate a directory before adding it
+  // POST /api/czkawka/check-dir — validate a directory before adding it.
+  // Relative paths resolve against the launch dir.
   if (path === "/api/czkawka/check-dir" && req.method === "POST") {
-    const body = (await req.json()) as { path?: string };
+    const body = (await req.json()) as { path?: string; recursive?: boolean };
     const raw = (body.path ?? "").trim();
     if (!raw) return json({ error: "Path is required" }, 400);
-    const resolved = resolve(expandHome(raw));
+    const resolved = resolve(targetDir, expandHome(raw));
     const s = await stat(resolved).catch(() => null);
     if (!s?.isDirectory()) return json({ error: `Not a directory: ${resolved}` }, 400);
     try {
-      const imageCount = (await listImages(resolved)).length;
+      const imageCount = body.recursive
+        ? (await listImagesRecursive(resolved)).length
+        : (await listImages(resolved)).length;
       return json({ ok: true, path: resolved, imageCount });
     } catch {
       return json({ error: `Cannot read directory: ${resolved}` }, 400);
+    }
+  }
+
+  // GET /api/czkawka/browse?path=… — list sub-directories for the picker.
+  // A relative or ~-path resolves against the launch dir; blank means the
+  // launch dir itself.
+  if (path === "/api/czkawka/browse" && req.method === "GET") {
+    const raw = (new URL(req.url).searchParams.get("path") ?? "").trim();
+    const base = raw ? resolve(targetDir, expandHome(raw)) : targetDir;
+    const s = await stat(base).catch(() => null);
+    if (!s?.isDirectory()) return json({ error: `Not a directory: ${base}` }, 400);
+    try {
+      const dirs = (await listSubdirectories(base)).map((name) => ({
+        name,
+        path: join(base, name),
+      }));
+      const imageCount = (await listImages(base)).length;
+      const parent = dirname(base);
+      return json({ path: base, parent: parent === base ? null : parent, imageCount, dirs });
+    } catch {
+      return json({ error: `Cannot read directory: ${base}` }, 400);
     }
   }
 

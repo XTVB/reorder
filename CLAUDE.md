@@ -12,7 +12,7 @@ Local macOS tool for organizing image directories. Browser UI with four modes:
 1. **Reorder** — drag-and-drop, group, rename to sequential numbering, organize into subfolders
 2. **Cluster** — PE-Core-G + DINOv3 + color visual clustering to discover photoshoot sets
 3. **Merge Suggestions** — DINOv3 patch matching finds groups likely to belong together
-4. **Czkawka** — duplicate finder + step-through resolver: `rust/hash-tool` (image_hasher, same crate as czkawka) hashes originals + flips/flops (catches mirrored dupes), hashes cached per dir + config keyed by content hash in `.reorder-cache/czkawka_hashes_*.json`; supports comparing multiple directories, optionally with one as czkawka-style "reference" (only ref↔non-ref matches reported, intra-dir dupes skipped); trash/copy-replace actions run under the rename lock with a restorable undo journal (`czkawka_session.json`, rename-based ~/.Trash moves)
+4. **Czkawka** — duplicate finder + step-through resolver: `rust/hash-tool` (image_hasher, same crate as czkawka; luma-only JPEG decode + SIMD pre-shrink) hashes originals + flops/mirrors (catches mirrored dupes; upside-down ones deliberately not covered), hashes cached per dir + config keyed by content hash in `.reorder-cache/czkawka_hashes_v*.json` (version bumps when the pipeline changes); supports comparing multiple directories, optionally with one as czkawka-style "reference" (only ref↔non-ref matches reported, intra-dir dupes skipped); trash/copy-replace actions run under the rename lock with a restorable undo journal (`czkawka_session.json`, rename-based ~/.Trash moves)
 
 Workflow is iterative: cluster → accept groups → reorder/rename → re-cluster.
 

@@ -32,7 +32,8 @@ export type ConditionType =
   | "path_regex"
   | "resolution"
   | "file_size"
-  | "filename_order";
+  | "filename_order"
+  | "filename_number";
 
 export interface RankingCondition {
   id: string;
@@ -72,6 +73,7 @@ export const CONDITION_TYPES: [ConditionType, string][] = [
   ["resolution", "Resolution"],
   ["file_size", "File size"],
   ["filename_order", "Filename order"],
+  ["filename_number", "Filename number"],
 ];
 
 function defaultGuard(): GuardConfig {
@@ -193,16 +195,41 @@ function scoreImage(img: CzkawkaImage, cond: RankingCondition): number {
       const sz = img.size ?? 0;
       return cond.config.prefer === "bigger" ? sz : -sz;
     }
-    case "filename_order": {
+    case "filename_number": {
       // Last numeric run in the stem, so "IMG_0042 (1).jpg" ranks by 1.
       const stem = img.filename.replace(/\.[^.]+$/, "");
       const matches = stem.match(/\d+/g);
       const num = matches ? Number.parseInt(matches[matches.length - 1]!, 10) : 0;
       return cond.config.prefer === "lower" ? -num : num;
     }
+    // filename_order is scored pool-relative in scorePool (natural sort of the
+    // whole basename), so it never reaches this per-image path.
     default:
       return 0;
   }
+}
+
+const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+/** Score a whole candidate pool at once. Most conditions are per-image, but
+ * filename_order needs the pool to natural-sort the basenames against each
+ * other ("string-2" before "string-10", "atring-1" before either). Earliest
+ * name gets the highest score for prefer "lower"; ties share a score so equal
+ * basenames stay co-winners. */
+function scorePool(pool: CzkawkaImage[], cond: RankingCondition): number[] {
+  if (cond.type !== "filename_order") return pool.map((img) => scoreImage(img, cond));
+
+  const stems = pool.map((img) => img.filename.replace(/\.[^.]+$/, ""));
+  const order = pool.map((_, i) => i).sort((a, b) => naturalCollator.compare(stems[a]!, stems[b]!));
+  const rank = new Array<number>(pool.length);
+  let dense = 0;
+  for (let i = 0; i < order.length; i++) {
+    if (i > 0 && naturalCollator.compare(stems[order[i]!]!, stems[order[i - 1]!]!) !== 0) {
+      dense = i;
+    }
+    rank[order[i]!] = dense;
+  }
+  return pool.map((_, i) => (cond.config.prefer === "higher" ? rank[i]! : -rank[i]!));
 }
 
 function guardMetric(img: CzkawkaImage, attribute: GuardAttribute): number | null {
@@ -282,7 +309,11 @@ export function computeChain(
   let remaining = candidates.map((img, index) => ({ img, index }));
 
   for (const cond of active) {
-    const scored = remaining.map((c) => ({ ...c, score: scoreImage(c.img, cond) }));
+    const scores = scorePool(
+      remaining.map((c) => c.img),
+      cond,
+    );
+    const scored = remaining.map((c, i) => ({ ...c, score: scores[i]! }));
     const maxScore = Math.max(...scored.map((s) => s.score));
     const next = scored.filter((s) => s.score === maxScore);
 

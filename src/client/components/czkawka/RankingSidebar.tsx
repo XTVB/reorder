@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ConditionType,
   GuardAttribute,
@@ -109,6 +109,7 @@ function ConditionRow({
           ["smaller", "Smaller"],
         ];
       case "filename_order":
+      case "filename_number":
         return [
           ["lower", "Lower"],
           ["higher", "Higher"],
@@ -279,6 +280,18 @@ export function RankingSidebar({ open, onClose }: { open: boolean; onClose: () =
   const targetConditions = useCzkawkaRankingStore((s) => s.targetConditions);
   const setContentConditions = useCzkawkaRankingStore((s) => s.setContentConditions);
   const setTargetConditions = useCzkawkaRankingStore((s) => s.setTargetConditions);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, onClose]);
 
   if (!open) return null;
 

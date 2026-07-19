@@ -127,10 +127,12 @@ interface CzkawkaState extends RunConfig {
   setSliderMode: (v: boolean) => void;
 
   /** Validate via the server, then add to the dir list. Returns success. */
-  addDir: (path: string) => Promise<boolean>;
+  addDir: (path: string, recursive?: boolean) => Promise<boolean>;
   removeDir: (path: string) => void;
   /** Mark one dir as reference (or none). */
   setReferenceDir: (path: string | null) => void;
+  /** Toggle recursive sub-folder scanning for a dir. */
+  setRecursiveDir: (path: string, recursive: boolean) => void;
 
   loadExisting: () => Promise<void>;
   runComparison: () => Promise<void>;
@@ -203,19 +205,27 @@ export const useCzkawkaStore = create<CzkawkaState>((set, get) => {
     setSimilarity: (v) => setConfig("similarity", Math.max(0, v)),
     setSliderMode: (v) => set({ sliderMode: v }),
 
-    addDir: async (path) => {
+    addDir: async (path, recursive = false) => {
       try {
         const res = await postJson<{ ok: true; path: string; imageCount: number }>(
           "/api/czkawka/check-dir",
-          { path },
+          { path, recursive },
         );
         const { dirs } = get();
         if (dirs.some((d) => d.path === res.path)) {
           toast("Directory is already in the comparison", "warning");
           return false;
         }
-        set({ dirs: [...dirs, { path: res.path, reference: false }], dirsDirty: true });
-        toast(`Added ${res.path} (${res.imageCount} images)`, "success");
+        set({
+          dirs: [...dirs, { path: res.path, reference: false, recursive }],
+          dirsDirty: true,
+        });
+        toast(
+          `Added ${res.path} (${res.imageCount} image${res.imageCount === 1 ? "" : "s"}${
+            recursive ? ", recursive" : ""
+          })`,
+          "success",
+        );
         return true;
       } catch (err) {
         toast(getErrorMessage(err, "Could not add directory"), "error");
@@ -225,7 +235,11 @@ export const useCzkawkaStore = create<CzkawkaState>((set, get) => {
 
     removeDir: (path) => {
       set((s) => {
-        if (path === s.targetDir) return {};
+        // Keep at least one directory — an empty comparison has nothing to run.
+        if (s.dirs.length <= 1) {
+          toast("At least one directory is required", "warning");
+          return {};
+        }
         return { dirs: s.dirs.filter((d) => d.path !== path), dirsDirty: true };
       });
     },
@@ -233,6 +247,13 @@ export const useCzkawkaStore = create<CzkawkaState>((set, get) => {
     setReferenceDir: (path) => {
       set((s) => ({
         dirs: s.dirs.map((d) => ({ ...d, reference: d.path === path })),
+        dirsDirty: true,
+      }));
+    },
+
+    setRecursiveDir: (path, recursive) => {
+      set((s) => ({
+        dirs: s.dirs.map((d) => (d.path === path ? { ...d, recursive } : d)),
         dirsDirty: true,
       }));
     },

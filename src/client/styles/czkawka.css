@@ -3,30 +3,31 @@
 .czkawka-view {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - var(--header-height));
+  flex: 1;
   min-height: 0;
   overflow: hidden;
 }
 
 /* ── Toolbar (in the app header) ────────────────────────────────────── */
 
-.czkawka-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.czkawka-settings-dropdown {
+  min-width: 220px;
 }
 
-.czkawka-toolbar-config {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.czkawka-export-dropdown {
+  min-width: 180px;
+  gap: 6px;
+}
+
+.czkawka-export-dropdown .btn {
+  justify-content: flex-start;
 }
 
 .czkawka-toolbar-field {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--text-muted);
   white-space: nowrap;
 }
@@ -37,8 +38,9 @@
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
+  height: 30px;
+  padding: 0 9px;
+  font-size: 13px;
 }
 
 .czkawka-input--narrow {
@@ -178,6 +180,30 @@
   border-color: rgba(34, 197, 94, 0.5);
 }
 
+.czkawka-dirs-sub {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.czkawka-dirs-sub:hover {
+  border-color: var(--highlight);
+  color: var(--highlight);
+}
+
+.czkawka-dirs-sub.is-active {
+  background: color-mix(in srgb, var(--highlight) 16%, transparent);
+  color: var(--highlight);
+  border-color: color-mix(in srgb, var(--highlight) 50%, transparent);
+}
+
 .czkawka-dirs-path {
   font-size: 12px;
   white-space: nowrap;
@@ -206,6 +232,12 @@
   color: var(--danger);
 }
 
+.czkawka-dirs-remove:disabled {
+  opacity: 0.3;
+  cursor: default;
+  color: var(--text-muted);
+}
+
 .czkawka-dirs-add {
   display: flex;
   gap: 8px;
@@ -219,6 +251,153 @@
   border-radius: 6px;
   padding: 5px 9px;
   font-size: 12px;
+}
+
+.czkawka-dirs-add-opts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.czkawka-dirs-browsebtn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.czkawka-dirs-browsebtn:hover,
+.czkawka-dirs-browsebtn.is-active {
+  color: var(--text);
+  border-color: var(--highlight);
+}
+
+/* ── Directory browser ──────────────────────────────────────────────── */
+
+.czkawka-browser {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--bg);
+  transition: opacity 0.1s ease;
+}
+
+.czkawka-browser.is-loading {
+  opacity: 0.6;
+}
+
+.czkawka-browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface);
+}
+
+.czkawka-browser-up {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 5px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.czkawka-browser-up:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.czkawka-browser-path {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+.czkawka-browser-count {
+  color: var(--text-muted);
+}
+
+.czkawka-browser-list {
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.czkawka-browser-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 10px;
+  text-align: center;
+}
+
+.czkawka-browser-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+}
+
+.czkawka-browser-row:hover {
+  background: var(--surface-hover);
+}
+
+.czkawka-browser-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  padding: 6px 2px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.czkawka-browser-folder {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.czkawka-browser-match {
+  color: var(--highlight);
+  font-weight: 600;
+}
+
+.czkawka-browser-add {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 5px;
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.czkawka-browser-add:hover {
+  color: var(--success);
+  border-color: var(--success);
 }
 
 .czkawka-dirs-dirty {

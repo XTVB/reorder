@@ -6,6 +6,9 @@ edition = "2024"
 [dependencies]
 image = "0.25"
 image_hasher = "3"
+fast_image_resize = "5"
+zune-jpeg = "0.4"
+zune-core = "0.4"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

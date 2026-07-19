@@ -100,6 +100,13 @@ export function contactSheetsDir(targetDir: string): string {
 export function czkawkaSessionPath(targetDir: string): string {
   return join(cacheDir(targetDir), CZKAWKA_SESSION_FILE);
 }
+/** Current hash-tool pipeline version prefix (v2 = fast_image_resize
+ * pre-shrink; v3 = flop-only orientation hashes + luma JPEG decode). Bump the
+ * version whenever rust/hash-tool changes its hash values or output schema so
+ * stale caches are ignored rather than mixed with fresh hashes; files with an
+ * older prefix are pruned on the next run. */
+export const CZKAWKA_HASH_CACHE_PREFIX = "czkawka_hashes_v3_";
+
 /** Per-config perceptual-hash cache — separate file per (alg, filter, size) so
  * switching configs never evicts another config's hashes. */
 export function czkawkaHashCachePath(
@@ -108,5 +115,8 @@ export function czkawkaHashCachePath(
   imageFilter: string,
   hashSize: number,
 ): string {
-  return join(cacheDir(targetDir), `czkawka_hashes_${hashAlg}_${imageFilter}_${hashSize}.json`);
+  return join(
+    cacheDir(targetDir),
+    `${CZKAWKA_HASH_CACHE_PREFIX}${hashAlg}_${imageFilter}_${hashSize}.json`,
+  );
 }

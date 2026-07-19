@@ -33,7 +33,8 @@ export interface CzkawkaSessionData {
   groups: CzkawkaGroup[];
   computeTimeMs: number;
   undoStack: CzkawkaActionEntry[];
-  /** Directories in the last/current comparison; always includes targetDir. */
+  /** Directories in the last/current comparison. Seeded with targetDir for a
+   * brand-new session, but the user may remove it later. */
   dirs: CzkawkaDirEntry[];
 }
 
@@ -42,10 +43,15 @@ export async function loadCzkawkaSession(targetDir: string): Promise<CzkawkaSess
     czkawkaSessionPath(targetDir),
     {},
   );
-  const dirs = Array.isArray(data.dirs) ? data.dirs : [];
-  if (!dirs.some((d) => d.path === targetDir)) {
-    dirs.unshift({ path: targetDir, reference: false });
-  }
+  // A brand-new session defaults to the launch dir; a saved session is
+  // respected verbatim (the user may have removed the launch dir on purpose).
+  const dirs: CzkawkaDirEntry[] = Array.isArray(data.dirs)
+    ? data.dirs.map((d) => ({
+        path: d.path,
+        reference: d.reference === true,
+        recursive: d.recursive === true,
+      }))
+    : [{ path: targetDir, reference: false, recursive: false }];
   return {
     groups: Array.isArray(data.groups) ? data.groups : [],
     computeTimeMs: data.computeTimeMs ?? 0,

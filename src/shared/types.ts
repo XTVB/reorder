@@ -203,14 +203,18 @@ export interface MergeSuggestionsResponse {
 // Czkawka duplicate-compare types
 
 /** One directory participating in a comparison. The launch target dir is
- * always included; at most one dir is the czkawka-style "reference". With a
- * reference set, comparison asks "which images match something in the
- * reference dir": reference images are only compared against non-reference
- * images, so intra-reference and intra-working-dir duplicates are not
- * reported. Reference files are ordinary group members (still deletable). */
+ * included by default but may be removed (two unrelated dirs can be compared).
+ * At most one dir is the czkawka-style "reference". With a reference set,
+ * comparison asks "which images match something in the reference dir":
+ * reference images are only compared against non-reference images, so
+ * intra-reference and intra-working-dir duplicates are not reported. Reference
+ * files are ordinary group members (still deletable). When `recursive` is set,
+ * every sub-directory is scanned too (hidden dirs, incl. `.reorder-cache`, are
+ * skipped unless that dir is itself configured as a root). */
 export interface CzkawkaDirEntry {
   path: string;
   reference: boolean;
+  recursive: boolean;
 }
 
 export interface CzkawkaImage {

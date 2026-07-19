@@ -19,8 +19,9 @@ interface CreateGroupsModalProps {
 }
 
 // One created ImageGroup per non-empty leaf bucket. A category with no
-// subgroups is itself a leaf; otherwise each subgroup is a leaf. Photos
-// assigned to a category but no subgroup are left ungrouped on purpose.
+// subgroups is itself a leaf; otherwise each subgroup is a leaf, plus one more
+// leaf for photos assigned to the category but no subgroup (grouped under the
+// category's own label).
 function buildNewGroups({ items, config, statuses, subs }: SortContext<string>): ImageGroup[] {
   const out: ImageGroup[] = [];
   for (const cat of config.categories) {
@@ -29,6 +30,7 @@ function buildNewGroups({ items, config, statuses, subs }: SortContext<string>):
       if (images.length > 0) out.push({ id: crypto.randomUUID(), name: cat.label, images });
       continue;
     }
+    const unsubbed: string[] = [];
     for (const sub of cat.subcategories) {
       const images = items.filter((fn) => {
         const sa = subs.get(fn);
@@ -37,6 +39,13 @@ function buildNewGroups({ items, config, statuses, subs }: SortContext<string>):
       if (images.length > 0) {
         out.push({ id: crypto.randomUUID(), name: `${cat.label} - ${sub.label}`, images });
       }
+    }
+    for (const fn of items) {
+      const sa = subs.get(fn);
+      if (statuses.get(fn) === cat.id && sa?.categoryId !== cat.id) unsubbed.push(fn);
+    }
+    if (unsubbed.length > 0) {
+      out.push({ id: crypto.randomUUID(), name: cat.label, images: unsubbed });
     }
   }
   return out;

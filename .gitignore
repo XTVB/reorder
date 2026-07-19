@@ -51,3 +51,6 @@ __pycache__
 # Screenshots
 screenshots
 benchmark/*
+
+# Claude Code personal settings
+.claude/settings.local.json

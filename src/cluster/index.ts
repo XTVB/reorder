@@ -10,7 +10,6 @@ export {
   mutateConstraints,
   normalizeMergePair,
   pruneDanglingConstraints,
-  writeResolvedRejectedPairsFile,
 } from "./constraints.ts";
 export { generateContactSheet } from "./contact-sheets.ts";
 export {

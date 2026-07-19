@@ -7,8 +7,6 @@ import type { MergeSuggestionSimilar } from "../../client/types.ts";
 import type { MergeMethod } from "../../cluster/index.ts";
 import {
   computeMergeSuggestions,
-  loadConstraints,
-  mergePairKey,
   orderGroupsBySimilarity,
   orderImagesBatch,
 } from "../../cluster/index.ts";
@@ -79,13 +77,15 @@ export const mergeRoutes: RouteHandler = async (req, ctx) => {
     }
 
     return sseResponse(async (send) => {
-      // minScore 0 and no combined-size cap: the ordering needs every pair
-      // score, not just the ones the merge-suggestions UI would surface.
+      // minScore 0, no combined-size cap, rejected pairs kept: the ordering
+      // needs every pair score, not just the ones the merge-suggestions UI
+      // would surface — a rejected merge is still a similar pair.
       const entries = await computeMergeSuggestions(targetDir, 0, {
         method,
         fullResolution,
         maxCombinedSize: 0,
         weights: body.weights,
+        includeRejected: true,
         onProgress: (msg) => send("progress", { message: msg }),
       });
       // Base ordering: the client's gallery order where provided, reconciled
@@ -190,16 +190,13 @@ export const mergeRoutes: RouteHandler = async (req, ctx) => {
     });
 
     const groupMap = new Map(loadGroups(targetDir).map((g) => [g.id, g]));
-    const rejectedKeys = new Set(
-      loadConstraints(targetDir).rejectedMergePairs.map((p) => mergePairKey(p.groupA, p.groupB)),
-    );
     const rowMap = new Map<string, { refGroupId: string; similar: MergeSuggestionSimilar[] }>();
 
+    // Rejected pairs are already filtered inside computeMergeSuggestions.
     for (const d of entries) {
       const gA = groupMap.get(d.groupA);
       const gB = groupMap.get(d.groupB);
       if (!gA || !gB) continue;
-      if (rejectedKeys.has(mergePairKey(d.groupA, d.groupB))) continue;
 
       // 1 - patchMedian so lower = more similar, matching the Ward-distance semantics used by other UI.
       const displayDist = 1 - d.patchMedian;

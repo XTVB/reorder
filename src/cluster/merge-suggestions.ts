@@ -3,8 +3,10 @@
 //   - "patches"    — DINOv3 patch matching ("merge-suggestions" mode).
 //   - "embeddings" — weighted blend of CLS embeddings ("embeddings" mode),
 //                    reusing the same per-model weights as the cluster pipeline.
-// Cached in merge_suggestions{_full|_emb_<sig>}{_mN}.json keyed by the relevant
-// inputs' mtimes; one-time invalidation if the cache is in pre-camelCase format.
+// Cached in merge_suggestions2{_full|_emb_<sig>}{_mN}.json keyed by the relevant
+// inputs' mtimes. The cache always holds the full unfiltered pair set; rejected
+// merge pairs are filtered at return time (so a rejection never invalidates the
+// cache, and ordering callers can ask for the real scores via includeRejected).
 
 import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -22,7 +24,7 @@ import {
 import { log } from "../log.ts";
 import type { WeightConfig } from "../shared/types.ts";
 import { GROUP_SIM_BINARY } from "./binaries.ts";
-import { writeResolvedRejectedPairsFile } from "./constraints.ts";
+import { loadConstraints, mergePairKey } from "./constraints.ts";
 import { availableLearnedKeys, rescaleLearnedProjWeight } from "./pipeline.ts";
 import { spawn } from "./subprocess.ts";
 
@@ -69,6 +71,12 @@ export async function computeMergeSuggestions(
     fullResolution?: boolean;
     maxCombinedSize?: number;
     weights?: WeightConfig;
+    /**
+     * Keep pairs the user rejected on the merge page. A rejection means "don't
+     * combine these groups", not "these aren't similar" — ordering callers need
+     * the real scores, otherwise a rejected pair reads as maximally dissimilar.
+     */
+    includeRejected?: boolean;
     onProgress?: (msg: string) => void;
   },
 ): Promise<GroupPairResult[]> {
@@ -111,7 +119,7 @@ export async function computeMergeSuggestions(
     const availableLearned = availableLearnedKeys(hashCachePath);
     resultCachePath = join(
       cache,
-      `merge_suggestions_emb_${weightSignature(weights, availableLearned)}${sizeSuffix}.json`,
+      `merge_suggestions2_emb_${weightSignature(weights, availableLearned)}${sizeSuffix}.json`,
     );
     args.push("--mode", "embeddings", "--hash-cache", hashCachePath, "--hash-order", hashOrderPath);
     // Rescale learned_proj the same way the cluster pipeline does, then pass each weight.
@@ -132,7 +140,7 @@ export async function computeMergeSuggestions(
     }
     const patchesHashesPath = join(cache, DINOV3_PATCHES_HASHES_FILE);
     primaryInputPath = patchesCachePath;
-    resultCachePath = join(cache, `merge_suggestions${fullRes ? "_full" : ""}${sizeSuffix}.json`);
+    resultCachePath = join(cache, `merge_suggestions2${fullRes ? "_full" : ""}${sizeSuffix}.json`);
     args.push("--patches-cache", patchesCachePath, "--patches-hashes", patchesHashesPath);
     label = fullRes ? "merge-suggestions-full" : "merge-suggestions";
     loadingMsg = `Loading ${fullRes ? "14x14 full-res" : "7x7 pooled"} patches...`;
@@ -140,6 +148,14 @@ export async function computeMergeSuggestions(
 
   const applyFilters = (rows: GroupPairResult[]) => {
     let out = rows;
+    if (!options?.includeRejected) {
+      const rejected = new Set(
+        loadConstraints(targetDir).rejectedMergePairs.map((p) => mergePairKey(p.groupA, p.groupB)),
+      );
+      if (rejected.size > 0) {
+        out = out.filter((r) => !rejected.has(mergePairKey(r.groupA, r.groupB)));
+      }
+    }
     if (maxCombinedSize > 0) {
       out = out.filter((r) => r.sizeA + r.sizeB <= maxCombinedSize);
     }
@@ -149,40 +165,25 @@ export async function computeMergeSuggestions(
     return out;
   };
 
-  // No-ops if rejected-pairs content is unchanged, so cache mtime check stays valid.
-  const rejectedPairsPath = await writeResolvedRejectedPairsFile(targetDir);
-
   // Disk cache is valid if newer than the groups file, the primary input
-  // (patches cache or embeddings NPZ), content_hashes, and (if present) the
-  // resolved rejected-pairs file.
+  // (patches cache or embeddings NPZ), and content_hashes. Rejected-pair
+  // changes never invalidate it: rejection filtering happens in applyFilters.
   try {
-    const [cacheStat, groupsStat, inputStat, hashesStat, rejectedStat] = await Promise.all([
+    const [cacheStat, groupsStat, inputStat, hashesStat] = await Promise.all([
       stat(resultCachePath),
       stat(groupsP),
       stat(primaryInputPath),
       stat(contentHashesP),
-      rejectedPairsPath ? stat(rejectedPairsPath) : Promise.resolve(null),
     ]);
     if (
       cacheStat.mtimeMs > groupsStat.mtimeMs &&
       cacheStat.mtimeMs > inputStat.mtimeMs &&
-      cacheStat.mtimeMs > hashesStat.mtimeMs &&
-      (rejectedStat === null || cacheStat.mtimeMs > rejectedStat.mtimeMs)
+      cacheStat.mtimeMs > hashesStat.mtimeMs
     ) {
-      const cached = (await Bun.file(resultCachePath).json()) as unknown[];
-      // Detect snake_case shape from before the camelCase wire-format migration.
-      if (
-        Array.isArray(cached) &&
-        cached.length > 0 &&
-        cached[0] &&
-        "group_a" in (cached[0] as object)
-      ) {
-        log(label, "Old-format cache detected, recomputing");
-      } else {
-        log(label, "Using cached results");
-        options?.onProgress?.("Using cached results");
-        return applyFilters(cached as GroupPairResult[]);
-      }
+      const cached = (await Bun.file(resultCachePath).json()) as GroupPairResult[];
+      log(label, "Using cached results");
+      options?.onProgress?.("Using cached results");
+      return applyFilters(cached);
     }
   } catch {}
 
@@ -190,9 +191,6 @@ export async function computeMergeSuggestions(
   args.push("--min-score", "0");
   if (maxCombinedSize > 0) {
     args.push("--max-combined-size", String(maxCombinedSize));
-  }
-  if (rejectedPairsPath) {
-    args.push("--rejected-pairs", rejectedPairsPath);
   }
 
   log(label, `Running group-similarity: ${args.join(" ")}`);

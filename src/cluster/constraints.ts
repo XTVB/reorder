@@ -14,7 +14,6 @@ import {
   cacheDir,
   constraintsPath,
   LOCKED_GROUPS_RESOLVED_FILE,
-  REJECTED_MERGE_PAIRS_RESOLVED_FILE,
 } from "../fs/paths.ts";
 import { cachedHashMapping } from "./embeddings.ts";
 
@@ -194,35 +193,6 @@ export async function writeResolvedConstraintFiles(
   ]);
 
   return { cannotLinkPath, lockedGroupsPath };
-}
-
-/**
- * Write the JSON payload that the Rust group-similarity binary consumes via
- * --rejected-pairs. Returns the path written, or null when there's nothing
- * to skip. Rejected pairs whose groups no longer exist are dropped.
- *
- * Skips the write when the on-disk content is byte-identical — otherwise
- * writeJsonAtomic's rename would bump mtime on every Compute and invalidate
- * the merge-suggestions cache even when no rejection changed.
- */
-export async function writeResolvedRejectedPairsFile(targetDir: string): Promise<string | null> {
-  const constraints = loadConstraints(targetDir);
-  if (constraints.rejectedMergePairs.length === 0) return null;
-
-  const groups = loadGroups(targetDir);
-  const groupIds = new Set(groups.map((g) => g.id));
-  const live = constraints.rejectedMergePairs.filter(
-    (p) => groupIds.has(p.groupA) && groupIds.has(p.groupB),
-  );
-  if (live.length === 0) return null;
-
-  const out = join(cacheDir(targetDir), REJECTED_MERGE_PAIRS_RESOLVED_FILE);
-  const newJson = JSON.stringify(live);
-  try {
-    if (readFileSync(out, "utf-8") === newJson) return out;
-  } catch {}
-  await writeJsonAtomic(out, live, { pretty: false });
-  return out;
 }
 
 /**

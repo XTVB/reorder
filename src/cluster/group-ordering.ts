@@ -34,8 +34,10 @@ import type { GroupOrderMode } from "../shared/types.ts";
 import { mergePairKey } from "./constraints.ts";
 import type { GroupPairResult } from "./merge-suggestions.ts";
 
-// Cosine distance tops out at 2; unscored pairs (rejected, or absent from the
-// similarity results) must rank below any scored pair.
+// Cosine distance tops out at 2; pairs absent from the similarity results
+// must rank below any scored pair. (Merge-page rejections are deliberately
+// kept in the results here — see includeRejected in computeMergeSuggestions —
+// so a rejected-but-similar pair still sorts adjacent.)
 const MISSING_DIST = 3;
 
 /** Mode-specific diagnostics, surfaced in the client's completion toast. */

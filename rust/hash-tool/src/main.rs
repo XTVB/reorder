@@ -215,28 +215,32 @@ fn hash_one(
     })
 }
 
-/// Decode to grayscale. JPEGs go through zune-jpeg asking for Luma output
-/// directly — the Y channel IS Rec.601 luma, so this skips the chroma IDCT,
-/// chroma upsampling, YCbCr→RGB conversion, and the RGB→gray pass (and the
-/// full-size RGB allocation). Anything else — or any zune failure (CMYK
-/// jpegs, truncated files) — falls back to the general image crate path.
+/// Decode to grayscale. Format is dispatched by the file *contents*, never the
+/// extension — extensions lie in practice (a `.png` that is really a JPEG, a
+/// `.jpg` that is really a PNG), and the general decoder used to pick its codec
+/// from the extension, so a mislabeled file failed to decode and dropped out of
+/// the run entirely. JPEGs (detected by the SOI + marker magic `FF D8 FF`) go
+/// through zune-jpeg asking for Luma output directly — the Y channel IS Rec.601
+/// luma, so this skips the chroma IDCT, chroma upsampling, YCbCr→RGB conversion,
+/// and the RGB→gray pass (and the full-size RGB allocation). Anything else — or
+/// any zune failure (CMYK jpegs, truncated files) — falls back to the general
+/// image crate path via `load_from_memory`, which sniffs the format from the
+/// bytes rather than trusting the extension.
 fn decode_luma(path: &str) -> Result<(ImageBuffer<Luma<u8>, Vec<u8>>, u32, u32), String> {
-    let lower = path.to_ascii_lowercase();
-    if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
-        if let Ok(data) = std::fs::read(path) {
-            let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::Luma);
-            let mut dec = JpegDecoder::new_with_options(&data, opts);
-            if let Ok(pixels) = dec.decode() {
-                if let Some((w, h)) = dec.dimensions() {
-                    let (w, h) = (w as u32, h as u32);
-                    if let Some(buf) = ImageBuffer::from_raw(w, h, pixels) {
-                        return Ok((buf, w, h));
-                    }
+    let data = std::fs::read(path).map_err(|e| e.to_string())?;
+    if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::Luma);
+        let mut dec = JpegDecoder::new_with_options(&data, opts);
+        if let Ok(pixels) = dec.decode() {
+            if let Some((w, h)) = dec.dimensions() {
+                let (w, h) = (w as u32, h as u32);
+                if let Some(buf) = ImageBuffer::from_raw(w, h, pixels) {
+                    return Ok((buf, w, h));
                 }
             }
         }
     }
-    let img = image::open(path).map_err(|e| e.to_string())?;
+    let img = image::load_from_memory(&data).map_err(|e| e.to_string())?;
     let (w, h) = (img.width(), img.height());
     Ok((img.into_luma8(), w, h))
 }

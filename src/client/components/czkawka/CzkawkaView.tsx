@@ -250,6 +250,23 @@ function ThumbnailBar({
 
 // ── Step-through view ───────────────────────────────────────────────────
 
+/** Rendered in both the empty-state and the per-pair action bars. */
+function UndoButton() {
+  const undo = useCzkawkaStore((s) => s.undo);
+  const undoing = useCzkawkaStore((s) => s.undoing);
+  const historyLen = useCzkawkaStore((s) => s.history.length);
+  const undoDepth = useCzkawkaStore((s) => s.undoDepth);
+  return (
+    <button
+      className="btn"
+      onClick={() => void undo()}
+      disabled={undoing || (historyLen === 0 && undoDepth === 0)}
+    >
+      {undoing ? "Undoing…" : "Undo"} <kbd>U</kbd>
+    </button>
+  );
+}
+
 function StepThroughView({ onRankingToggle }: { onRankingToggle: () => void }) {
   const groups = useCzkawkaStore((s) => s.groups);
   const currentIndex = useCzkawkaStore((s) => s.currentIndex);
@@ -737,13 +754,7 @@ function StepThroughView({ onRankingToggle }: { onRankingToggle: () => void }) {
             <button className="btn" onClick={goBack}>
               Back <kbd>B</kbd>
             </button>
-            <button
-              className="btn"
-              onClick={() => void undo()}
-              disabled={historyLen === 0 && undoDepth === 0}
-            >
-              Undo <kbd>U</kbd>
-            </button>
+            <UndoButton />
             <button className="btn btn-primary" onClick={runComparison}>
               Re-run Comparison
             </button>
@@ -863,13 +874,7 @@ function StepThroughView({ onRankingToggle }: { onRankingToggle: () => void }) {
           <button className="btn" onClick={goBack} disabled={currentIndex === 0}>
             Back <kbd>B</kbd>
           </button>
-          <button
-            className="btn"
-            onClick={() => void undo()}
-            disabled={historyLen === 0 && undoDepth === 0}
-          >
-            Undo <kbd>U</kbd>
-          </button>
+          <UndoButton />
         </div>
 
         <div className="czkawka-action-group">

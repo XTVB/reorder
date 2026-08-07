@@ -5,10 +5,15 @@ export type { RenameMapping } from "../shared/types.ts";
 export { backupPath, readJsonTolerant, writeJsonAtomic } from "./atomic-json.ts";
 export type {
   CzkawkaActionEntry,
+  CzkawkaGroupsPatch,
   CzkawkaSessionData,
   CzkawkaTrashEntry,
 } from "./czkawka-session.ts";
 export {
+  applyGroupsPatch,
+  buildGroupsPatch,
+  groupsBeforeEntry,
+  imageKey,
   loadCzkawkaSession,
   restoreFromTrash,
   saveCzkawkaSession,

@@ -95,6 +95,7 @@ interface CzkawkaState extends RunConfig {
   groups: CzkawkaImage[][];
   /** Server-side restorable actions available to undo. */
   undoDepth: number;
+  undoing: boolean;
   /** Initial GET /groups completed (restores a persisted session). */
   loaded: boolean;
   loading: boolean;
@@ -146,6 +147,14 @@ interface CzkawkaState extends RunConfig {
   applyOperations: (ops: CzkawkaOperation[], toast?: string) => Promise<boolean>;
   undo: () => Promise<void>;
 
+  /**
+   * Drop reorder-group members whose files this page trashed, plus any group
+   * left empty. Deletes here stay undoable, so they deliberately leave group
+   * membership in place — this is the explicit "done undoing, tidy up" step.
+   * Confirms first: the prune is itself not undoable.
+   */
+  pruneDeletedFromGroups: () => Promise<void>;
+
   toggleExclude: (path: string) => void;
   clearExclusions: () => void;
 }
@@ -184,6 +193,7 @@ export const useCzkawkaStore = create<CzkawkaState>((set, get) => {
     ...loadConfig(),
     groups: [],
     undoDepth: 0,
+    undoing: false,
     loaded: false,
     loading: false,
     progress: null,
@@ -368,7 +378,11 @@ export const useCzkawkaStore = create<CzkawkaState>((set, get) => {
     },
 
     undo: async () => {
-      const { history, undoDepth } = get();
+      const { history, undoDepth, undoing } = get();
+      // Drop the keypress rather than queueing it: a queue would still hand the
+      // server the same burst, just later. Holding `u` now walks the stack at
+      // one request per round-trip.
+      if (undoing) return;
       const last = history[history.length - 1];
       // No local history but the server journal has entries — happens after a
       // reload, since local history is in-memory. Fall through to server undo.
@@ -380,12 +394,15 @@ export const useCzkawkaStore = create<CzkawkaState>((set, get) => {
         set({ history: history.slice(0, -1), currentIndex: last.indexBefore });
         return;
       }
+      set({ undoing: true });
       try {
         const res = await postJson<CzkawkaStateResponse>("/api/czkawka/undo", {});
         set((s) => ({
           ...fromState(res),
           dirs: s.dirsDirty ? s.dirs : res.dirs,
-          history: last ? history.slice(0, -1) : history,
+          // Re-read history from current state: it may have changed while the
+          // request was in flight (a local undo, or an apply).
+          history: last ? s.history.filter((h) => h !== last) : s.history,
           trashedCount: Math.max(0, s.trashedCount - (last?.deletedCount ?? 0)),
           currentIndex: Math.min(last ? last.indexBefore : s.currentIndex, res.groups.length),
           error: null,
@@ -394,6 +411,43 @@ export const useCzkawkaStore = create<CzkawkaState>((set, get) => {
         toast(restored > 0 ? `Restored ${restored} file(s) from Trash` : "Undone", "success");
       } catch (err) {
         toast(getErrorMessage(err, "Undo failed"), "error");
+      } finally {
+        set({ undoing: false });
+      }
+    },
+
+    pruneDeletedFromGroups: async () => {
+      const { undoDepth } = get();
+      const undoWarning =
+        undoDepth > 0
+          ? `\n\nYou still have ${undoDepth} undoable action(s). Undo restores files to disk, but once pruned they come back ungrouped.`
+          : "";
+      if (
+        !confirm(
+          `Remove deleted images from the reorder groups?\n\nThis drops group members whose files are no longer on disk, and any group left empty. It cannot be undone.${undoWarning}`,
+        )
+      ) {
+        return;
+      }
+      try {
+        const res = await postJson<{ removedImages: number; removedGroups: number }>(
+          "/api/groups/prune",
+          {},
+        );
+        if (res.removedImages === 0 && res.removedGroups === 0) {
+          toast("Nothing to prune — every group member is on disk", "success");
+          return;
+        }
+        const groupPart =
+          res.removedGroups > 0
+            ? `, removed ${res.removedGroups} empty group${res.removedGroups === 1 ? "" : "s"}`
+            : "";
+        toast(
+          `Pruned ${res.removedImages} deleted image${res.removedImages === 1 ? "" : "s"} from groups${groupPart}`,
+          "success",
+        );
+      } catch (err) {
+        toast(getErrorMessage(err, "Prune failed"), "error");
       }
     },
 

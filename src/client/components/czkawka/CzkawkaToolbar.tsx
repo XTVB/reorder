@@ -103,6 +103,30 @@ function ExportMenu() {
   );
 }
 
+function PruneGroupsButton() {
+  // trashedCount is in-memory (resets on reload); undoDepth comes from the
+  // persisted server session. Either being non-zero means this directory may
+  // hold group members whose files are gone.
+  const trashedCount = useCzkawkaStore((s) => s.trashedCount);
+  const undoDepth = useCzkawkaStore((s) => s.undoDepth);
+  const pruneDeletedFromGroups = useCzkawkaStore((s) => s.pruneDeletedFromGroups);
+  const enabled = trashedCount > 0 || undoDepth > 0;
+  return (
+    <button
+      className="btn btn-secondary"
+      onClick={() => void pruneDeletedFromGroups()}
+      disabled={!enabled}
+      title={
+        enabled
+          ? "Remove deleted images from the reorder groups, and drop any group left empty. Deletes stay undoable until you do this."
+          : "Nothing trashed yet — deleted images are removed from reorder groups here once you've resolved some duplicates"
+      }
+    >
+      Prune groups
+    </button>
+  );
+}
+
 export function CzkawkaTools() {
   const hashAlg = useCzkawkaStore((s) => s.hashAlg);
   const imageFilter = useCzkawkaStore((s) => s.imageFilter);
@@ -230,6 +254,7 @@ export function CzkawkaTools() {
         </button>
         <div className="toolbar-divider" />
         <ExportMenu />
+        <PruneGroupsButton />
       </div>
       <DirsPanel open={dirsOpen} onClose={() => setDirsOpen(false)} />
     </>

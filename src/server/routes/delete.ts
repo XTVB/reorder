@@ -2,7 +2,7 @@
 
 import { executeDelete, withRenameLock } from "../../fs/index.ts";
 import { log, logData } from "../../log.ts";
-import { cleanupAfterDelete } from "../cleanup.ts";
+import { cleanupAfterPermanentDelete } from "../cleanup.ts";
 import { json } from "../middleware/response.ts";
 import type { RouteHandler } from "../types.ts";
 
@@ -34,7 +34,7 @@ export const deleteRoutes: RouteHandler = async (req, ctx) => {
       logData("delete", "Missing files", missing.join("\n"));
     }
 
-    warnings.push(...(await cleanupAfterDelete(targetDir, deleted)));
+    warnings.push(...(await cleanupAfterPermanentDelete(targetDir, deleted)));
 
     const elapsed = Date.now() - t0;
     log(

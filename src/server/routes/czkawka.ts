@@ -24,10 +24,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import { HASH_TOOL_BINARY, spawnJSON } from "../../cluster/index.ts";
 import { computeContentHash, pruneContentHashes } from "../../fs/content-hashes.ts";
 import {
+  buildGroupsPatch,
   CZKAWKA_HASH_CACHE_PREFIX,
   type CzkawkaSessionData,
   cacheDir,
   czkawkaHashCachePath,
+  groupsBeforeEntry,
+  imageKey,
   isImageFile,
   listImages,
   listImagesRecursive,
@@ -544,8 +547,6 @@ function stateResponse(targetDir: string, session: CzkawkaSessionData): CzkawkaS
   };
 }
 
-const imgPath = (img: CzkawkaImage) => join(img.dir, img.filename);
-
 /** True when `path` names an image inside one of the session dirs — directly
  * for a plain dir, or anywhere in the tree for a recursive one. */
 function isPathInDirs(path: string, dirs: CzkawkaDirEntry[]): boolean {
@@ -559,7 +560,7 @@ function isPathInDirs(path: string, dirs: CzkawkaDirEntry[]): boolean {
 // ── Actions ─────────────────────────────────────────────────────────────
 
 function validateOperations(ops: CzkawkaOperation[], session: CzkawkaSessionData): string | null {
-  const allPaths = new Set(session.groups.flatMap((g) => g.images.map(imgPath)));
+  const allPaths = new Set(session.groups.flatMap((g) => g.images.map(imageKey)));
   const checkPath = (p: string): string | null =>
     allPaths.has(p) ? null : `"${p}" is not in the current groups`;
 
@@ -591,7 +592,8 @@ async function applyOperations(targetDir: string, ops: CzkawkaOperation[]): Prom
   const err = validateOperations(ops, session);
   if (err) return json({ error: err }, 400);
 
-  const snapshotBefore = structuredClone(session.groups);
+  // Safe to alias: the rebuild below replaces the array rather than mutating it.
+  const groupsBefore = session.groups;
   const trashed: Awaited<ReturnType<typeof trashFilesRestorable>> = [];
   const copiedTargets: string[] = [];
   /** Paths physically gone (or content-replaced) → removed from groups. */
@@ -622,25 +624,25 @@ async function applyOperations(targetDir: string, ops: CzkawkaOperation[]): Prom
   }
 
   session.groups = session.groups
-    .filter((g) => !g.images.some((i) => resolvedPaths.has(imgPath(i))))
-    .map((g) => ({ images: g.images.filter((i) => !removedPaths.has(imgPath(i))) }))
+    .filter((g) => !g.images.some((i) => resolvedPaths.has(imageKey(i))))
+    .map((g) => ({ images: g.images.filter((i) => !removedPaths.has(imageKey(i))) }))
     .filter((g) => g.images.length >= 2);
 
   session.undoStack.push({
-    snapshotBefore,
+    patch: buildGroupsPatch(groupsBefore, session.groups),
     trashed,
     copiedTargets,
     deletedCount: trashed.length,
   });
   await saveCzkawkaSession(targetDir, session);
 
-  // Target-dir files that were trashed get pruned from reorder groups /
-  // content hashes; a copy-replace target still exists but with new bytes,
-  // so only its (now stale) content-hash entry goes. Files in other dirs
-  // don't touch this project's caches. A copy-replace trashes the target's
-  // ORIGINAL bytes (for undo) so it appears in `trashed`, but the filename is
-  // still live on disk — exclude those paths or the file gets yanked from its
-  // reorder group even though it never left.
+  // Target-dir files that were trashed get their content hashes pruned and the
+  // position-indexed cluster artifacts dropped; a copy-replace target still
+  // exists but with new bytes, so only its (now stale) content-hash entry goes.
+  // Files in other dirs don't touch this project's caches. A copy-replace
+  // trashes the target's ORIGINAL bytes (for undo) so it appears in `trashed`,
+  // but the filename is still live on disk — exclude those paths or the file
+  // gets yanked from its caches even though it never left.
   const copiedSet = new Set(copiedTargets);
   const trashedLocal = trashed
     .filter((t) => dirname(t.path) === targetDir && !copiedSet.has(t.path))
@@ -660,20 +662,38 @@ async function applyOperations(targetDir: string, ops: CzkawkaOperation[]): Prom
 
 async function undoLast(targetDir: string): Promise<Response> {
   const session = await getSession(targetDir);
+  // `sessions` hands every caller the same mutable object, so pop before the
+  // first await: two undos admitted together must never observe the same top
+  // of stack and restore it twice.
   const last = session.undoStack.pop();
   if (!last) return json({ error: "Nothing to undo" }, 400);
 
-  // Remove copies before restoring so the original bytes win at the target.
+  // Reconstruct the pre-action groups before touching disk, so a malformed
+  // patch fails with the entry still on the stack and nothing moved.
+  let restoredGroups: CzkawkaGroup[];
+  try {
+    restoredGroups = groupsBeforeEntry(session.groups, last);
+  } catch (err) {
+    session.undoStack.push(last);
+    throw err;
+  }
+
+  // Order matters for copy-replace: delete the copy sitting at the target
+  // first, then restore in reverse execution order so the source comes back
+  // before the target's original bytes land at the vacated path.
   for (const p of last.copiedTargets) {
     await unlink(p).catch(() => {});
   }
   await restoreFromTrash([...last.trashed].reverse());
-  session.groups = last.snapshotBefore;
+  // No compensating push past this point: the disk is already reverted, and
+  // re-running the entry would unlink files that were just restored.
+  session.groups = restoredGroups;
   await saveCzkawkaSession(targetDir, session);
 
   // Files reappeared — position-indexed cluster artifacts are stale, but the
   // restored files must NOT be pruned from anything, so skip the delete path.
-  const warnings = await invalidateDerivedCaches(targetDir);
+  const touchedDisk = last.trashed.length > 0 || last.copiedTargets.length > 0;
+  const warnings = touchedDisk ? await invalidateDerivedCaches(targetDir) : [];
 
   return json({ ...stateResponse(targetDir, session), warnings });
 }

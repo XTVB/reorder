@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { getJson } from "../api/client.ts";
 import type { ImageInfo, ImagesResponse } from "../types.ts";
+import { noteOrderWrite } from "./sortHistoryStore.ts";
 
 interface ImageState {
   images: ImageInfo[];
@@ -27,7 +28,11 @@ export const useImageStore = create<ImageState>((set, get) => ({
   imageVersion: 0,
 
   setImages: (images) => {
-    const { originalOrder, imageMap: existingMap } = get();
+    const { originalOrder, imageMap: existingMap, images: prevImages } = get();
+    const orderChanged =
+      images.length !== prevImages.length ||
+      images.some((img, i) => img.filename !== prevImages[i]?.filename);
+    if (orderChanged) noteOrderWrite();
     // Skip Map rebuild when only order changed (drag reorder) — same filenames, different positions
     const needsMapRebuild =
       images.length !== existingMap.size || images.some((i) => !existingMap.has(i.filename));

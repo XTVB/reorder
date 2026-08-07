@@ -10,7 +10,7 @@ const INFO_HEIGHT = 40; // card-info bar: 8px padding + 24px badge + 8px padding
  * aspect-ratio:1 so height = width) + the fixed info bar + gap.
  */
 export function useGridLayout() {
-  const [layout, setLayout] = React.useState({ columnCount: 6, rowHeight: 220 });
+  const [layout, setLayout] = React.useState({ columnCount: 6, rowHeight: 220, gap: 16 });
   const observerRef = useRef<ResizeObserver | null>(null);
 
   const measureRowRef = useCallback((node: HTMLDivElement | null) => {
@@ -31,9 +31,9 @@ export function useGridLayout() {
       const rowHeight = Math.ceil(trackWidth + INFO_HEIGHT + gap);
 
       setLayout((prev) =>
-        prev.columnCount === cols && prev.rowHeight === rowHeight
+        prev.columnCount === cols && prev.rowHeight === rowHeight && prev.gap === gap
           ? prev
-          : { columnCount: cols, rowHeight },
+          : { columnCount: cols, rowHeight, gap },
       );
     }
 

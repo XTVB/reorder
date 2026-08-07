@@ -10,7 +10,7 @@ import { useSessionStore } from "./core/sessionStore.ts";
 import { useToastStore } from "./core/toastStore.ts";
 import { useImageStore } from "./imageStore.ts";
 import { useLockedImagesStore } from "./lockedImagesStore.ts";
-import { useSortHistoryStore } from "./sortHistoryStore.ts";
+import { noteOrderWrite, useSortHistoryStore } from "./sortHistoryStore.ts";
 import { useTrashStore } from "./trashStore.ts";
 
 const GROUPS_ENABLED_KEY = "reorder-groups-enabled";
@@ -116,6 +116,20 @@ export const useGroupStore = create<GroupState>((set, get) => ({
     if (next.some((g) => g.images.length === 0)) {
       next = next.filter((g) => g.images.length > 0);
     }
+    // Only membership/order reshapes the cards; rename/tag/lock edits leave the
+    // sort snapshot valid.
+    const cardsChanged =
+      next.length !== groups.length ||
+      next.some((g, i) => {
+        const prev = groups[i];
+        return (
+          !prev ||
+          g.id !== prev.id ||
+          g.images.length !== prev.images.length ||
+          g.images.some((fn, j) => fn !== prev.images[j])
+        );
+      });
+    if (cardsChanged) noteOrderWrite();
     persistGroupsToServer(next);
     set({ groups: next, groupMap: deriveGroupMap(next) });
   },

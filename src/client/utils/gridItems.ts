@@ -68,6 +68,12 @@ export function computeGridItems(images: ImageInfo[], opts: GridMode): GridItem[
   return out;
 }
 
+/** Cards that occupy a slot in the grid proper, as opposed to the children
+ * rendered inside an expanded group/folder popover. */
+export function isTopLevelItem(item: GridItem): boolean {
+  return item.type !== "group-image" && item.type !== "folder-image";
+}
+
 export function gridItemId(item: GridItem): string {
   if (item.type === "group") return toGroupSortId(item.groupId);
   if (item.type === "folder") return toFolderSortId(item.folderName);

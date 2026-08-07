@@ -15,10 +15,11 @@ import {
 } from "@dnd-kit/sortable";
 import { defaultRangeExtractor, type Range, useVirtualizer } from "@tanstack/react-virtual";
 import type React from "react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useDragHandlers } from "../../hooks/useDragHandlers.ts";
 import { useGridLayout } from "../../hooks/useGridLayout.ts";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts.ts";
+import { useSortOrigin } from "../../hooks/useSortOrigin.ts";
 import { useLightboxStore } from "../../stores/core/lightboxStore.ts";
 import { useModalStore } from "../../stores/core/modalStore.ts";
 import { useSelectionStore } from "../../stores/core/selectionStore.ts";
@@ -30,7 +31,7 @@ import { useImageStore } from "../../stores/imageStore.ts";
 import { useLockedImagesStore } from "../../stores/lockedImagesStore.ts";
 import { useSortHistoryStore } from "../../stores/sortHistoryStore.ts";
 import { useTrashStore } from "../../stores/trashStore.ts";
-import { computeGridItems, gridItemId } from "../../utils/gridItems.ts";
+import { computeGridItems, gridItemId, isTopLevelItem } from "../../utils/gridItems.ts";
 import {
   fromFolderSortId,
   fromGroupSortId,
@@ -42,7 +43,7 @@ import {
   toFolderSortId,
   toGroupSortId,
 } from "../../utils/helpers.ts";
-import { captureFlipRects, PEEK_FLIP_MS, playPendingFlip } from "../../utils/sortFlip.ts";
+import { captureFlipRects, FLIP_ATTR, playPendingFlip } from "../../utils/sortFlip.ts";
 import { CreateGroupsModal } from "../shared/CreateGroupsModal.tsx";
 import { FolderPopover } from "../shared/FolderPopover.tsx";
 import { GroupPopover } from "../shared/GroupPopover.tsx";
@@ -58,6 +59,7 @@ import { Slideshow } from "../shared/Slideshow.tsx";
 import { TrashModal } from "../shared/TrashModal.tsx";
 import { SortableCard } from "./SortableCard.tsx";
 import { SortableContainerCard } from "./SortableContainerCard.tsx";
+import { SortOriginArrow } from "./SortOriginArrow.tsx";
 
 export function ReorderView() {
   // ---- Store subscriptions ----
@@ -180,13 +182,13 @@ export function ReorderView() {
       if (Object.values(useModalStore.getState().open).some(Boolean)) return;
       if (useSessionStore.getState().slideshow.open) return;
       if (useDndStore.getState().activeId !== null) return;
-      captureFlipRects(PEEK_FLIP_MS);
+      captureFlipRects("peek");
       useSortHistoryStore.getState().setPeeking(true);
     }
     function endPeek(e: Event) {
       if (e instanceof KeyboardEvent && e.key !== "Alt") return;
       if (!useSortHistoryStore.getState().peeking) return;
-      captureFlipRects(PEEK_FLIP_MS);
+      captureFlipRects("peek");
       useSortHistoryStore.getState().setPeeking(false);
     }
     window.addEventListener("keydown", startPeek);
@@ -243,16 +245,13 @@ export function ReorderView() {
     [rangeSelect, gridIds],
   );
 
-  const visibleItems = useMemo(
-    () => gridItems.filter((item) => item.type !== "group-image" && item.type !== "folder-image"),
-    [gridItems],
-  );
+  const visibleItems = useMemo(() => gridItems.filter(isTopLevelItem), [gridItems]);
 
   const isMultiDragging = activeId !== null && selectedIds.size > 1 && selectedIds.has(activeId);
 
   // ---- Virtualization ----
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const { columnCount, rowHeight, measureRowRef } = useGridLayout();
+  const { columnCount, rowHeight, gap, measureRowRef } = useGridLayout();
 
   const rows = useMemo(() => {
     const result: (typeof visibleItems)[] = [];
@@ -294,6 +293,45 @@ export function ReorderView() {
     overscan: 5,
     rangeExtractor,
   });
+
+  // ---- Sort-origin hover: "where was this before the sort?" ----
+  const visibleIds = useMemo(() => visibleItems.map(gridItemId), [visibleItems]);
+  const { origins: sortOrigins, available: sortOriginAvailable } = useSortOrigin({
+    currentIds: visibleIds,
+    columnCount,
+    groupsEnabled,
+    enabled: !folderModeEnabled,
+  });
+
+  const [hoveredCard, setHoveredCard] = useState<{ id: string; cardEl: HTMLElement } | null>(null);
+
+  const handleGridMouseOver = useCallback(
+    (e: React.MouseEvent) => {
+      if (!sortOriginAvailable) return;
+      const cardEl = (e.target as HTMLElement | null)?.closest<HTMLElement>(`[${FLIP_ATTR}]`);
+      const id = cardEl?.getAttribute(FLIP_ATTR);
+      const next = cardEl && id && sortOrigins.has(id) ? { id, cardEl } : null;
+      // Delegated, so this fires on every element boundary crossed inside a
+      // card, not once per card.
+      setHoveredCard((prev) =>
+        prev?.id === next?.id && prev?.cardEl === next?.cardEl ? prev : next,
+      );
+    },
+    [sortOrigins, sortOriginAvailable],
+  );
+
+  const clearHoveredCard = useCallback(() => setHoveredCard(null), []);
+
+  // Keyed on the id order, not the gridItems array: that memo takes a fresh
+  // identity on any dep change, which would clear the hover on the very
+  // re-render that set it.
+  const gridOrderKey = useMemo(() => visibleIds.join("\u0000"), [visibleIds]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: triggers, not read values — each invalidates the anchored card element
+  useEffect(() => {
+    setHoveredCard(null);
+  }, [gridOrderKey, activeId, peekActive]);
+
+  const hoveredOrigin = hoveredCard ? (sortOrigins.get(hoveredCard.id) ?? null) : null;
 
   // ---- Search ----
   const searchState = useSearchState();
@@ -528,9 +566,20 @@ export function ReorderView() {
                 className={
                   peekActive ? "grid-scroll-container grid-peeking" : "grid-scroll-container"
                 }
+                onMouseOver={handleGridMouseOver}
+                onMouseLeave={clearHoveredCard}
               >
                 <div ref={measureRowRef} className="grid-measure-row" aria-hidden />
                 <div style={{ height: totalHeight, width: "100%", position: "relative" }}>
+                  {hoveredOrigin && hoveredCard && (
+                    <SortOriginArrow
+                      origin={hoveredOrigin}
+                      cardEl={hoveredCard.cardEl}
+                      containerRef={scrollContainerRef}
+                      rowHeight={rowHeight}
+                      gap={gap}
+                    />
+                  )}
                   {virtualRows.map((virtualRow) => {
                     const row = rows[virtualRow.index]!;
                     const hasExpandedGroup =

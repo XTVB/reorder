@@ -19,6 +19,25 @@ interface SortHistoryState {
   setPeeking: (peeking: boolean) => void;
 }
 
+// A sort applies its order over several writes (setImages, then updateGroups to
+// mirror it into group contents), all synchronous within one handler — so the
+// window closes on the next microtask rather than after a fixed write count.
+let sortWindowOpen = false;
+
+export function openSortWriteWindow(): void {
+  if (sortWindowOpen) return;
+  sortWindowOpen = true;
+  queueMicrotask(() => {
+    sortWindowOpen = false;
+  });
+}
+
+/** Drops the snapshot unless this write belongs to a sort in progress. */
+export function noteOrderWrite(): void {
+  if (sortWindowOpen) return;
+  useSortHistoryStore.getState().clearPreviousOrder();
+}
+
 export const useSortHistoryStore = create<SortHistoryState>((set, get) => ({
   previousOrder: null,
   peeking: false,
